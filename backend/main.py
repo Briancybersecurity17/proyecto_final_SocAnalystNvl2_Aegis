@@ -62,14 +62,47 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
             risk = "high"
         elif any(k.lower() in ["medium"] for k in severity_counts.keys()):
             risk = "medium"
+    # Risk justification text
+    risk_justification = ""
+    if risk == "high":
+        risk_justification = "High risk: critical or high severity events detected in the logs."
+    elif risk == "medium":
+        risk_justification = "Medium risk: presence of medium severity events."
+    else:
+        risk_justification = "Low risk: no critical or high severity events found."
+    # Identify suspicious events (critical/high severity or suspicious keywords in description)
+    suspicious_keywords = ["failed", "unauthorized", "malware", "exploit", "alert", "suspicious"]
+    suspicious_mask = pd.Series([False] * len(dataframe))
+    if "Severity" in dataframe.columns:
+        severity_series = dataframe["Severity"].fillna("").astype(str)
+        suspicious_mask |= severity_series.str.lower().isin(["critical", "high"])
+    if "Event_Description" in dataframe.columns:
+        desc_series = dataframe["Event_Description"].fillna("").astype(str).str.lower()
+        pattern = "|".join(suspicious_keywords)
+        suspicious_mask |= desc_series.str.contains(pattern, na=False)
+    suspicious_events = int(suspicious_mask.sum())
+    # Capture a few sample suspicious event details
+    suspicious_details = []
+    if suspicious_events > 0:
+        cols_of_interest = [c for c in ["Hostname", "Event_ID", "Event_Description"] if c in dataframe.columns]
+        sample = dataframe.loc[suspicious_mask, cols_of_interest].head(5)
+        suspicious_details = sample.to_dict(orient="records")
+    # Correlate suspicious events per host (top 5)
+    suspicious_correlations = {}
+    if "Hostname" in dataframe.columns:
+        suspicious_correlations = dataframe.loc[suspicious_mask, "Hostname"].value_counts().head(5).to_dict()
     summary = {
         "rows": rows,
         "columns": cols,
         "risk": risk,
+        "risk_justification": risk_justification,
         "severity_counts": severity_counts,
         "unique_hosts": unique_hosts,
         "events_per_day": events_per_day,
         "top_hosts": host_counts,
+        "suspicious_events": suspicious_events,
+        "suspicious_details": suspicious_details,
+        "suspicious_correlations": suspicious_correlations,
     }
     return summary
 
