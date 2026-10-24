@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 import ServicePulse from './components/ServicePulse';
 import Dashboard from './components/Dashboard';
+import SecurityAnalysis from './components/SecurityAnalysis';
+import RiskClassification from './components/RiskClassification';
 import UploadSection from './components/UploadSection';
 import ReportGenerator from './components/ReportGenerator';
 import { Sidebar } from './components/Sidebar';
 
-type Section = 'upload' | 'dashboard' | 'report';
+type Section = 'upload' | 'dashboard' | 'security' | 'risk' | 'report';
 
 const App: React.FC = () => {
   const [activeSection, setActiveSection] = useState<Section>('dashboard');
@@ -27,7 +29,9 @@ const App: React.FC = () => {
         <section className="p-4">
           {activeSection === 'upload' && <UploadSection />}
           {activeSection === 'dashboard' && <Dashboard />}
-          {activeSection === 'report' && <ReportGenerator />}
+          {activeSection === 'security' && <SecurityAnalysis />}
+{activeSection === 'risk' && <RiskClassification />}
+{activeSection === 'report' && <ReportGenerator />}
         </section>
       </main>
     </div>
