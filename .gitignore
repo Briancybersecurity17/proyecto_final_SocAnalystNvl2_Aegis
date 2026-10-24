@@ -1,0 +1,24 @@
+# ----- Node / Vite files -----
+node_modules/
+dist/
+.vite/
+.env
+.env.local
+
+# ----- Python / FastAPI files -----
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+*.db
+
+# ----- OS / editor files -----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# ----- Logs -----
+*.log
