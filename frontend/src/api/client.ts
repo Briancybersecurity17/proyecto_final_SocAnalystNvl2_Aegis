@@ -21,15 +21,30 @@ export const getAnalysis = async (analysisId: string) => {
 
 export const listenAnalysisEvents = (analysisId: string, onStatus: (status: string) => void) => {
   const eventSource = new EventSource(`${API.defaults.baseURL}/analysis/${analysisId}/events`)
-  eventSource.onmessage = (e) => {
-    const data = JSON.parse(e.data)
-    // Server sends { event: "status", data: "processing" }
-    if (e.type === 'status') {
-      onStatus(data)
+
+  const handle = (e: MessageEvent) => {
+    const raw = String(e.data)
+    // sse-starlette can send plain text or JSON-encoded payloads
+    try {
+      const parsed = JSON.parse(raw)
+      onStatus(typeof parsed === 'string' ? parsed : raw)
+    } catch {
+      onStatus(raw)
     }
   }
+
+  // sse-starlette emits a *named* event ("status").
+  // Named events never reach onmessage – they require addEventListener.
+  eventSource.addEventListener('status', handle)
+  // Fallback for default "message" events
+  eventSource.onmessage = handle
+
   eventSource.onerror = () => {
     eventSource.close()
   }
-  return () => eventSource.close()
+
+  return () => {
+    eventSource.removeEventListener('status', handle)
+    eventSource.close()
+  }
 }

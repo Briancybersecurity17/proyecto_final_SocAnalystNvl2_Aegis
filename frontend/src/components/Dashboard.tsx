@@ -4,10 +4,6 @@ import { DashboardSection } from './DashboardSection';
 
 import { useAnalysisStore } from '../store';
 import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
   Tooltip,
   Legend,
   ResponsiveContainer,
@@ -16,6 +12,8 @@ import {
   Cell,
   LineChart,
   Line,
+  XAxis,
+  YAxis,
 } from 'recharts'
 
 const COLORS = ['#e74c3c', '#e67e22', '#f1c40f', '#2ecc71', '#3498db']

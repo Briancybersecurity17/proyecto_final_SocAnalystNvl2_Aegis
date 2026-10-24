@@ -1,5 +1,6 @@
 import uuid
 import asyncio
+from io import BytesIO
 from typing import Dict, Any
 
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
@@ -12,9 +13,10 @@ import httpx
 app = FastAPI()
 
 # Allow the Vite dev server to call the API
+# NOTE: explicit origins – "*" + credentials is an invalid/unsafe combination.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"] ,  # In production restrict this!
+    allow_origins=["http://localhost:5300", "http://127.0.0.1:5300"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -22,6 +24,12 @@ app.add_middleware(
 
 # In‑memory store – replace with a DB for production
 analysis_store: Dict[str, Dict[str, Any]] = {}
+
+# Columns the analysis expects (used for validation & friendly errors)
+EXPECTED_COLUMNS = [
+    "Log_ID", "Timestamp", "Hostname", "Event_ID", "User", "Source_IP",
+    "Destination", "Log_Source", "Event_Description", "Result", "Severity",
+]
 
 class AnalysisResult(BaseModel):
     analysis_id: str
@@ -112,11 +120,25 @@ async def process_analysis(analysis_id: str, file_bytes: bytes):
         # Mark as processing
         analysis_store[analysis_id]["status"] = "processing"
         # Simulate a long‑running AI job (you could stream progress here)
-        await asyncio.sleep(2)  # pretend we are doing work
-        # Read Excel (first sheet only for demo)
-        df = pd.read_excel(file_bytes, engine="openpyxl")
+        await asyncio.sleep(1)
+        # Read EVERY sheet of the workbook (BytesIO avoids the deprecated
+        # "pass bytes to read_excel" behaviour)
+        sheets: Dict[str, pd.DataFrame] = pd.read_excel(
+            BytesIO(file_bytes), sheet_name=None, engine="openpyxl"
+        )
+        if not sheets:
+            raise ValueError("El archivo Excel no contiene hojas.")
+        # Concatenate all sheets (ignore_index) so the whole file is analysed
+        df = pd.concat(sheets.values(), ignore_index=True)
+        # Friendly validation – warn about missing expected columns
+        missing = [c for c in EXPECTED_COLUMNS if c not in df.columns]
+        analysis_store[analysis_id]["missing_columns"] = missing
         # Call the AI service (replace with real HTTP call)
         result = call_ai_service(df)
+        result["sheet_names"] = list(sheets.keys())
+        result["missing_columns"] = missing
+        # Keep the dataframe so the UI can visualise the imported rows
+        analysis_store[analysis_id]["dataframe"] = df
         analysis_store[analysis_id]["status"] = "done"
         analysis_store[analysis_id]["summary"] = result
     except Exception as exc:

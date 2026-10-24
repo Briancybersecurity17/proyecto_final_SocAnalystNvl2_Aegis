@@ -1,6 +1,5 @@
 import React from 'react'
 import { useAnalysisStore } from '../store'
-import { SummaryCard } from './SummaryCard'
 import { DashboardSection } from './DashboardSection'
 import {
   BarChart,
@@ -8,16 +7,8 @@ import {
   XAxis,
   YAxis,
   Tooltip,
-  Legend,
   ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-  LineChart,
-  Line,
 } from 'recharts'
-
-const COLORS = ['#e74c3c', '#e67e22', '#f1c40f', '#2ecc71', '#3498db']
 
 export const SecurityAnalysis: React.FC = () => {
   const summary = useAnalysisStore(state => state.summary)

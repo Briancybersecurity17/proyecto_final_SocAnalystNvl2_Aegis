@@ -30,8 +30,8 @@ const App: React.FC = () => {
           {activeSection === 'upload' && <UploadSection />}
           {activeSection === 'dashboard' && <Dashboard />}
           {activeSection === 'security' && <SecurityAnalysis />}
-{activeSection === 'risk' && <RiskClassification />}
-{activeSection === 'report' && <ReportGenerator />}
+          {activeSection === 'risk' && <RiskClassification />}
+          {activeSection === 'report' && <ReportGenerator />}
         </section>
       </main>
     </div>
