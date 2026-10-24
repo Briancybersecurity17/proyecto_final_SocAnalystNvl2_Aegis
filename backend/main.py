@@ -33,13 +33,46 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
     """Placeholder for the real AI/RAG call.
     Replace this with a request to your `sistema‑delitos‑argentina` endpoint.
     """
-    # Dummy payload – just count rows per sheet and return a simple classification
+    # Basic statistics
+    rows = len(dataframe)
+    cols = list(dataframe.columns)
+    # Severity distribution (assumes a column named 'Severity')
+    severity_counts = {}
+    if "Severity" in dataframe.columns:
+        severity_counts = dataframe["Severity"].value_counts().to_dict()
+    # Unique hosts (assumes a column named 'Hostname')
+    unique_hosts = dataframe["Hostname"].nunique() if "Hostname" in dataframe.columns else None
+    # Events per day (assumes a column named 'Timestamp' with datetime values)
+    events_per_day = {}
+    if "Timestamp" in dataframe.columns:
+        # Ensure datetime
+        df = dataframe.copy()
+        df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
+        events_per_day = df["Timestamp"].dt.date.value_counts().sort_index().astype(int).to_dict()
+        # Convert date keys to ISO strings for JSON friendliness
+        events_per_day = {str(k): v for k, v in events_per_day.items()}
+    # Host event counts (top 5 hosts)
+    host_counts = {}
+    if "Hostname" in dataframe.columns:
+        host_counts = dataframe["Hostname"].value_counts().head(5).to_dict()
+    # Determine a simple risk level based on severity presence
+    risk = "low"
+    if severity_counts:
+        if any(k.lower() in ["critical", "high"] for k in severity_counts.keys()):
+            risk = "high"
+        elif any(k.lower() in ["medium"] for k in severity_counts.keys()):
+            risk = "medium"
     summary = {
-        "rows": len(dataframe),
-        "columns": list(dataframe.columns),
-        "risk": "medium" if len(dataframe) > 1000 else "low",
+        "rows": rows,
+        "columns": cols,
+        "risk": risk,
+        "severity_counts": severity_counts,
+        "unique_hosts": unique_hosts,
+        "events_per_day": events_per_day,
+        "top_hosts": host_counts,
     }
     return summary
+
 
 async def process_analysis(analysis_id: str, file_bytes: bytes):
     try:

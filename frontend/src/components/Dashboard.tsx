@@ -1,5 +1,8 @@
 import React from 'react'
-import { useAnalysisStore } from '../store'
+import { SummaryCard } from './SummaryCard';
+import { DashboardSection } from './DashboardSection';
+
+import { useAnalysisStore } from '../store';
 import {
   BarChart,
   Bar,
@@ -37,27 +40,14 @@ const Dashboard: React.FC = () => {
     <section className="space-y-8">
       {/* Summary cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="bg-white rounded shadow p-4 text-center">
-          <h3 className="text-lg font-medium mb-1">Total rows</h3>
-          <p className="text-2xl font-bold">{summary.rows}</p>
-        </div>
-        <div className="bg-white rounded shadow p-4 text-center">
-          <h3 className="text-lg font-medium mb-1">Unique hosts</h3>
-          <p className="text-2xl font-bold">{summary.unique_hosts ?? '—'}</p>
-        </div>
-        <div className="bg-white rounded shadow p-4 text-center">
-          <h3 className="text-lg font-medium mb-1">Risk level</h3>
-          <p className="text-2xl font-bold capitalize">{summary.risk}</p>
-        </div>
-        <div className="bg-white rounded shadow p-4 text-center">
-          <h3 className="text-lg font-medium mb-1">Columns</h3>
-          <p className="text-sm text-gray-600">{summary.columns?.length ?? 0}</p>
-        </div>
+        <SummaryCard label="Total rows" value={summary.rows} />
+        <SummaryCard label="Unique hosts" value={summary.unique_hosts ?? '—'} />
+        <SummaryCard label="Risk level" value={<span className="capitalize">{summary.risk}</span>} />
+        <SummaryCard label="Columns" value={summary.columns?.length ?? 0} />
       </div>
 
       {/* Severity distribution pie */}
-      <div className="bg-white rounded shadow p-4">
-        <h3 className="text-xl font-semibold mb-4">Severity distribution</h3>
+      <DashboardSection title="Severity distribution">
         <ResponsiveContainer width="100%" height={300}>
           <PieChart>
             <Pie
@@ -77,11 +67,10 @@ const Dashboard: React.FC = () => {
             <Legend />
           </PieChart>
         </ResponsiveContainer>
-      </div>
+      </DashboardSection>
 
       {/* Events per day line chart */}
-      <div className="bg-white rounded shadow p-4">
-        <h3 className="text-xl font-semibold mb-4">Events per day</h3>
+      <DashboardSection title="Events per day">
         <ResponsiveContainer width="100%" height={300}>
           <LineChart data={eventsData}>
             <XAxis dataKey="date" stroke="#555" />
@@ -91,11 +80,10 @@ const Dashboard: React.FC = () => {
             <Line type="monotone" dataKey="value" name="Events" stroke="#8884d8" strokeWidth={2} />
           </LineChart>
         </ResponsiveContainer>
-      </div>
+      </DashboardSection>
 
       {/* Top hosts bar chart */}
-      <div className="bg-white rounded shadow p-4">
-        <h3 className="text-xl font-semibold mb-4">Top 5 hosts by event count</h3>
+      <DashboardSection title="Top 5 hosts by event count">
         <ResponsiveContainer width="100%" height={300}>
           <BarChart data={topHostsData} layout="vertical" margin={{ top: 20, right: 30, left: 80, bottom: 20 }}>
             <XAxis type="number" />
@@ -104,7 +92,7 @@ const Dashboard: React.FC = () => {
             <Bar dataKey="value" fill="#82ca9d" />
           </BarChart>
         </ResponsiveContainer>
-      </div>
+      </DashboardSection>
     </section>
   )
 }

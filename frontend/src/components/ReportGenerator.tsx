@@ -1,7 +1,7 @@
 import React from 'react'
 import { useAnalysisStore } from '../store'
 import { PDFDownloadLink, Page, Text, View, Document, StyleSheet } from '@react-pdf/renderer'
-import { saveAs } from 'file-saver'
+import * as FileSaver from 'file-saver'
 
 // Simple PDF layout – you can replace this with a richer template later
 const styles = StyleSheet.create({
@@ -44,7 +44,7 @@ const ReportGenerator: React.FC = () => {
             <button
               onClick={() => {
                 // Force download via file-saver for better cross‑browser support
-                saveAs(blob, 'SOC_Analysis_Report.pdf')
+                FileSaver.saveAs(blob, 'SOC_Analysis_Report.pdf')
               }}
               className="bg-primary text-white py-2 px-4 rounded hover:bg-primary/80"
             >Download PDF Report</button>
