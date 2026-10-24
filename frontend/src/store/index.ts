@@ -9,7 +9,23 @@ export interface SuspiciousDetail {
   Source_IP?: string
   User?: string
   Severity?: string
+  _reason?: string
   [key: string]: unknown
+}
+
+export interface RiskLevelBlock {
+  level: string
+  label: string
+  count: number
+  percentage: number
+  justification: string
+  examples: SuspiciousDetail[]
+}
+
+export interface SuspiciousIp {
+  ip: string
+  events: number
+  hosts: number
 }
 
 export interface AnalysisSummary {
@@ -18,14 +34,21 @@ export interface AnalysisSummary {
   risk: string
   risk_justification: string
   severity_counts: Record<string, number>
+  level_counts: Record<string, number>
+  risk_levels: Record<string, RiskLevelBlock>
   unique_hosts: number | null
   events_per_day: Record<string, number>
+  events_per_day_by_level: Record<string, Record<string, number>>
   top_hosts: Record<string, number>
+  top_hosts_by_level: Record<string, Record<string, number>>
   suspicious_events: number
   suspicious_details: SuspiciousDetail[]
   suspicious_correlations: Record<string, number>
+  suspicious_by_ip: SuspiciousIp[]
   sheet_names?: string[]
   missing_columns?: string[]
+  file_name?: string
+  generated_at?: string
 }
 
 export interface AnalysisState {

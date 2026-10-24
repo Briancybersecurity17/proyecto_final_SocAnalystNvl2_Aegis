@@ -19,6 +19,35 @@ export const getAnalysis = async (analysisId: string) => {
   return response.data
 }
 
+export interface RowsResponse {
+  total: number
+  total_rows: number
+  page: number
+  page_size: number
+  columns: string[]
+  rows: Array<Record<string, unknown> & {
+    risk_level: string
+    risk_reason: string
+    suspicious: boolean
+  }>
+}
+
+export const getRows = async (
+  analysisId: string,
+  opts: { page?: number; pageSize?: number; q?: string; level?: string; suspicious?: boolean } = {},
+) => {
+  const response = await API.get(`/analysis/${analysisId}/rows`, {
+    params: {
+      page: opts.page ?? 1,
+      page_size: opts.pageSize ?? 25,
+      q: opts.q ?? '',
+      level: opts.level ?? '',
+      suspicious: opts.suspicious ? 'true' : 'false',
+    },
+  })
+  return response.data as RowsResponse
+}
+
 export const listenAnalysisEvents = (analysisId: string, onStatus: (status: string) => void) => {
   const eventSource = new EventSource(`${API.defaults.baseURL}/analysis/${analysisId}/events`)
 
