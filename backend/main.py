@@ -10,6 +10,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
+# El servicio de IA se importa como paquete (uvicorn backend.main:app) o como
+# módulo suelto (test_backend.py añade /backend al sys.path).
+try:
+    from backend.ai_service import generate_report_narrative
+except ImportError:  # pragma: no cover
+    from ai_service import generate_report_narrative
+
 app = FastAPI(title="Comunidad Dojo – SOC Analyst API")
 
 # Allow the Vite dev server to call the API
@@ -153,10 +160,14 @@ def _pct(count: int, total: int) -> float:
 # Analysis core
 # ---------------------------------------------------------------------------
 def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
-    """Analyse the imported records and build every dashboard payload.
+    """Motor de análisis asistido: clasifica, correla y justifica los registros.
 
-    All numbers, justifications and examples are derived strictly from the
-    provided records – nothing is invented (rigor analítico).
+    Sustituye al antiguo stub de IA: ejecuta las reglas del analista a escala
+    (normalización de severidad, detección de sospechosos, correlación
+    IP↔hosts y justificación por nivel) y construye todos los payloads del
+    dashboard. Todos los números, justificaciones y ejemplos se derivan
+    estrictamente de los registros provistos – nada se inventa (rigor
+    analítico).
     """
     df = dataframe.copy()
     total = len(df)
@@ -428,6 +439,24 @@ async def get_rows(
         "columns": out_cols,
         "rows": rows,
     }
+
+
+@app.post("/api/analysis/{analysis_id}/report")
+async def build_report(analysis_id: str):
+    """Redacta el informe técnico con la IA, usando solo datos calculados.
+
+    El backend envía al servicio de IA exclusivamente estadísticas y
+    evidencias derivadas de los registros importados, de modo que no puede
+    haber hallazgos inventados (grounding estricto).
+    """
+    if analysis_id not in analysis_store:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    entry = analysis_store[analysis_id]
+    if entry.get("status") != "done" or not entry.get("summary"):
+        raise HTTPException(status_code=409, detail="El análisis aún no está listo")
+    narrative = await generate_report_narrative(entry["summary"])
+    analysis_store[analysis_id]["report"] = narrative
+    return narrative
 
 
 @app.get("/api/analysis/{analysis_id}/events")

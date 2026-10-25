@@ -1,4 +1,5 @@
 import axios from 'axios'
+import type { ReportNarrative } from '../store'
 
 export const API = axios.create({
   baseURL: '/api', // Vite proxy will forward to FastAPI
@@ -46,6 +47,19 @@ export const getRows = async (
     },
   })
   return response.data as RowsResponse
+}
+
+/**
+ * Pide al backend que redacte el informe técnico con la IA.
+ * El backend envía al modelo SOLO datos calculados de los registros
+ * (grounding estricto) y siempre devuelve un informe completo, usando el
+ * generador local como fallback si no hay modelo remoto configurado.
+ */
+export const generateReport = async (analysisId: string) => {
+  const response = await API.post(`/analysis/${analysisId}/report`, null, {
+    timeout: 90000, // permite esperar a un modelo remoto
+  })
+  return response.data as ReportNarrative
 }
 
 export const listenAnalysisEvents = (analysisId: string, onStatus: (status: string) => void) => {

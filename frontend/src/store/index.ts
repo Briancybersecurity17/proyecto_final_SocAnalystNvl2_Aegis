@@ -28,6 +28,44 @@ export interface SuspiciousIp {
   hosts: number
 }
 
+export interface ReportEvidence {
+  log_id: string
+  timestamp: string
+  host: string
+  event_id: string
+  user: string
+  source_ip: string
+  description: string
+  severity: string
+  reason: string
+}
+
+export interface ReportFinding {
+  id: string
+  title: string
+  level: string
+  explanation: string
+  evidence: ReportEvidence[]
+}
+
+export interface ActionItem {
+  priority: string
+  action: string
+  rationale: string
+}
+
+export interface ReportNarrative {
+  executive_summary: string
+  methodology: string
+  correlation: string
+  conclusions: string
+  findings: ReportFinding[]
+  action_plan: ActionItem[]
+  source: 'local' | 'llm'
+  model: string
+  generated_at: string
+}
+
 export interface AnalysisSummary {
   rows: number
   columns: string[]
