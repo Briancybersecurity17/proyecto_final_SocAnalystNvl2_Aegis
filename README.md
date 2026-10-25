@@ -63,6 +63,7 @@ proyecto_final_bootcamp_ComunidadDojo_SocAnalystNvl2/
          ├─ BackendStatus.tsx / EmptyState.tsx   # cabecera y estados vacíos con atajo
          ├─ UploadSection.tsx / UploadExcel.tsx / DataTable.tsx
          ├─ Dashboard.tsx
+         ├─ ChartTools.tsx          # SelectionCells + ChartInsight (brillo/contorno y tarjeta de detalle)
          ├─ SecurityAnalysis.tsx
          ├─ RiskClassification.tsx
          ├─ ReportGenerator.tsx

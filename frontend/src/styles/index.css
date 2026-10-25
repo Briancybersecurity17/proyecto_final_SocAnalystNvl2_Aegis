@@ -3,3 +3,45 @@
 @tailwind utilities;
 
 /* You can extend the design tokens here if you wish */
+
+/* ── Gráficos (Recharts) ─────────────────────────────────────────────── */
+
+/**
+ * Al pulsar una forma del gráfico el navegador la enfoca (Recharts marca los
+ * sectores con `tabindex="-1"`) y dibuja su anillo de foco como un rectángulo
+ * alrededor de toda la figura. Ese estado ya se comunica con el halo y el
+ * contorno propios de la selección (.chart-glow), así que el anillo por
+ * defecto se silencia para no dejar un cuadrado encima del gráfico.
+ */
+.recharts-surface:focus,
+.recharts-surface:focus-visible,
+.recharts-surface *:focus,
+.recharts-surface *:focus-visible {
+  outline: none;
+}
+
+/**
+ * Halo de la sección seleccionada: el color llega por la variable
+ * `--chart-glow` (ver `glowVars` en charts.ts) y respira suavemente.
+ */
+@keyframes chart-glow-pulse {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 4px var(--chart-glow, #1e40af));
+  }
+  50% {
+    filter: drop-shadow(0 0 14px var(--chart-glow, #1e40af));
+  }
+}
+
+.chart-glow {
+  animation: chart-glow-pulse 2.6s ease-in-out infinite;
+}
+
+/** Con «reducir movimiento» el halo se queda fijo: mismo aviso, sin latir. */
+@media (prefers-reduced-motion: reduce) {
+  .chart-glow {
+    animation: none;
+    filter: drop-shadow(0 0 9px var(--chart-glow, #1e40af));
+  }
+}

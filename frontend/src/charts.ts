@@ -16,7 +16,7 @@
  *    (accesibilidad, ver `usePrefersReducedMotion` en motion.ts).
  */
 
-import type { CSSProperties } from 'react'
+import type { CSSProperties, SVGProps } from 'react'
 import { usePrefersReducedMotion } from './motion'
 
 /** Colores fijos por nivel de criticidad (orden: crítico → bajo). */
@@ -62,11 +62,55 @@ export const toCount = (value: unknown): number =>
 export const pct = (part: number, total: number): string =>
   total > 0 ? ((part / total) * 100).toFixed(1) : '0.0'
 
+/** Duración de la entrada de un gráfico (ms). */
+export const CHART_DURATION = 800
+
 /**
  * Estado de animación de las gráficas: activa por defecto (entradas suaves de
  * 0.2–0.3 s, igual que el resto de la UI) y desactivada si el sistema operativo
  * pide reducir el movimiento.
+ *
+ * `duration` es la entrada de Recharts; con `CHART_STAGGER` entre series se
+ * consigue que los tramos apilados entren escalonados (crítico primero).
  */
-export const useChartMotion = (): { isAnimationActive: boolean } => ({
+export const useChartMotion = (): { isAnimationActive: boolean; duration: number } => ({
   isAnimationActive: !usePrefersReducedMotion(),
+  duration: CHART_DURATION,
 })
+
+/** Retardo entre series apiladas (ms): primero el nivel más crítico. */
+export const CHART_STAGGER = 110
+
+/**
+ * Cursor de los gráficos de barras: banda azul muy tenue con borde punteado
+ * en lugar del rectángulo gris sólido que Recharts dibuja por defecto.
+ */
+export const BAR_CURSOR: SVGProps<SVGElement> = {
+  fill: 'rgba(30,64,175,0.07)',
+  stroke: 'rgba(30,64,175,0.35)',
+  strokeDasharray: '4 4',
+}
+
+/** Cursor de áreas y líneas: vertical punteada en el azul primario. */
+export const LINE_CURSOR: SVGProps<SVGElement> = {
+  stroke: '#1e40af',
+  strokeDasharray: '4 4',
+  strokeOpacity: 0.55,
+}
+
+/**
+ * Variables de la sección seleccionada: aporta el color con el que brilla el
+ * halo. La animación vive en `.chart-glow` (styles/index.css), de modo que si
+ * el sistema pide menos movimiento el halo se queda fijo en vez de latir.
+ */
+export const glowVars = (color: string): CSSProperties =>
+  ({ ['--chart-glow']: color }) as CSSProperties
+
+/**
+ * Estado que Recharts entrega al pulsar un gráfico de ejes (`onClick`).
+ * `P` describe la fila pulsada, que varía según el gráfico.
+ */
+export type ChartClickState<P = Record<string, unknown>> = {
+  activeLabel?: string
+  activePayload?: Array<{ payload?: P }>
+}

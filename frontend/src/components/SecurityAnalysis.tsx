@@ -1,16 +1,21 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { motion } from 'framer-motion'
+import { AnimatePresence, motion } from 'framer-motion'
 import { useAnalysisStore } from '../store'
 import { getRows, RowsResponse } from '../api/client'
 import { DashboardSection } from './DashboardSection'
 import { EmptyState } from './EmptyState'
+import { ChartInsight, selectionCells } from './ChartTools'
 import {
   AXIS_TICK,
+  BAR_CURSOR,
   GRID,
+  LEVEL_LABELS,
+  LEVEL_ORDER,
   TOOLTIP_STYLE,
   toCount,
   pct,
   useChartMotion,
+  ChartClickState,
 } from '../charts'
 import {
   BarChart,
@@ -41,6 +46,10 @@ export const SecurityAnalysis: React.FC = () => {
   const [fetchError, setFetchError] = useState<string | null>(null)
   const [page, setPage] = useState(1)
   const pageSize = 10
+  // Selección persistente de estas barras: la elegida gana contorno y halo y
+  // el resto se atenúa, con su desglose en la tarjeta de debajo.
+  const [focusIp, setFocusIp] = useState<string | null>(null)
+  const [focusSuspHost, setFocusSuspHost] = useState<string | null>(null)
 
   const fetchSuspicious = useCallback(async () => {
     if (!analysisId || status !== 'done') return
@@ -78,6 +87,24 @@ export const SecurityAnalysis: React.FC = () => {
     .map(([host, count]) => ({ host, count: toCount(count) }))
     .sort((a, b) => b.count - a.count)
 
+  const selectedIp = focusIp ? ipData.find(item => item.ip === focusIp) ?? null : null
+  const selectedSuspHost = focusSuspHost
+    ? hostData.find(item => item.host === focusSuspHost) ?? null
+    : null
+  const totalSuspicious = toCount(summary.suspicious_events)
+
+  const pickIp = (state: ChartClickState<{ ip?: string }>): void => {
+    const ip = state.activePayload?.[0]?.payload?.ip
+    if (typeof ip !== 'string') return
+    setFocusIp(prev => (prev === ip ? null : ip))
+  }
+
+  const pickSuspHost = (state: ChartClickState<{ host?: string }>): void => {
+    const host = state.activePayload?.[0]?.payload?.host
+    if (typeof host !== 'string') return
+    setFocusSuspHost(prev => (prev === host ? null : host))
+  }
+
   return (
     <section className="space-y-8">
       {/* KPIs */}
@@ -108,12 +135,18 @@ export const SecurityAnalysis: React.FC = () => {
           solo no demuestra que una IP sea maliciosa.
         </p>
         {ipData.length ? (
-          <ResponsiveContainer width="100%" height={Math.max(260, ipData.length * 48)}>
-            <BarChart data={ipData} layout="vertical" margin={{ top: 8, right: 44, left: 12, bottom: 8 }}>
+          <ResponsiveContainer width="100%" height={Math.max(280, ipData.length * 48)}>
+            <BarChart
+              data={ipData}
+              layout="vertical"
+              margin={{ top: 8, right: 44, left: 12, bottom: 8 }}
+              onClick={pickIp}
+            >
               <CartesianGrid stroke={GRID} strokeDasharray="3 3" horizontal={false} />
               <XAxis type="number" allowDecimals={false} tick={AXIS_TICK} />
               <YAxis dataKey="ip" type="category" width={112} tick={AXIS_TICK} />
               <Tooltip
+                cursor={BAR_CURSOR}
                 contentStyle={TOOLTIP_STYLE}
                 formatter={(value: number, name: string) => [
                   `${toCount(value).toLocaleString()} ${name === 'Hosts distintos' ? 'hosts' : 'eventos'}`,
@@ -126,15 +159,23 @@ export const SecurityAnalysis: React.FC = () => {
                 name="Hosts distintos"
                 fill="#0891b2"
                 isAnimationActive={chartMotion.isAnimationActive}
+                animationDuration={chartMotion.duration}
                 label={{ position: 'right', fontSize: 10, fill: '#475569' }}
-              />
+              >
+                {/* Recharts lee las celdas desde los hijos de cada serie; el i-ésimo
+                    <Cell> se aplica al i-ésimo segmento (IP) de cada barra. */}
+                {selectionCells(ipData, focusIp, i => i.ip, '#f97316', true)}
+              </Bar>
               <Bar
                 dataKey="events"
                 name="Eventos sospechosos"
                 fill="#f97316"
                 isAnimationActive={chartMotion.isAnimationActive}
+                animationDuration={chartMotion.duration}
                 label={{ position: 'right', fontSize: 10, fill: '#475569' }}
-              />
+              >
+                {selectionCells(ipData, focusIp, i => i.ip, '#f97316', true)}
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
         ) : (
@@ -142,17 +183,45 @@ export const SecurityAnalysis: React.FC = () => {
             No hay IP sospechosas disponibles en este análisis.
           </p>
         )}
+
+        <p className="mt-2 text-xs text-gray-500">
+          Pulsá una barra para fijar la IP y ver su alcance completo.
+        </p>
+
+        <AnimatePresence mode="wait">
+          {selectedIp && (
+            <ChartInsight
+              key={`ip-${selectedIp.ip}`}
+              title={`IP de origen ${selectedIp.ip}`}
+              color="#f97316"
+              value={`${selectedIp.events.toLocaleString()} eventos`}
+              caption={`${pct(selectedIp.events, totalSuspicious)}% de los ${totalSuspicious.toLocaleString()} eventos sospechosos`}
+              rows={[
+                { label: 'Hosts distintos', value: `${selectedIp.hosts} hosts` },
+                { label: 'Del total sospechoso', value: `${pct(selectedIp.events, totalSuspicious)}%` },
+              ]}
+              note="Los volúmenes por sí solos no prueban malicia: sirven para priorizar la revisión de esos hosts."
+              onClose={() => setFocusIp(null)}
+            />
+          )}
+        </AnimatePresence>
       </DashboardSection>
 
       {/* Correlation: suspicious per host */}
       <DashboardSection title="Eventos sospechosos por host">
         {hostData.length ? (
-          <ResponsiveContainer width="100%" height={Math.max(260, hostData.length * 44)}>
-            <BarChart data={hostData} layout="vertical" margin={{ top: 8, right: 44, left: 12, bottom: 8 }}>
+          <ResponsiveContainer width="100%" height={Math.max(280, hostData.length * 46)}>
+            <BarChart
+              data={hostData}
+              layout="vertical"
+              margin={{ top: 8, right: 44, left: 12, bottom: 8 }}
+              onClick={pickSuspHost}
+            >
               <CartesianGrid stroke={GRID} strokeDasharray="3 3" horizontal={false} />
               <XAxis type="number" allowDecimals={false} tick={AXIS_TICK} />
               <YAxis dataKey="host" type="category" width={112} tick={AXIS_TICK} />
               <Tooltip
+                cursor={BAR_CURSOR}
                 contentStyle={TOOLTIP_STYLE}
                 formatter={(value: number) => [`${toCount(value).toLocaleString()} eventos`, 'Eventos sospechosos']}
               />
@@ -161,8 +230,11 @@ export const SecurityAnalysis: React.FC = () => {
                 name="Eventos sospechosos"
                 fill="#f97316"
                 isAnimationActive={chartMotion.isAnimationActive}
+                animationDuration={chartMotion.duration}
                 label={{ position: 'right', fontSize: 11, fill: '#475569' }}
-              />
+              >
+                {selectionCells(hostData, focusSuspHost, h => h.host, '#f97316')}
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
         ) : (
@@ -170,6 +242,28 @@ export const SecurityAnalysis: React.FC = () => {
             El análisis no registró eventos sospechosos por host.
           </p>
         )}
+
+        <p className="mt-2 text-xs text-gray-500">
+          Pulsá una barra para fijar el host y ver cómo se reparte su actividad.
+        </p>
+
+        <AnimatePresence mode="wait">
+          {selectedSuspHost && (
+            <ChartInsight
+              key={`susp-host-${selectedSuspHost.host}`}
+              title={`Host ${selectedSuspHost.host}`}
+              color="#f97316"
+              value={`${selectedSuspHost.count.toLocaleString()} eventos`}
+              caption={`${pct(selectedSuspHost.count, totalSuspicious)}% de los ${totalSuspicious.toLocaleString()} eventos marcados como sospechosos`}
+              rows={LEVEL_ORDER.map(level => ({
+                label: LEVEL_LABELS[level],
+                value: `${toCount(summary.top_hosts_by_level?.[selectedSuspHost.host]?.[level])} eventos`,
+              }))}
+              note="El reparto por nivel procede de la misma clasificación que usa el dashboard."
+              onClose={() => setFocusSuspHost(null)}
+            />
+          )}
+        </AnimatePresence>
       </DashboardSection>
 
       {/* Full suspicious events table */}
