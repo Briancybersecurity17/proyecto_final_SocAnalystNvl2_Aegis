@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { ReportNarrative } from '../store'
+import type { AnalysisSummary, ReportNarrative } from '../store'
 
 export const API = axios.create({
   baseURL: '/api', // Vite proxy will forward to FastAPI
@@ -15,8 +15,23 @@ export const uploadExcel = async (file: File) => {
   return response.data // { analysis_id, status }
 }
 
-export const getAnalysis = async (analysisId: string) => {
-  const response = await API.get(`/analysis/${analysisId}`)
+/** Envelope devuelto por GET /analysis/{analysis_id}. */
+export interface AnalysisResponse {
+  analysis_id: string
+  status: 'pending' | 'processing' | 'done' | 'error'
+  summary: AnalysisSummary
+  error: string | null
+  rag?: {
+    available: boolean
+    indexed?: number
+    total?: number
+    reason?: string | null
+    model?: string
+  }
+}
+
+export const getAnalysis = async (analysisId: string): Promise<AnalysisResponse> => {
+  const response = await API.get<AnalysisResponse>(`/analysis/${analysisId}`)
   return response.data
 }
 
@@ -210,10 +225,12 @@ export const listenAnalysisEvents = (analysisId: string, onStatus: (status: stri
 
   const handle = (e: MessageEvent) => {
     const raw = String(e.data)
-    // sse-starlette can send plain text or JSON-encoded payloads
+    // sse-starlette puede mandar texto plano ("done") o JSON ("done" / {"status":"done"})
     try {
       const parsed = JSON.parse(raw)
-      onStatus(typeof parsed === 'string' ? parsed : raw)
+      if (typeof parsed === 'string') onStatus(parsed)
+      else if (parsed && typeof parsed.status === 'string') onStatus(parsed.status)
+      else onStatus(raw)
     } catch {
       onStatus(raw)
     }

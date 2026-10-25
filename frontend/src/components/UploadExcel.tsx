@@ -37,13 +37,29 @@ const UploadExcel: React.FC = () => {
       setProgressMsg('Analizando registros con el motor de IA…')
       // Escucha los eventos SSE de progreso
       const stopListening = listenAnalysisEvents(analysis_id, (state) => {
-        setStatus(state as never)
+        // Solo los estados conocidos cambian la UI; cualquier otro mensaje
+        // (p. ej. un estado nuevo del backend) no debe romper el flujo.
+        if (state === 'pending' || state === 'processing' || state === 'done') {
+          // "done" sigue en proceso hasta descargar el resumen
+          setStatus('processing')
+        } else if (state === 'error') {
+          setStatus('error')
+        }
+
         if (state === 'done') {
           stopListening()
-          getAnalysis(analysis_id).then((data) => {
-            setSummary(data.summary)
-            setProgressMsg('Análisis completado')
-          })
+          getAnalysis(analysis_id)
+            .then((data) => {
+              if (!data?.summary || typeof data.summary.rows !== 'number') {
+                setError('La API terminó el análisis pero no devolvió un resumen válido')
+                return
+              }
+              setSummary(data.summary)
+              setProgressMsg('Análisis completado')
+            })
+            .catch(() => {
+              setError('El análisis terminó, pero no se pudieron recuperar sus resultados desde la API')
+            })
         }
         if (state === 'error') {
           stopListening()

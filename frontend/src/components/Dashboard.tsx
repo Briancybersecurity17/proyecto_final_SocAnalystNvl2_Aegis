@@ -1,10 +1,21 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { motion } from 'framer-motion'
 import { SummaryCard } from './SummaryCard'
 import { DashboardSection } from './DashboardSection'
 import { EmptyState } from './EmptyState'
 import { useAnalysisStore } from '../store'
 import { stagger, cardIn, useCountUp } from '../motion'
+import {
+  LEVEL_COLORS,
+  LEVEL_ORDER,
+  LEVEL_LABELS,
+  AXIS_TICK,
+  GRID,
+  TOOLTIP_STYLE,
+  toCount,
+  pct,
+  useChartMotion,
+} from '../charts'
 import {
   Tooltip,
   Legend,
@@ -21,26 +32,13 @@ import {
   CartesianGrid,
 } from 'recharts'
 
-// Criticality palette (fixed order: critico → bajo)
-const LEVEL_COLORS: Record<string, string> = {
-  critico: '#dc2626',
-  alto: '#f97316',
-  medio: '#facc15',
-  bajo: '#10b981',
-}
-const LEVEL_ORDER = ['critico', 'alto', 'medio', 'bajo']
-const LEVEL_LABELS: Record<string, string> = {
-  critico: 'Crítico',
-  alto: 'Alto',
-  medio: 'Medio',
-  bajo: 'Bajo',
-}
-
 /** Contador animado para las cifras de las tarjetas de criticidad. */
 const Counter: React.FC<{ value: number }> = ({ value }) => <>{useCountUp(value)}</>
 
 const Dashboard: React.FC = () => {
   const summary = useAnalysisStore(state => state.summary)
+  const [hostLevel, setHostLevel] = useState<string>('todos')
+  const chartMotion = useChartMotion()
 
   if (!summary) {
     return (
@@ -48,50 +46,81 @@ const Dashboard: React.FC = () => {
     )
   }
 
+  const rows = toCount(summary.rows)
+  const suspicious = toCount(summary.suspicious_events)
   const levelCounts = summary.level_counts ?? {}
 
-  // Data for charts
-  const severityData = LEVEL_ORDER
-    .map(level => ({ name: LEVEL_LABELS[level], value: levelCounts[level] ?? 0, level }))
-    .filter(d => d.value > 0)
+  // Distribución por criticidad (clasificación derivada del análisis)
+  const severityData = LEVEL_ORDER.map(level => ({
+    name: LEVEL_LABELS[level],
+    value: toCount(levelCounts[level]),
+    level,
+  }))
 
-  const eventsData = Object.entries(summary.events_per_day_by_level ?? {}).map(
-    ([date, levels]) => ({
+  // Valores originales de la columna Severity del archivo, sin convertir
+  const rawSeverityData = Object.entries(summary.severity_counts ?? {}).map(
+    ([severity, count]) => ({ severity, count: toCount(count) })
+  )
+
+  const eventsData = Object.entries(summary.events_per_day_by_level ?? {})
+    .map(([date, levels]) => ({
       date,
-      critico: levels.critico ?? 0,
-      alto: levels.alto ?? 0,
-      medio: levels.medio ?? 0,
-      bajo: levels.bajo ?? 0,
-    })
-  )
+      critico: toCount(levels.critico),
+      alto: toCount(levels.alto),
+      medio: toCount(levels.medio),
+      bajo: toCount(levels.bajo),
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date))
 
-  const hostsData = Object.entries(summary.top_hosts_by_level ?? {}).map(
-    ([host, levels]) => ({
+  const hostsData = Object.entries(summary.top_hosts_by_level ?? {})
+    .map(([host, levels]) => ({
       host,
-      critico: levels.critico ?? 0,
-      alto: levels.alto ?? 0,
-      medio: levels.medio ?? 0,
-      bajo: levels.bajo ?? 0,
-    })
-  )
+      critico: toCount(levels.critico),
+      alto: toCount(levels.alto),
+      medio: toCount(levels.medio),
+      bajo: toCount(levels.bajo),
+    }))
+    .map(host => ({
+      ...host,
+      total:
+        hostLevel === 'todos'
+          ? host.critico + host.alto + host.medio + host.bajo
+          : toCount(host[hostLevel as 'critico' | 'alto' | 'medio' | 'bajo']),
+    }))
+    .sort((a, b) => b.total - a.total)
+
+  const shownLevels = hostLevel === 'todos' ? [...LEVEL_ORDER] : [hostLevel]
 
   return (
     <section className="space-y-8">
-      {/* Key metrics */}
+      {/* Archivo analizado y momento del resumen */}
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
+        <span>
+          Conjunto analizado:{' '}
+          <strong className="text-gray-700">{summary.file_name || 'archivo importado'}</strong>
+        </span>
+        <span>
+          {summary.generated_at
+            ? `Resumen generado: ${summary.generated_at.replace('T', ' ')}`
+            : 'Datos del análisis actual'}
+        </span>
+      </div>
+
+      {/* KPIs */}
       <motion.div
         variants={stagger(0.06)}
         initial="hidden"
         animate="show"
         className="grid grid-cols-2 lg:grid-cols-5 gap-4"
       >
-        <SummaryCard label="Registros totales" value={summary.rows} />
+        <SummaryCard label="Registros totales" value={rows} />
+        <SummaryCard label="Eventos sospechosos" value={suspicious} />
+        <SummaryCard label="Sospechosos del total" value={`${pct(suspicious, rows)}%`} />
         <SummaryCard label="Hosts únicos" value={summary.unique_hosts ?? '—'} />
-        <SummaryCard label="Nivel de riesgo" value={<span className="capitalize">{summary.risk}</span>} />
-        <SummaryCard label="Eventos sospechosos" value={summary.suspicious_events ?? 0} />
-        <SummaryCard label="Columnas" value={summary.columns?.length ?? 0} />
+        <SummaryCard label="Riesgo global" value={<span className="capitalize">{summary.risk || '—'}</span>} />
       </motion.div>
 
-      {/* Criticality breakdown */}
+      {/* Desglose por nivel */}
       <motion.div
         variants={stagger(0.06)}
         initial="hidden"
@@ -99,7 +128,7 @@ const Dashboard: React.FC = () => {
         className="grid grid-cols-2 lg:grid-cols-4 gap-4"
       >
         {LEVEL_ORDER.map(level => {
-          const count = levelCounts[level] ?? 0
+          const count = toCount(levelCounts[level])
           const color = LEVEL_COLORS[level]
           return (
             <motion.div
@@ -111,17 +140,12 @@ const Dashboard: React.FC = () => {
             >
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-semibold text-gray-600">{LEVEL_LABELS[level]}</h3>
-                <span
-                  className="w-3 h-3 rounded-full"
-                  style={{ backgroundColor: color }}
-                />
+                <span className="w-3 h-3 rounded-full" style={{ backgroundColor: color }} />
               </div>
               <p className="text-3xl font-bold mt-1" style={{ color }}>
                 <Counter value={count} />
               </p>
-              <p className="text-xs text-gray-500 mt-1">
-                {summary.rows ? ((count / summary.rows) * 100).toFixed(1) : 0}% del total
-              </p>
+              <p className="text-xs text-gray-500 mt-1">{pct(count, rows)}% de {rows} registros</p>
             </motion.div>
           )
         })}
@@ -152,77 +176,192 @@ const Dashboard: React.FC = () => {
         </DashboardSection>
       )}
 
+      {/* Criticality distribution: donut + list (labels never overlap) */}
+      <DashboardSection title="Distribución por criticidad">
+        <p className="text-sm text-gray-600 mb-4">
+          Clasificación calculada por el análisis; no equivale al campo original <code>Severity</code>.
+        </p>
+        {severityData.every(item => item.value === 0) ? (
+          <p className="py-10 text-center text-sm text-gray-500">
+            No hay datos de clasificación para representar.
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_240px] gap-4 items-center">
+            <ResponsiveContainer width="100%" height={280}>
+              <PieChart>
+                <Pie
+                  data={severityData}
+                  dataKey="value"
+                  nameKey="name"
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={62}
+                  outerRadius={100}
+                  paddingAngle={2}
+                  isAnimationActive={chartMotion.isAnimationActive}
+                >
+                  {severityData.map(entry => (
+                    <Cell key={entry.level} fill={LEVEL_COLORS[entry.level]} stroke="#fff" strokeWidth={2} />
+                  ))}
+                </Pie>
+                <Tooltip
+                  contentStyle={TOOLTIP_STYLE}
+                  formatter={(value: number, _name, item) => [
+                    `${toCount(value).toLocaleString()} registros (${pct(toCount(value), rows)}%)`,
+                    item?.payload?.name ?? _name,
+                  ]}
+                />
+                {/* Sin <Legend />: la lista de la derecha ya es la leyenda
+                    (mismo color, nombre, recuento y %) y no se duplica */}
+              </PieChart>
+            </ResponsiveContainer>
+
+            {/* Leyenda con cifras exactas: sustituye las etiquetas que se
+                solapaban sobre los sectores pequeños del donut */}
+            <div className="space-y-3">
+              {severityData.map(item => (
+                <div key={item.level} className="flex items-center justify-between gap-3 border-b border-gray-100 pb-2">
+                  <span className="flex items-center gap-2 text-sm text-gray-700">
+                    <span className="inline-block h-3 w-3 rounded-sm" style={{ background: LEVEL_COLORS[item.level] }} />
+                    {item.name}
+                  </span>
+                  <span className="text-right">
+                    <strong className="text-sm text-gray-900">{item.value.toLocaleString()}</strong>
+                    <span className="block text-xs text-gray-500">{pct(item.value, rows)}%</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </DashboardSection>
+
+      {/* Actividad temporal: barra apilada con 1 fecha, línea con varias */}
+      <DashboardSection title="Actividad temporal por criticidad">
+        {eventsData.length === 0 ? (
+          <p className="py-10 text-center text-sm text-gray-500">
+            El backend no devolvió agrupaciones temporales para este análisis.
+          </p>
+        ) : (
+          <>
+            {eventsData.length === 1 && (
+              <p className="mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                Los datos cubren un solo día ({eventsData[0].date}): se muestra la barra apilada de ese día.
+                Con una sola fecha no hay tendencia que graficar.
+              </p>
+            )}
+            <ResponsiveContainer width="100%" height={300}>
+              {eventsData.length === 1 ? (
+                <BarChart data={eventsData} margin={{ top: 14, right: 20, left: 8, bottom: 8 }}>
+                  <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="date" tick={AXIS_TICK} />
+                  <YAxis allowDecimals={false} tick={AXIS_TICK} />
+                  <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(value: number, name) => [`${toCount(value).toLocaleString()} eventos`, name]} />
+                  <Legend />
+                  {LEVEL_ORDER.map(level => (
+                    <Bar key={level} dataKey={level} name={LEVEL_LABELS[level]} stackId="daily" fill={LEVEL_COLORS[level]} isAnimationActive={chartMotion.isAnimationActive} />
+                  ))}
+                </BarChart>
+              ) : (
+                <LineChart data={eventsData} margin={{ top: 8, right: 20, left: 8, bottom: 8 }}>
+                  <CartesianGrid stroke={GRID} strokeDasharray="3 3" />
+                  <XAxis dataKey="date" tick={AXIS_TICK} />
+                  <YAxis allowDecimals={false} tick={AXIS_TICK} />
+                  <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(value: number, name) => [`${toCount(value).toLocaleString()} eventos`, name]} />
+                  <Legend />
+                  {LEVEL_ORDER.map(level => (
+                    <Line key={level} type="monotone" dataKey={level} name={LEVEL_LABELS[level]} stroke={LEVEL_COLORS[level]} strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} isAnimationActive={chartMotion.isAnimationActive} />
+                  ))}
+                </LineChart>
+              )}
+            </ResponsiveContainer>
+          </>
+        )}
+      </DashboardSection>
+
+      {/* Top hosts, con filtro por nivel */}
+      <DashboardSection title="Hosts con mayor volumen de eventos">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+          <p className="text-sm text-gray-600">
+            Registros por host; podés enfocar un nivel de riesgo concreto.
+          </p>
+          <label className="flex items-center gap-2 text-sm text-gray-700">
+            Nivel
+            <select
+              value={hostLevel}
+              onChange={e => setHostLevel(e.target.value)}
+              className="rounded border border-gray-300 bg-white px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary"
+            >
+              <option value="todos">Todos</option>
+              {LEVEL_ORDER.map(level => (
+                <option key={level} value={level}>
+                  {LEVEL_LABELS[level]}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        {hostsData.length ? (
+          <ResponsiveContainer width="100%" height={Math.max(280, hostsData.length * 42)}>
+            <BarChart data={hostsData} layout="vertical" margin={{ top: 8, right: 44, left: 12, bottom: 8 }}>
+              <CartesianGrid stroke={GRID} strokeDasharray="3 3" horizontal={false} />
+              <XAxis type="number" allowDecimals={false} tick={AXIS_TICK} />
+              <YAxis dataKey="host" type="category" width={88} tick={AXIS_TICK} />
+              <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(value: number, name) => [`${toCount(value).toLocaleString()} eventos`, name]} />
+              <Legend />
+              {shownLevels.map(level => (
+                <Bar
+                  key={level}
+                  dataKey={level}
+                  name={LEVEL_LABELS[level]}
+                  stackId={hostLevel === 'todos' ? 'hosts' : undefined}
+                  fill={LEVEL_COLORS[level]}
+                  isAnimationActive={chartMotion.isAnimationActive}
+                  label={{ position: 'right', fontSize: 10, fill: '#475569', formatter: (value: number) => (value > 0 ? value : '') }}
+                />
+              ))}
+            </BarChart>
+          </ResponsiveContainer>
+        ) : (
+          <p className="py-8 text-center text-sm text-gray-500">No hay hosts para mostrar.</p>
+        )}
+      </DashboardSection>
+
+      {/* Original Severity column, kept separate from the derived levels */}
+      <DashboardSection title="Valores originales del campo Severity">
+        <p className="text-sm text-gray-600 mb-4">
+          Tal como vienen en el archivo, sin convertir a Crítico / Alto / Medio / Bajo.
+        </p>
+        {rawSeverityData.length ? (
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart data={rawSeverityData} margin={{ top: 8, right: 20, left: 8, bottom: 8 }}>
+              <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="severity" tick={AXIS_TICK} />
+              <YAxis allowDecimals={false} tick={AXIS_TICK} />
+              <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(value: number) => [`${toCount(value).toLocaleString()} registros`, 'Cantidad']} />
+              <Bar
+                dataKey="count"
+                name="Registros originales"
+                fill="#0891b2"
+                radius={[5, 5, 0, 0]}
+                isAnimationActive={chartMotion.isAnimationActive}
+                label={{ position: 'top', fontSize: 11, fill: '#475569' }}
+              />
+            </BarChart>
+          </ResponsiveContainer>
+        ) : (
+          <p className="py-8 text-center text-sm text-gray-500">
+            La respuesta no incluye conteos del campo Severity original.
+          </p>
+        )}
+      </DashboardSection>
+
       {/* Overall risk justification */}
       <DashboardSection title="Justificación del nivel de riesgo">
-        <p className="text-gray-700 leading-relaxed">{summary.risk_justification}</p>
-      </DashboardSection>
-
-      {/* Criticality distribution pie */}
-      <DashboardSection title="Distribución por criticidad">
-        <ResponsiveContainer width="100%" height={300}>
-          <PieChart>
-            <Pie
-              data={severityData}
-              dataKey="value"
-              nameKey="name"
-              cx="50%"
-              cy="50%"
-              outerRadius={110}
-              label={({ name, percent }) => `${name} (${(percent * 100).toFixed(1)}%)`}
-            >
-              {severityData.map(entry => (
-                <Cell key={entry.level} fill={LEVEL_COLORS[entry.level]} />
-              ))}
-            </Pie>
-            <Tooltip />
-            <Legend />
-          </PieChart>
-        </ResponsiveContainer>
-      </DashboardSection>
-
-      {/* Events per day stacked by criticality */}
-      <DashboardSection title="Eventos por día (segmentados por criticidad)">
-        <ResponsiveContainer width="100%" height={320}>
-          <LineChart data={eventsData}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="date" stroke="#555" />
-            <YAxis />
-            <Tooltip />
-            <Legend />
-            {LEVEL_ORDER.map(level => (
-              <Line
-                key={level}
-                type="monotone"
-                dataKey={level}
-                name={LEVEL_LABELS[level]}
-                stroke={LEVEL_COLORS[level]}
-                strokeWidth={2}
-              />
-            ))}
-          </LineChart>
-        </ResponsiveContainer>
-      </DashboardSection>
-
-      {/* Top hosts stacked by criticality */}
-      <DashboardSection title="Top hosts por volumen de eventos">
-        <ResponsiveContainer width="100%" height={320}>
-          <BarChart data={hostsData} layout="vertical" margin={{ top: 10, right: 30, left: 80, bottom: 10 }}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis type="number" />
-            <YAxis dataKey="host" type="category" width={70} />
-            <Tooltip />
-            <Legend />
-            {LEVEL_ORDER.map(level => (
-              <Bar
-                key={level}
-                dataKey={level}
-                name={LEVEL_LABELS[level]}
-                stackId="hosts"
-                fill={LEVEL_COLORS[level]}
-              />
-            ))}
-          </BarChart>
-        </ResponsiveContainer>
+        <p className="text-gray-700 leading-relaxed">
+          {summary.risk_justification || 'El backend no incluyó una justificación para este análisis.'}
+        </p>
       </DashboardSection>
     </section>
   )

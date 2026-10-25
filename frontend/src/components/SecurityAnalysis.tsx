@@ -5,6 +5,14 @@ import { getRows, RowsResponse } from '../api/client'
 import { DashboardSection } from './DashboardSection'
 import { EmptyState } from './EmptyState'
 import {
+  AXIS_TICK,
+  GRID,
+  TOOLTIP_STYLE,
+  toCount,
+  pct,
+  useChartMotion,
+} from '../charts'
+import {
   BarChart,
   Bar,
   XAxis,
@@ -26,9 +34,11 @@ export const SecurityAnalysis: React.FC = () => {
   const summary = useAnalysisStore(state => state.summary)
   const analysisId = useAnalysisStore(state => state.analysisId)
   const status = useAnalysisStore(state => state.status)
+  const chartMotion = useChartMotion()
 
   const [data, setData] = useState<RowsResponse | null>(null)
   const [loading, setLoading] = useState(false)
+  const [fetchError, setFetchError] = useState<string | null>(null)
   const [page, setPage] = useState(1)
   const pageSize = 10
 
@@ -36,10 +46,12 @@ export const SecurityAnalysis: React.FC = () => {
     if (!analysisId || status !== 'done') return
     setLoading(true)
     try {
+      setFetchError(null)
       const res = await getRows(analysisId, { page, pageSize, suspicious: true })
       setData(res)
     } catch {
       setData(null)
+      setFetchError('No se pudieron cargar las filas sospechosas desde la API. Reintenta o revisa la conexión con el backend.')
     } finally {
       setLoading(false)
     }
@@ -56,11 +68,15 @@ export const SecurityAnalysis: React.FC = () => {
   }
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / pageSize)) : 1
-  const ipData = (summary.suspicious_by_ip ?? []).map(item => ({
-    ip: item.ip,
-    hosts: item.hosts,
-    events: item.events,
-  }))
+  // En horizontal las IP se leen completas; se ordena por volumen para que la
+  // comparación de arriba a abajo sea inmediata.
+  const ipData = [...(summary.suspicious_by_ip ?? [])]
+    .map(item => ({ ip: item.ip, hosts: toCount(item.hosts), events: toCount(item.events) }))
+    .sort((a, b) => b.events - a.events)
+
+  const hostData = Object.entries(summary.suspicious_correlations ?? {})
+    .map(([host, count]) => ({ host, count: toCount(count) }))
+    .sort((a, b) => b.count - a.count)
 
   return (
     <section className="space-y-8">
@@ -68,60 +84,101 @@ export const SecurityAnalysis: React.FC = () => {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="bg-white rounded shadow p-4 text-center">
           <h3 className="text-sm font-medium text-gray-600">Eventos sospechosos</h3>
-          <p className="text-3xl font-bold text-orange-600">{summary.suspicious_events}</p>
-          <p className="text-xs text-gray-500">de {summary.rows} registros</p>
+          <p className="text-3xl font-bold text-orange-600">{toCount(summary.suspicious_events)}</p>
+          <p className="text-xs text-gray-500">
+            {pct(toCount(summary.suspicious_events), toCount(summary.rows))}% de {summary.rows} registros
+          </p>
         </div>
         <div className="bg-white rounded shadow p-4 text-center">
           <h3 className="text-sm font-medium text-gray-600">Hosts afectados</h3>
-          <p className="text-3xl font-bold text-red-600">
-            {Object.keys(summary.suspicious_correlations ?? {}).length}
-          </p>
+          <p className="text-3xl font-bold text-red-600">{hostData.length}</p>
           <p className="text-xs text-gray-500">con eventos sospechosos</p>
         </div>
         <div className="bg-white rounded shadow p-4 text-center">
           <h3 className="text-sm font-medium text-gray-600">IPs de origen</h3>
           <p className="text-3xl font-bold text-blue-600">{ipData.length}</p>
-          <p className="text-xs text-gray-500">top involucradas</p>
+          <p className="text-xs text-gray-500">con actividad marcada para revisión</p>
         </div>
       </div>
 
       {/* Correlation: IP -> hosts */}
       <DashboardSection title="Correlación: IP de origen → hosts impactados">
         <p className="text-sm text-gray-600 mb-3">
-          Una IP que alcanza varios hosts indica posible barrido o movimiento lateral.
+          El alcance entre hosts ayuda a priorizar la investigación, pero el volumen por sí
+          solo no demuestra que una IP sea maliciosa.
         </p>
-        <ResponsiveContainer width="100%" height={280}>
-          <BarChart data={ipData} margin={{ top: 10, right: 30, left: 20, bottom: 10 }}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="ip" stroke="#555" />
-            <YAxis allowDecimals={false} />
-            <Tooltip />
-            <Legend />
-            <Bar dataKey="hosts" name="Hosts distintos" fill="#dc2626" />
-            <Bar dataKey="events" name="Eventos sospechosos" fill="#f97316" />
-          </BarChart>
-        </ResponsiveContainer>
+        {ipData.length ? (
+          <ResponsiveContainer width="100%" height={Math.max(260, ipData.length * 48)}>
+            <BarChart data={ipData} layout="vertical" margin={{ top: 8, right: 44, left: 12, bottom: 8 }}>
+              <CartesianGrid stroke={GRID} strokeDasharray="3 3" horizontal={false} />
+              <XAxis type="number" allowDecimals={false} tick={AXIS_TICK} />
+              <YAxis dataKey="ip" type="category" width={112} tick={AXIS_TICK} />
+              <Tooltip
+                contentStyle={TOOLTIP_STYLE}
+                formatter={(value: number, name: string) => [
+                  `${toCount(value).toLocaleString()} ${name === 'Hosts distintos' ? 'hosts' : 'eventos'}`,
+                  name,
+                ]}
+              />
+              <Legend />
+              <Bar
+                dataKey="hosts"
+                name="Hosts distintos"
+                fill="#0891b2"
+                isAnimationActive={chartMotion.isAnimationActive}
+                label={{ position: 'right', fontSize: 10, fill: '#475569' }}
+              />
+              <Bar
+                dataKey="events"
+                name="Eventos sospechosos"
+                fill="#f97316"
+                isAnimationActive={chartMotion.isAnimationActive}
+                label={{ position: 'right', fontSize: 10, fill: '#475569' }}
+              />
+            </BarChart>
+          </ResponsiveContainer>
+        ) : (
+          <p className="py-8 text-center text-sm text-gray-500">
+            No hay IP sospechosas disponibles en este análisis.
+          </p>
+        )}
       </DashboardSection>
 
       {/* Correlation: suspicious per host */}
       <DashboardSection title="Eventos sospechosos por host">
-        <ResponsiveContainer width="100%" height={280}>
-          <BarChart
-            data={Object.entries(summary.suspicious_correlations ?? {}).map(([host, count]) => ({ host, count }))}
-            layout="vertical"
-            margin={{ top: 10, right: 30, left: 80, bottom: 10 }}
-          >
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis type="number" allowDecimals={false} />
-            <YAxis dataKey="host" type="category" width={70} />
-            <Tooltip />
-            <Bar dataKey="count" name="Sospechosos" fill="#f97316" />
-          </BarChart>
-        </ResponsiveContainer>
+        {hostData.length ? (
+          <ResponsiveContainer width="100%" height={Math.max(260, hostData.length * 44)}>
+            <BarChart data={hostData} layout="vertical" margin={{ top: 8, right: 44, left: 12, bottom: 8 }}>
+              <CartesianGrid stroke={GRID} strokeDasharray="3 3" horizontal={false} />
+              <XAxis type="number" allowDecimals={false} tick={AXIS_TICK} />
+              <YAxis dataKey="host" type="category" width={112} tick={AXIS_TICK} />
+              <Tooltip
+                contentStyle={TOOLTIP_STYLE}
+                formatter={(value: number) => [`${toCount(value).toLocaleString()} eventos`, 'Eventos sospechosos']}
+              />
+              <Bar
+                dataKey="count"
+                name="Eventos sospechosos"
+                fill="#f97316"
+                isAnimationActive={chartMotion.isAnimationActive}
+                label={{ position: 'right', fontSize: 11, fill: '#475569' }}
+              />
+            </BarChart>
+          </ResponsiveContainer>
+        ) : (
+          <p className="py-8 text-center text-sm text-gray-500">
+            El análisis no registró eventos sospechosos por host.
+          </p>
+        )}
       </DashboardSection>
 
       {/* Full suspicious events table */}
       <DashboardSection title="Eventos sospechosos identificados">
+        {fetchError && (
+          <div role="alert" className="mb-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+            {fetchError}
+          </div>
+        )}
         <div className="overflow-auto border border-gray-200 rounded max-h-96">
           <table className="min-w-full text-sm">
             <thead className="bg-gray-100 sticky top-0">

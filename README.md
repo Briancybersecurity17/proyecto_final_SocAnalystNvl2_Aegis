@@ -55,6 +55,7 @@ proyecto_final_bootcamp_ComunidadDojo_SocAnalystNvl2/
    ├─ vite.config.ts          # proxy /api → 127.0.0.1:8500
    └─ src/
       ├─ App.tsx              # layout + cabecera por sección + estado del backend
+      ├─ charts.ts            # sistema compartido de estilos de gráficos (Recharts)
       ├─ store/index.ts       # Zustand (tipado: análisis + navegación)
       ├─ api/client.ts        # axios + SSE
       └─ components/

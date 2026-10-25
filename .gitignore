@@ -26,5 +26,8 @@ Thumbs.db
 .idea/
 .vscode/
 
+# ----- Bocetos de diseño (carpeta temporal de trabajo) -----
+bocetos_graficos_test/
+
 # ----- Logs -----
 *.log
