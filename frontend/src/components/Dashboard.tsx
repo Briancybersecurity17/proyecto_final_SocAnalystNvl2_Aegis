@@ -40,7 +40,7 @@ const Dashboard: React.FC = () => {
     return (
       <div className="p-8 text-center text-gray-500 bg-white rounded shadow">
         <p className="text-lg font-medium mb-2">Sin datos todavía</p>
-        <p>Sube un archivo Excel en la sección <strong>Upload</strong> para ver las estadísticas.</p>
+        <p>Sube un archivo Excel en la sección <strong>Carga de archivos</strong> para ver las estadísticas.</p>
       </div>
     )
   }
