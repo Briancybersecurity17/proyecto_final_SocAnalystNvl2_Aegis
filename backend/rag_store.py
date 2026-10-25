@@ -123,6 +123,16 @@ QUERY_LEXICON: List[tuple[str, str]] = [
     ("servicio de dominio", "domain controller"),
     ("controlador de dominio", "domain controller"),
     ("dominio", "domain controller"),
+    # Criticidad: los registros usan Severity en inglés, la consulta en español
+    ("critico", "critical severity"),
+    ("critica", "critical severity"),
+    ("criticos", "critical severity critical events"),
+    ("criticas", "critical severity critical events"),
+    ("eventos criticos", "critical severity critical events"),
+    ("nivel critico", "critical severity critical events"),
+    ("nivel alto", "high severity high events"),
+    ("nivel medio", "medium severity medium events"),
+    ("nivel bajo", "low severity low events"),
 ]
 
 
@@ -151,6 +161,7 @@ _collection = None
 _client = None
 _initialized = False
 _init_error: Optional[str] = None
+_initializing = False  # primer arranque del motor (carga del modelo) en curso
 _lock = threading.Lock()
 
 
@@ -166,13 +177,14 @@ def get_client():
 
 def _get_collection():
     """Inicialización lazy de ChromaDB. Retorna None si no está disponible."""
-    global _collection, _client, _initialized, _init_error
+    global _collection, _client, _initialized, _init_error, _initializing
     if _initialized:
         return _collection
     with _lock:
         if _initialized:
             return _collection
         _initialized = True
+        _initializing = True  # el modelo aún se está cargando: no es un error
 
         try:
             import chromadb
@@ -206,6 +218,8 @@ def _get_collection():
             logger.warning("Error inicializando RAG store: %s", exc)
             _collection = None
             _client = None
+        finally:
+            _initializing = False
 
     return _collection
 
@@ -219,9 +233,14 @@ def status() -> Dict[str, Any]:
     """Estado del motor para mostrar en la UI (nunca lanza excepción)."""
     col = _get_collection()
     if col is None:
+        # Durante la primera carga del modelo el motor aún no está listo, pero
+        # no está «roto»: se distingue para no mostrar un motivo engañoso.
+        reason = "inicializando el motor semántico…" if _initializing else (
+            _init_error or "chromadb no instalado"
+        )
         return {
             "available": False,
-            "reason": _init_error or "chromadb no instalado",
+            "reason": reason,
             "model": EMBEDDING_MODEL,
             "total": 0,
         }
@@ -423,7 +442,7 @@ def query_events(
     análisis — el llamador decide cómo responder (fallback determinista).
     """
     col = _get_collection()
-    if col is None or col.count() == 0:
+    if col is None:
         return []
 
     question = (question or "").strip()
@@ -432,6 +451,8 @@ def query_events(
 
     try:
         total = col.count()
+        if total == 0:
+            return []
         n = max(1, min(int(n_results), MAX_RESULTS, total))
 
         res = col.query(

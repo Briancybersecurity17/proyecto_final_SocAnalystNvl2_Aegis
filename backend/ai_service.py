@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import unicodedata
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -604,6 +605,7 @@ def build_qa_context(
     hits: List[Dict[str, Any]],
     summary: Optional[Dict[str, Any]] = None,
     reference: Optional[Dict[str, Any]] = None,
+    index_note: str = "",
 ) -> Dict[str, Any]:
     """Contexto que la IA (o el fallback) puede ver: solo eventos recuperados."""
     summary = summary or {}
@@ -630,6 +632,16 @@ def build_qa_context(
         "dataset_rows": int(summary.get("rows", 0) or 0),
         "retrieved_total": len(hits),
         "level_counts": summary.get("level_counts") or {},
+        # Datos de agregación (conteos de TODO el dataset): permiten responder
+        # preguntas del tipo «¿cuántos...?» / «¿qué hosts concentran...?» con
+        # cifras exactas en lugar de con unas pocas filas recuperadas.
+        "top_hosts": summary.get("top_hosts") or {},
+        "hosts_by_level": summary.get("top_hosts_by_level") or {},
+        "suspicious_events": int(summary.get("suspicious_events") or 0),
+        "unique_hosts": summary.get("unique_hosts"),
+        # Aviso del backend: el índice semántico aún se está construyendo y la
+        # recuperación de esta consulta ha sido solo léxica.
+        "index_note": index_note,
         "evidence": evidence,
         # Base de conocimiento (MITRE ATT&CK + glosario de Event IDs): material
         # de referencia del marco, etiquetado aparte para no confundirlo con
@@ -664,6 +676,187 @@ def _reference_lines(reference: Optional[Dict[str, Any]]) -> List[str]:
     return lines
 
 
+# ---------------------------------------------------------------------------
+# Consultas de AGREGACIÓN (conteos, distribución, hosts dominantes)
+# ---------------------------------------------------------------------------
+# Una pregunta como «¿qué hosts concentran los eventos críticos?» NO se
+# contesta con 8 filas recuperadas (que además pueden ser irrelevantes): se
+# contesta con los conteos exactos calculados sobre TODO el dataset.
+AGGREGATE_MARKERS = (
+    "cuantos", "cuantas", "distribucion", "distribuyen", "concentran",
+    "concentra", "con mas", "mas eventos", "reparten", "reparto", "desglose",
+    "por nivel", "por criticidad", "por host", "resumen", "estadistic",
+    "ranking", "top host", "top hosts", "total de", "como se distribuyen",
+)
+
+_LEVEL_PATTERNS = {
+    "critico": r"critic[oa]s?",
+    "alto": r"alt[oa]s?",
+    "medio": r"medi[oa]s?",
+    "bajo": r"baj[oa]s?",
+}
+
+
+def _norm_text(text: str) -> str:
+    """Minúsculas y sin tildes/ñ: para comparar consultas escritas en español."""
+    return "".join(
+        ch for ch in unicodedata.normalize("NFD", (text or "").lower())
+        if unicodedata.category(ch) != "Mn"
+    )
+
+
+def is_aggregate_question(question: str) -> bool:
+    """¿La consulta pide un conteo / distribución / ranking sobre el dataset?"""
+    text = _norm_text(question)
+    return any(marker in text for marker in AGGREGATE_MARKERS)
+
+
+def _level_terms(question: str) -> List[str]:
+    """Niveles de criticidad mencionados en la consulta (sin acentos)."""
+    text = _norm_text(question)
+    found = [lvl for lvl in LEVEL_ORDER if re.search(rf"\b{_LEVEL_PATTERNS[lvl]}\b", text)]
+    if re.search(r"\bsospechos", text):
+        found.append("sospechoso")
+    return found
+
+
+def _aggregate_lines(ctx: Dict[str, Any]) -> List[str]:
+    """Líneas con cifras EXACTAS del resumen del análisis (nunca inventadas)."""
+    rows = ctx["dataset_rows"]
+    counts = ctx["level_counts"] or {}
+    requested = [lvl for lvl in _level_terms(ctx["question"]) if lvl in LEVEL_ORDER]
+    hosts_by_level = ctx.get("hosts_by_level") or {}
+    lines: List[str] = []
+
+    def _hosts_for(lvl: str, n: int = 3) -> List[tuple]:
+        pairs = [
+            (str(host), int(data.get(lvl, 0) or 0))
+            for host, data in hosts_by_level.items()
+            if isinstance(data, dict) and int(data.get(lvl, 0) or 0) > 0
+        ]
+        pairs.sort(key=lambda kv: (-kv[1], kv[0]))
+        return pairs[:n]
+
+    # 1) Distribución completa por criticidad
+    if counts:
+        distribution = " · ".join(
+            f"{LEVEL_LABELS.get(lvl, lvl)} {int(counts.get(lvl, 0) or 0)}"
+            for lvl in LEVEL_ORDER
+        )
+        lines.append(
+            f"Distribución de los {rows} registros por criticidad: {distribution}."
+        )
+        empty = [lvl for lvl in LEVEL_ORDER if not int(counts.get(lvl, 0) or 0)]
+        empty = [lvl for lvl in empty if lvl not in requested]
+        if empty:
+            lines.append(
+                "Sin registros en "
+                + ", ".join(f"«{LEVEL_LABELS.get(lvl, lvl)}»" for lvl in empty)
+                + f" (0 de {rows})."
+            )
+
+    # 2) Hosts que concentran el nivel pedido (o el dominante si no se pide)
+    def _hosts_line(lvl: str) -> Optional[str]:
+        pairs = _hosts_for(lvl)
+        if not pairs:
+            return None
+        return (
+            f"Hosts que concentran el nivel «{LEVEL_LABELS.get(lvl, lvl)}»: "
+            + ", ".join(f"{host} ({count})" for host, count in pairs)
+            + "."
+        )
+
+    if requested:
+        for lvl in requested:
+            count = int(counts.get(lvl, 0) or 0)
+            label = LEVEL_LABELS.get(lvl, lvl)
+            if count:
+                lines.append(f"Registros en «{label}»: {count} de {rows} ({_pct(count, rows)}).")
+                line = _hosts_line(lvl)
+                if line:
+                    lines.append(line)
+                continue
+            # Nivel pedido sin datos: se dice de forma explícita y se ofrece
+            # el nivel más crítico que sí existe en la carga.
+            present = next(
+                (l for l in LEVEL_ORDER if int(counts.get(l, 0) or 0) > 0), None
+            )
+            if present is None:
+                lines.append(f"No hay registros clasificados como «{label}» (0 de {rows}).")
+                continue
+            lines.append(
+                f"No hay registros clasificados como «{label}» (0 de {rows}). "
+                f"El nivel con más eventos es «{LEVEL_LABELS.get(present, present)}» "
+                f"con {int(counts.get(present, 0) or 0)}."
+            )
+            line = _hosts_line(present)
+            if line:
+                lines.append(line)
+    else:
+        top = ctx.get("top_hosts") or {}
+        if top:
+            lines.append(
+                "Hosts con más eventos (todos los niveles): "
+                + ", ".join(f"{host} ({int(n)})" for host, n in list(top.items())[:4])
+                + "."
+            )
+        present = next((l for l in LEVEL_ORDER if int(counts.get(l, 0) or 0) > 0), None)
+        if present:
+            line = _hosts_line(present)
+            if line:
+                lines.append(line)
+
+    # 3) Sospechosos y hosts distintos
+    suspicious = int(ctx.get("suspicious_events") or 0)
+    if "sospechoso" in _level_terms(ctx["question"]) or not requested:
+        if suspicious:
+            lines.append(
+                f"Eventos marcados como sospechosos: {suspicious} de {rows} "
+                f"({_pct(suspicious, rows)})."
+            )
+        elif "sospechoso" in _level_terms(ctx["question"]):
+            lines.append(f"Ningún registro quedó marcado como sospechoso (0 de {rows}).")
+    unique_hosts = ctx.get("unique_hosts")
+    if unique_hosts:
+        lines.append(f"Hosts distintos en la carga: {int(unique_hosts)}.")
+
+    lines.append(
+        f"Todas las cifras proceden del resumen calculado sobre tus {rows} "
+        "registros importados; no se ha añadido ningún dato externo."
+    )
+    return lines
+
+
+def _aggregate_answer(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Respuesta determinista a consultas de agregación (conteos exactos).
+
+    Devuelve ``None`` si la consulta no es de agregación o no hay dataset.
+    """
+    if not is_aggregate_question(ctx["question"]) or not ctx["dataset_rows"]:
+        return None
+    reference = ctx.get("reference") or {
+        "available": False, "event_ids": [], "techniques": [], "note": "",
+    }
+    lines = [
+        f"Resumen exacto de tus {ctx['dataset_rows']} registros importados:",
+        "",
+    ]
+    lines += _aggregate_lines(ctx)
+    return {
+        "answer": "\n".join(lines),
+        "evidence": [],
+        # La referencia del marco no aporta a una pregunta de conteos: se
+        # omite para no mezclar técnicas MITRE con cifras del dataset.
+        "reference": {"available": False, "event_ids": [], "techniques": [], "note": ""},
+        "summary_line": f"resumen del dataset · {ctx['dataset_rows']} registros",
+        "confidence": "alta",
+        "engine": "deterministic",
+        "model": None,
+        "warnings": [],
+        "mode": "aggregate",
+    }
+
+
 def _qa_fallback(ctx: Dict[str, Any]) -> Dict[str, Any]:
     """Respuesta determinista sobre los eventos recuperados (sin modelo)."""
     question = ctx["question"]
@@ -674,12 +867,17 @@ def _qa_fallback(ctx: Dict[str, Any]) -> Dict[str, Any]:
     if not evidence:
         lines = [
             f"No encontré registros que se parezcan semánticamente a "
-            f"«{question}» en los {rows} eventos indexados.",
+            f"«{question}» entre los {rows} registros disponibles.",
             "",
-            "Prueba a reformular la consulta, o filtra por criticidad / "
-            "eventos sospechosos desde la tabla de registros para revisarlos "
-            "directamente.",
+            "Prueba a reformular la consulta con términos que aparezcan en tus "
+            "registros (host, usuario, Event ID, IP), o filtra por criticidad / "
+            "eventos sospechosos desde la tabla de registros.",
         ]
+        if ctx.get("index_note"):
+            lines += ["", ctx["index_note"]]
+        if rows:
+            lines += ["", f"Resumen de tus {rows} registros mientras tanto:"]
+            lines += _aggregate_lines(ctx)
         lines += _reference_lines(reference)
         return {
             "answer": "\n".join(lines),
@@ -690,6 +888,7 @@ def _qa_fallback(ctx: Dict[str, Any]) -> Dict[str, Any]:
             "engine": "deterministic",
             "model": None,
             "warnings": ["sin_resultados"],
+            "mode": "evidence",
         }
 
     # Conteos siempre derivados de los eventos recuperados, nunca del modelo
@@ -768,6 +967,9 @@ def _qa_fallback(ctx: Dict[str, Any]) -> Dict[str, Any]:
             "Todos los datos anteriores provienen de los registros importados; "
             "no se ha generado ninguna cifra nueva."
         )
+    if ctx.get("index_note"):
+        lines.append("")
+        lines.append(ctx["index_note"])
 
     ref_lines = _reference_lines(reference)
     if ref_lines:
@@ -790,6 +992,7 @@ def _qa_fallback(ctx: Dict[str, Any]) -> Dict[str, Any]:
         "engine": "deterministic",
         "model": None,
         "warnings": warnings,
+        "mode": "evidence",
     }
 
 
@@ -886,6 +1089,7 @@ async def answer_question(
     hits: List[Dict[str, Any]],
     summary: Optional[Dict[str, Any]] = None,
     reference: Optional[Dict[str, Any]] = None,
+    index_note: str = "",
 ) -> Dict[str, Any]:
     """Responde una consulta en lenguaje natural sobre los eventos indexados.
 
@@ -897,7 +1101,14 @@ async def answer_question(
     `reference` es la base de conocimiento (Event IDs + técnicas ATT&CK) que se
     muestra APARTE, etiquetada como material del marco, nunca como hallazgo.
     """
-    ctx = build_qa_context(question, hits, summary, reference=reference)
+    ctx = build_qa_context(question, hits, summary, reference=reference, index_note=index_note)
+    # Consultas de agregación («¿cuántos...?», «¿qué hosts concentran...?»):
+    # se responden con los conteos exactos del dataset, sin pasar por el modelo
+    # ni por filas recuperadas (rigor analítico: cero cifras generadas).
+    aggregate = _aggregate_answer(ctx)
+    if aggregate is not None:
+        return aggregate
+
     fallback = _qa_fallback(ctx)
     if not ctx["evidence"]:
         return fallback

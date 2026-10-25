@@ -17,6 +17,10 @@ from sse_starlette.sse import EventSourceResponse
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("soc.backend")
 
+# Tareas de indexación semántica en curso, por análisis. Evita que dos
+# peticiones (o la subida + una pregunta) indexen el mismo análisis a la vez.
+_INDEX_TASKS: Dict[str, "asyncio.Task"] = {}
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -34,10 +38,20 @@ async def lifespan(_: FastAPI):
 # El servicio de IA se importa como paquete (uvicorn backend.main:app) o como
 # módulo suelto (test_backend.py añade /backend al sys.path).
 try:
-    from backend.ai_service import generate_report_narrative, generate_data_insights, answer_question
+    from backend.ai_service import (
+        generate_report_narrative,
+        generate_data_insights,
+        answer_question,
+        is_aggregate_question,
+    )
     from backend import rag_store, kb_store
 except ImportError:  # pragma: no cover
-    from ai_service import generate_report_narrative, generate_data_insights, answer_question
+    from ai_service import (
+        generate_report_narrative,
+        generate_data_insights,
+        answer_question,
+        is_aggregate_question,
+    )
     import rag_store
     import kb_store
 
@@ -542,6 +556,11 @@ async def process_analysis(analysis_id: str, file_bytes: bytes, file_name: str =
         "total": len(records),
         "reason": "indexando",
     }
+    # Se registra la tarea para que /ask no lance una segunda indexación
+    # concurrente del mismo análisis si el usuario pregunta mientras corre.
+    current = asyncio.current_task()
+    if current is not None:
+        _INDEX_TASKS[analysis_id] = current
     try:
         rag_result = await asyncio.to_thread(rag_store.index_events, analysis_id, records)
         analysis_store[analysis_id]["rag"] = rag_result
@@ -555,6 +574,8 @@ async def process_analysis(analysis_id: str, file_bytes: bytes, file_name: str =
             "total": len(records),
             "reason": str(rag_exc),
         }
+    finally:
+        _INDEX_TASKS.pop(analysis_id, None)
 
 
 # ---------------------------------------------------------------------------
@@ -697,13 +718,52 @@ class AskRequest(BaseModel):
     n_results: int = 8
 
 
+def _ensure_semantic_index(
+    analysis_id: str, entry: Dict[str, Any], df: pd.DataFrame | None
+) -> bool:
+    """Autorepara el índice semántico si ha desaparecido; no bloquea.
+
+    El índice vive en disco y se comparte con las suites de prueba, que purgan
+    lo que no usan: si el análisis ya está hecho pero sus eventos no están
+    indexados, se reconstruye en un hilo. Devuelve ``True`` si hay una
+    indexación en curso (la propia de la subida o esta), para que el llamador
+    pueda advertir de que la respuesta usa solo recuperación léxica.
+    """
+    running = _INDEX_TASKS.get(analysis_id)
+    if running is not None and not running.done():
+        return True
+    if df is None or df.empty or not rag_store.is_available():
+        return False
+    if rag_store.has_index(analysis_id):
+        return False
+
+    entry["rag"] = {"available": True, "indexed": 0, "total": len(df), "reason": "indexando"}
+
+    async def _reindex() -> None:
+        try:
+            records = _enrich_records(df)
+            result = await asyncio.to_thread(rag_store.index_events, analysis_id, records)
+            entry["rag"] = result
+            logger.info("Índice semántico reconstruido para %s", analysis_id[:8])
+        except Exception as exc:  # noqa: BLE001 – nunca invalida la consulta
+            logger.warning("Autoreparación del índice falló para %s: %s", analysis_id[:8], exc)
+            entry["rag"] = {"available": rag_store.is_available(), "indexed": 0,
+                            "total": len(df), "reason": str(exc)}
+        finally:
+            _INDEX_TASKS.pop(analysis_id, None)
+
+    _INDEX_TASKS[analysis_id] = asyncio.create_task(_reindex())
+    return True
+
+
 @app.post("/api/analysis/{analysis_id}/ask")
 async def ask_question(analysis_id: str, payload: AskRequest):
     """Consulta en lenguaje natural sobre los eventos importados (RAG).
 
     Recuperación híbrida (semántica + léxica) y respuesta anclada a los
     eventos recuperados: cada cifra y cada Log_ID procede de los registros,
-    nunca del modelo.
+    nunca del modelo. Las consultas de agregación (conteos, distribución,
+    hosts dominantes) se responden con cifras exactas del resumen del dataset.
     """
     if analysis_id not in analysis_store:
         raise HTTPException(status_code=404, detail="Analysis not found")
@@ -717,26 +777,51 @@ async def ask_question(analysis_id: str, payload: AskRequest):
 
     n_results = max(1, min(int(payload.n_results or 8), 20))
     level = payload.level if payload.level in LEVEL_ORDER else ""
+    filters = {"level": level or None, "suspicious": bool(payload.suspicious)}
+    common = {
+        "analysis_id": analysis_id,
+        "question": question,
+        "filters": filters,
+        "rag": rag_store.get_stats(analysis_id),
+        "kb": kb_store.status(),
+    }
 
+    # Autoreparación del índice (no bloquea): se comprueba SIEMPRE, también en
+    # las consultas de agregación, para que el índice vuelva a estar completo.
     df: pd.DataFrame | None = entry.get("dataframe")
+    rag_state = entry.get("rag") or {}
+    indexing = _ensure_semantic_index(analysis_id, entry, df)
+
+    # --- Consulta de agregación: cifras exactas, sin recuperación -----------
+    if is_aggregate_question(question):
+        answer = await answer_question(question, [], entry["summary"], reference=None)
+        return {**common, "retrieved": 0, **answer}
+
+    # Si el índice semántico todavía no está listo (acaba de subirse o se está
+    # reconstruyendo), se avisa en la respuesta: lo recuperado procede solo de
+    # la búsqueda léxica. Nunca se bloquea la petición esperando al índice.
+    index_note = ""
+    if (indexing or rag_state.get("reason") == "indexando") and not rag_store.has_index(analysis_id):
+        total = int(rag_state.get("total") or len(df) or 0)
+        index_note = (
+            f"El índice semántico local se está construyendo ({total} eventos); "
+            "mientras tanto la recuperación es solo léxica sobre tus registros. "
+            "Vuelve a preguntar en unos segundos para la recuperación semántica."
+        )
+
     hits = _hybrid_retrieve(
         analysis_id, question, df, n_results=n_results,
         level=level, suspicious=bool(payload.suspicious),
     )
+
     # Base de conocimiento: significado de los Event IDs observados y técnicas
     # MITRE ATT&CK asociadas (referencia del marco, no un hallazgo sobre datos).
     reference = await asyncio.to_thread(kb_store.build_reference, question, hits)
-    answer = await answer_question(question, hits, entry["summary"], reference=reference)
+    answer = await answer_question(
+        question, hits, entry["summary"], reference=reference, index_note=index_note
+    )
 
-    return {
-        "analysis_id": analysis_id,
-        "question": question,
-        "retrieved": len(hits),
-        "filters": {"level": level or None, "suspicious": bool(payload.suspicious)},
-        "rag": rag_store.get_stats(),
-        "kb": kb_store.status(),
-        **answer,
-    }
+    return {**common, "retrieved": len(hits), **answer}
 
 
 @app.get("/api/kb/status")

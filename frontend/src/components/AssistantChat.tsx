@@ -372,7 +372,9 @@ export const AssistantChat: React.FC = () => {
                     <div className="mt-3 pt-3 border-t border-gray-100 space-y-2">
                       <div className="flex flex-wrap items-center gap-2 text-[11px]">
                         <span className="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-medium">
-                          {message.response.retrieved} eventos recuperados
+                          {message.response.mode === 'aggregate'
+                            ? message.response.summary_line
+                            : `${message.response.retrieved} eventos recuperados`}
                         </span>
                         <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
                           confianza {message.response.confidence}

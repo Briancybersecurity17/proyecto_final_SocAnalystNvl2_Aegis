@@ -87,6 +87,24 @@ for item in ask["evidence"]:
     if item.get("log_id") and item["log_id"] != "—":
         print("   evidencia:", item["log_id"], "|", item["host"], "| nivel", item["level"])
 
+# Consulta de AGREGACIÓN → cifras exactas del resumen, no filas recuperadas
+agg = client.post(
+    f"/api/analysis/{analysis_id}/ask",
+    json={"question": "¿Qué hosts concentran los eventos críticos?"},
+).json()
+print(
+    "ask agregado:", agg.get("mode"), "| confianza:", agg.get("confidence"),
+    "| recuperados:", agg.get("retrieved"),
+)
+if agg.get("mode") != "aggregate":
+    sys.exit("La consulta de agregación no se resolvió con cifras exactas")
+if agg.get("confidence") != "alta":
+    sys.exit("La consulta de agregación debería tener confianza alta")
+if agg.get("retrieved"):
+    sys.exit("Una consulta de agregación no debe devolver evidencia fila a fila")
+if "Distribución" not in agg.get("answer", ""):
+    sys.exit("La respuesta de agregación no incluye la distribución por criticidad")
+
 # Consulta demasiado corta → 400 (validación)
 short = client.post(f"/api/analysis/{analysis_id}/ask", json={"question": "ab"})
 print("ask corta:", short.status_code, "(esperado 400)")

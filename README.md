@@ -141,7 +141,7 @@ menor, instalá solo `chromadb` y el RAG usará el modelo ONNX por defecto.
 > (~470 MB) se descarga una sola vez desde Hugging Face y queda en caché en
 > `~/.cache/huggingface/`. El backend lo **precarga al arrancar** (`lifespan` →
 > `rag_store.warmup()`) para que la primera consulta del asistente no pague ese
-> coste. Indexar los 715 eventos del archivo de ejemplo tarda ~40 s en CPU y se
+> coste. Indexar los 715 eventos del archivo de ejemplo tarda ~2 min en CPU y se
 > hace en un hilo aparte: el análisis queda `done` igualmente y el banner del
 > chat avanza de «Indexando…» a «Recuperación híbrida activa».
 
@@ -156,6 +156,25 @@ recupera los Event ID 4625 reales del archivo.
 (`RAG desactivado`) y el asistente funciona igualmente con búsqueda léxica.
 La app **nunca** falla por el RAG. Si la evidencia recuperada es débil (similitud
 < 0.30), la respuesta **niega la conclusión** en lugar de inventarla.
+
+**Consultas de agregación (cifras exactas, no filas sueltas):** preguntas como
+«¿qué hosts concentran los eventos críticos?», «¿cuántos eventos hay por
+criticidad?» o «hazme un resumen» no se responden con 8 registros recuperados
+(pueden ser irrelevantes) sino con los **conteos exactos del resumen del
+dataset**: distribución Crítico/Alto/Medio/Bajo (incluido «0 de 715» si el
+nivel no existe), hosts que concentran cada nivel, sospechosos y hosts
+distintos — todo calculado sobre los registros importados, `confidence: alta`
+y `mode: "aggregate"` en la respuesta. Las preguntas listado («¿qué eventos
+sospechosos hay?») siguen el camino normal con evidencia.
+
+**Autoreparación del índice:** el índice Chroma persiste en disco y se comparte
+con las suites de prueba, que purgan lo que no usan. Si `/ask` detecta que un
+análisis ya está hecho pero sus eventos no están indexados, **relanza la
+indexación en un hilo** (`_ensure_semantic_index` + registro en `_INDEX_TASKS`
+para no duplicar trabajo con la propia subida) **sin bloquear la petición**:
+mientras tanto responde con recuperación léxica y lo avisa en el propio texto
+(«El índice semántico local se está construyendo…»). Las consultas de
+agregación no lo necesitan: responden al instante.
 
 Endpoints nuevos:
 
@@ -218,7 +237,9 @@ set SOC_SAMPLE_FILE=ruta\archivo.xlsx && python test_backend.py
 ```
 
 Comprueba: subida → análisis (`done`) → resumen y niveles → endpoint `/rows`
-con filtros → generación del informe.
+con filtros → generación del informe → asistente (evidencias citables con
+`Log_ID`, **consulta de agregación resuelta con cifras exactas** y rechazo de
+consultas demasiado cortas).
 
 Prueba del asistente con recuperación semántica (requiere `requirements-rag.txt`):
 

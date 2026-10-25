@@ -145,6 +145,12 @@ export interface AskResponse {
   engine: string
   model: string | null
   warnings: string[]
+  /**
+   * 'aggregate' = consulta de conteos/distribución resuelta con cifras
+   * exactas del resumen del dataset (sin evidencia fila a fila);
+   * 'evidence' = respuesta anclada a los eventos recuperados.
+   */
+  mode?: 'aggregate' | 'evidence'
   rag: { available: boolean; reason?: string | null; model: string; total: number }
   kb?: KbStatus
 }

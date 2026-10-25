@@ -350,7 +350,8 @@ def build_reference(question: str, evidence: List[Dict[str, Any]]) -> Dict[str, 
          significado en el glosario → técnicas asociadas a esos eventos.
       2. Determinista sobre la CONSULTA: IDs citados literalmente por el
          analista («¿qué es el 1102?») → su entrada del glosario.
-      3. Semántica: lo que la consulta parece preguntar → técnicas similares.
+      3. Semántica: lo que la consulta parece preguntar → técnicas similares
+         (solo si las vías 1–2 no aportaron ninguna, para no mezclar ruido).
 
     Las vías 1 y 2 son coincidencias exactas sobre datos propios de la KB; la 3
     solo aporta contexto de marco y va etiquetada como `match: consulta`.
@@ -388,8 +389,14 @@ def build_reference(question: str, evidence: List[Dict[str, Any]]) -> Dict[str, 
     for t in _techniques_by_ids(tech_ids)[:MAX_TECHNIQUES]:
         techniques_out.append({**_tech_view(t), "match": "eventos"})
 
-    # Vía semántica sobre la consulta (solo si aporta algo nuevo)
-    for hit in search(question, kind="technique", limit=MAX_TECHNIQUES):
+    # Vía semántica sobre la consulta: solo cuando la evidencia NO aportó
+    # técnicas. Si los eventos ya enlazan con técnicas (p. ej. 4625 → T1110),
+    # la similitud coseno sobre la pregunta puede colar técnicas ajenas
+    # (ruido de umbral bajo) y la referencia dejaría de estar anclada a los datos.
+    semantic_hits = [] if techniques_out else search(
+        question, kind="technique", limit=MAX_TECHNIQUES
+    )
+    for hit in semantic_hits:
         if float(hit["score"]) < KB_MIN_SCORE:
             continue
         t = next((x for x in techniques() if x["id"] == hit["id"]), None)
