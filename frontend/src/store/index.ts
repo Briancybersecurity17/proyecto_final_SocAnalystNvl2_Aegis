@@ -87,6 +87,8 @@ export interface AnalysisSummary {
   missing_columns?: string[]
   file_name?: string
   generated_at?: string
+  non_numeric_event_ids?: string[]
+  ai_insights?: string[]
 }
 
 export interface AnalysisState {

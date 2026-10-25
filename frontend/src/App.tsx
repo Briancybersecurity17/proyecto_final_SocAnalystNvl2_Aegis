@@ -49,7 +49,16 @@ const App: React.FC = () => {
             <h1 className="text-xl font-semibold">{meta.title}</h1>
             <p className="text-sm text-blue-100">{meta.subtitle}</p>
           </div>
-          <ServicePulse />
+          <div className="flex items-center gap-4">
+            <span
+              className="hidden sm:inline-flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1 text-xs font-medium text-white"
+              title="Motor de análisis y asistente de redacción del informe"
+            >
+              <span className="h-2 w-2 rounded-full bg-emerald-300" />
+              IA integrada · análisis + informe
+            </span>
+            <ServicePulse />
+          </div>
         </header>
 
         {/* Section content */}

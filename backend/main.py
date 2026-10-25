@@ -13,9 +13,9 @@ from sse_starlette.sse import EventSourceResponse
 # El servicio de IA se importa como paquete (uvicorn backend.main:app) o como
 # módulo suelto (test_backend.py añade /backend al sys.path).
 try:
-    from backend.ai_service import generate_report_narrative
+    from backend.ai_service import generate_report_narrative, generate_data_insights
 except ImportError:  # pragma: no cover
-    from ai_service import generate_report_narrative
+    from ai_service import generate_report_narrative, generate_data_insights
 
 app = FastAPI(title="Comunidad Dojo – SOC Analyst API")
 
@@ -176,6 +176,14 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
     columns = list(df.columns)
     unique_hosts = int(df["Hostname"].nunique()) if "Hostname" in df.columns else None
 
+    # Event_IDs that are not numeric → records coming from another log source
+    non_numeric_event_ids: List[str] = []
+    if "Event_ID" in df.columns:
+        values = df["Event_ID"].astype(str).str.strip()
+        non_numeric_event_ids = sorted(
+            {v for v in values if v and v.lower() != "nan" and not v.isdigit()}
+        )[:10]
+
     # --- severity / level classification ----------------------------------
     raw_severity = df["Severity"] if "Severity" in df.columns else pd.Series([""] * total)
     df["_level"] = raw_severity.map(normalize_level) if "Severity" in df.columns else "bajo"
@@ -297,6 +305,7 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
     return {
         "rows": total,
         "columns": columns,
+        "non_numeric_event_ids": non_numeric_event_ids,
         "risk": risk,
         "risk_justification": risk_justification,
         "severity_counts": severity_counts,
@@ -335,6 +344,8 @@ async def process_analysis(analysis_id: str, file_bytes: bytes, file_name: str =
         summary["missing_columns"] = missing
         summary["file_name"] = file_name
         summary["generated_at"] = datetime.now().isoformat(timespec="seconds")
+        # Observaciones automáticas de la IA sobre los datos (grounded)
+        summary["ai_insights"] = generate_data_insights(summary)
 
         # Keep the classified dataframe so the UI can visualise every record
         analysis_store[analysis_id]["dataframe"] = df

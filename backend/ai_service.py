@@ -121,6 +121,7 @@ def build_context(summary: Dict[str, Any]) -> Dict[str, Any]:
         "risk_justification": summary.get("risk_justification", ""),
         "level_counts": summary.get("level_counts") or {},
         "risk_levels": risk_levels,
+        "non_numeric_event_ids": summary.get("non_numeric_event_ids") or [],
         "suspicious_events": int(summary.get("suspicious_events", 0)),
         "suspicious_by_ip": summary.get("suspicious_by_ip") or [],
         "suspicious_evidence": [
@@ -491,3 +492,88 @@ async def generate_report_narrative(summary: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:  # noqa: BLE001 – nunca romper el informe
             return fallback
     return fallback
+
+
+# ---------------------------------------------------------------------------
+# Apoyo de la IA al análisis de datos (observaciones automáticas)
+# ---------------------------------------------------------------------------
+def _local_insights(ctx: Dict[str, Any]) -> List[str]:
+    """Observaciones breves y verificables sobre los datos importados."""
+    total = ctx["rows"]
+    if not total:
+        return ["El archivo no contiene registros para analizar."]
+
+    levels = ctx["risk_levels"]
+    insights: List[str] = []
+
+    elevated = levels["critico"]["count"] + levels["alto"]["count"] + levels["medio"]["count"]
+    insights.append(
+        f"Distribución de criticidad: {levels['bajo']['count']} registros en nivel Bajo "
+        f"({_pct(levels['bajo']['count'], total)}) y {elevated} en Medio o superior "
+        f"({_pct(elevated, total)}); el riesgo global queda en «{ctx['risk_label']}»."
+    )
+
+    if ctx["suspicious_events"]:
+        top_ip = ctx["suspicious_by_ip"][0] if ctx["suspicious_by_ip"] else None
+        extra = (
+            f" La IP {top_ip['ip']} es la de mayor alcance: {top_ip['events']} eventos en "
+            f"{top_ip['hosts']} hosts distintos."
+            if top_ip
+            else ""
+        )
+        insights.append(
+            f"Se detectaron {ctx['suspicious_events']} eventos sospechosos "
+            f"({_pct(ctx['suspicious_events'], total)}) por severidad elevada, palabras clave "
+            f"de fallo de autenticación y Event ID relevantes.{extra}"
+        )
+
+    if ctx["top_hosts"]:
+        host, count = next(iter(ctx["top_hosts"].items()))
+        insights.append(
+            f"Concentración por host: {host} concentra {count} eventos "
+            f"({_pct(count, total)}), por lo que conviene priorizar su revisión."
+        )
+
+    days = ctx["events_per_day"]
+    if days:
+        peak = max(days.items(), key=lambda kv: kv[1])
+        if len(days) == 1:
+            insights.append(
+                f"Ventana temporal: los {total} registros pertenecen a un único día "
+                f"({peak[0]}); no hay serie histórica para detectar tendencias."
+            )
+        else:
+            insights.append(
+                f"Ventana temporal: {len(days)} días analizados, con pico de "
+                f"{peak[1]} eventos el {peak[0]}."
+            )
+
+    if ctx["missing_columns"]:
+        insights.append(
+            "Calidad del dato: faltan columnas esperadas en el archivo "
+            f"({', '.join(ctx['missing_columns'])}); esas facetas no pudieron analizarse."
+        )
+    else:
+        insights.append(
+            "Calidad del dato: el archivo incluye todas las columnas esperadas, "
+            "por lo que el análisis cubre integridad, autenticación, procesos y origen IP."
+        )
+
+    non_numeric = ctx.get("non_numeric_event_ids") or []
+    if non_numeric:
+        insights.append(
+            "Se observaron identificadores de evento no numéricos "
+            f"({', '.join(non_numeric)}) que provienen de otra fuente de logs "
+            "y deben revisarse por separado."
+        )
+
+    return insights
+
+
+def generate_data_insights(summary: Dict[str, Any]) -> List[str]:
+    """Observaciones de la IA sobre los datos (para el dashboard).
+
+    Igual que el informe: solo se generan a partir de cifras calculadas a
+    partir de los registros importados (grounding estricto).
+    """
+    return _local_insights(build_context(summary))

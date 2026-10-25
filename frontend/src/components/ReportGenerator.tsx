@@ -224,6 +224,16 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
         {/* 2. Alcance y metodología */}
         <Text style={pdf.h1}>2. Alcance y metodología</Text>
         <Text style={pdf.para}>{report.methodology}</Text>
+        {summary.ai_insights && summary.ai_insights.length > 0 && (
+          <View>
+            <Text style={pdf.h2}>Observaciones del análisis asistido por IA</Text>
+            {summary.ai_insights.map((t, i) => (
+              <Text key={`ins-${i}`} style={pdf.para}>
+                {`• ${t}`}
+              </Text>
+            ))}
+          </View>
+        )}
         <Text style={pdf.small}>
           Alcance: {summary.rows} registros · {summary.columns.length} campos ·{' '}
           {summary.unique_hosts ?? '—'} hosts · hojas:{' '}
@@ -482,6 +492,21 @@ const ReportGenerator: React.FC = () => {
           <section className="mb-6">
             <h2 className="text-xl font-bold text-gray-900 border-b border-gray-200 pb-1 mb-2">2. Alcance y metodología</h2>
             <p className="text-sm leading-relaxed text-gray-700 text-justify">{report.methodology}</p>
+            {summary.ai_insights && summary.ai_insights.length > 0 && (
+              <div className="mt-3 rounded border border-blue-100 bg-blue-50/50 p-3">
+                <p className="text-[11px] uppercase tracking-wide text-blue-800 font-semibold mb-2">
+                  Observaciones del análisis asistido por IA
+                </p>
+                <ul className="space-y-1.5">
+                  {summary.ai_insights.map((t, i) => (
+                    <li key={i} className="text-sm text-gray-700 flex gap-2">
+                      <span className="text-primary font-bold">•</span>
+                      <span>{t}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </section>
 
           <section className="mb-6">

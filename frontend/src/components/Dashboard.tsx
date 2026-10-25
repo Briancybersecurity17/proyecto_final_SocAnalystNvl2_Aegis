@@ -110,6 +110,31 @@ const Dashboard: React.FC = () => {
         })}
       </div>
 
+      {/* AI observations over the imported data */}
+      {summary.ai_insights && summary.ai_insights.length > 0 && (
+        <DashboardSection title="Observaciones del análisis asistido por IA">
+          <div className="flex flex-wrap gap-2 mb-4">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 border border-blue-200 px-3 py-1 text-xs font-medium text-blue-800">
+              <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />
+              Redactadas solo con cifras calculadas de tus registros
+            </span>
+            <span className="inline-flex items-center rounded-full bg-gray-100 border border-gray-200 px-3 py-1 text-xs text-gray-600">
+              {summary.generated_at ? `Generado ${summary.generated_at.replace('T', ' ')}` : ''}
+            </span>
+          </div>
+          <ul className="space-y-3">
+            {summary.ai_insights.map((text, i) => (
+              <li key={i} className="flex gap-3 text-sm text-gray-700 leading-relaxed">
+                <span className="shrink-0 h-6 w-6 rounded-full bg-primary text-white text-xs font-bold flex items-center justify-center">
+                  {i + 1}
+                </span>
+                <p>{text}</p>
+              </li>
+            ))}
+          </ul>
+        </DashboardSection>
+      )}
+
       {/* Overall risk justification */}
       <DashboardSection title="Justificación del nivel de riesgo">
         <p className="text-gray-700 leading-relaxed">{summary.risk_justification}</p>
