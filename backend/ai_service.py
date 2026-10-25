@@ -577,3 +577,276 @@ def generate_data_insights(summary: Dict[str, Any]) -> List[str]:
     partir de los registros importados (grounding estricto).
     """
     return _local_insights(build_context(summary))
+
+
+# ---------------------------------------------------------------------------
+# Consulta en lenguaje natural sobre los registros (RAG)
+# ---------------------------------------------------------------------------
+# Recuperación semántica local + respuesta anclada a los eventos recuperados.
+# El modelo (si hay) solo REDACTA: las cifras, hosts, IPs y Log_ID salen de la
+# evidencia recuperada y se validan antes de mostrarse.
+
+QA_MAX_EVIDENCE = 8
+QA_MIN_SCORE = 0.30  # por debajo de esto avisamos de baja confianza
+QA_SYSTEM_PROMPT = (
+    "Eres un analista SOC de nivel 2 respondiendo una consulta sobre eventos de "
+    "un SIEM. Respondes en español, con precisión técnica y sin adornos. "
+    "Trabajas EXCLUSIVAMENTE con los eventos recuperados que se te entregan: si "
+    "un dato no está en la evidencia, no lo menciones ni lo infieras. Cita cada "
+    "afirmación con el Log_ID del evento que la respalda. Nunca inventes hosts, "
+    "IPs, usuarios, fechas, cifras ni eventos. Si la evidencia no alcanza para "
+    "responder, dilo explícitamente."
+)
+
+
+def build_qa_context(
+    question: str,
+    hits: List[Dict[str, Any]],
+    summary: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Contexto que la IA (o el fallback) puede ver: solo eventos recuperados."""
+    summary = summary or {}
+    evidence = []
+    for hit in hits[:QA_MAX_EVIDENCE]:
+        meta = hit.get("metadata") or {}
+        evidence.append({
+            "log_id": meta.get("log_id", "—"),
+            "timestamp": meta.get("timestamp", "—"),
+            "host": meta.get("hostname", "—"),
+            "event_id": meta.get("event_id", "—"),
+            "user": meta.get("user", "—"),
+            "source_ip": meta.get("source_ip", "—"),
+            "destination": meta.get("destination", "—"),
+            "severity": meta.get("severity", "—"),
+            "level": hit.get("level", "bajo"),
+            "suspicious": bool(hit.get("suspicious")),
+            "description": meta.get("result", "—"),
+            "relevance": float(hit.get("score", 0.0)),
+            "document": hit.get("document", ""),
+        })
+    return {
+        "question": question.strip(),
+        "dataset_rows": int(summary.get("rows", 0) or 0),
+        "retrieved_total": len(hits),
+        "level_counts": summary.get("level_counts") or {},
+        "evidence": evidence,
+    }
+
+
+def _qa_fallback(ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """Respuesta determinista sobre los eventos recuperados (sin modelo)."""
+    question = ctx["question"]
+    evidence = ctx["evidence"]
+    rows = ctx["dataset_rows"]
+
+    if not evidence:
+        return {
+            "answer": (
+                f"No encontré registros que se parezcan semánticamente a "
+                f"«{question}» en los {rows} eventos indexados.\n\n"
+                "Prueba a reformular la consulta, o filtra por criticidad / "
+                "eventos sospechosos desde la tabla de registros para revisarlos "
+                "directamente."
+            ),
+            "evidence": [],
+            "summary_line": "Sin coincidencias en el índice",
+            "confidence": "ninguna",
+            "engine": "deterministic",
+            "model": None,
+            "warnings": ["sin_resultados"],
+        }
+
+    # Conteos siempre derivados de los eventos recuperados, nunca del modelo
+    level_counts: Dict[str, int] = {}
+    hosts: Dict[str, int] = {}
+    ips: Dict[str, int] = {}
+    event_ids: Dict[str, int] = {}
+    suspicious = 0
+    for item in evidence:
+        lvl = item["level"]
+        level_counts[lvl] = level_counts.get(lvl, 0) + 1
+        host = str(item["host"] or "—")
+        hosts[host] = hosts.get(host, 0) + 1
+        ip = str(item["source_ip"] or "—")
+        if ip and ip != "—":
+            ips[ip] = ips.get(ip, 0) + 1
+        ev = str(item["event_id"] or "—")
+        if ev and ev != "—":
+            event_ids[ev] = event_ids.get(ev, 0) + 1
+        if item["suspicious"]:
+            suspicious += 1
+
+    def _top(counter: Dict[str, int], n: int = 3) -> str:
+        ordered = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))
+        return ", ".join(f"{key} ({value})" for key, value in ordered[:n])
+
+    distribution = " · ".join(
+        f"{LEVEL_LABELS.get(lvl, lvl)} {level_counts[lvl]}"
+        for lvl in LEVEL_ORDER
+        if level_counts.get(lvl)
+    )
+
+    best = float(evidence[0].get("relevance", 0.0))
+    weak = best < QA_MIN_SCORE
+
+    lines: List[str] = []
+    if weak:
+        lines += [
+            f"No encontré evidencia directa en los {rows} registros que responda a "
+            f"«{question}». La mejor coincidencia tiene una similitud de {best:.2f} "
+            f"(umbral {QA_MIN_SCORE:.2f}), así que **no puedo confirmar** la consulta.",
+            "",
+            "Te dejo igualmente las coincidencias más parecidas por si querés revisarlas "
+            "a mano; no interpretan la pregunta:",
+        ]
+    else:
+        lines += [
+            f"Encontré {len(evidence)} de {ctx['retrieved_total']} eventos recuperados "
+            f"de los {rows} registros indexados que responden a «{question}».",
+            "",
+            f"**Distribución:** {distribution or 'sin niveles'} — {suspicious} marcados como sospechosos.",
+            f"**Hosts implicados:** {_top(hosts)}.",
+            f"**Origen:** {_top(ips)}.",
+            f"**Event IDs:** {_top(event_ids)}.",
+            "",
+            "**Evidencias (ordenadas por similitud):**",
+        ]
+    for position, item in enumerate(evidence, start=1):
+        lines.append(
+            f"{position}. `{item['log_id']}` · {LEVEL_LABELS.get(item['level'], item['level'])} · "
+            f"host {item['host']} · origen {item['source_ip']} · Event_ID {item['event_id']} · "
+            f"similitud {item['relevance']:.2f}"
+        )
+        description = str(item.get("document", "")).replace("\n", " ")
+        if description:
+            lines.append(f"   > {description[:240]}")
+
+    lines.append("")
+    if weak:
+        lines.append(
+            "Si querés, reformulá la consulta (p. ej. «autenticaciones fallidas» o "
+            "«Event ID 4625») o filtrá por criticidad desde la tabla de registros."
+        )
+    else:
+        lines.append(
+            "Todos los datos anteriores provienen de los registros importados; "
+            "no se ha generado ninguna cifra nueva."
+        )
+
+    warnings: List[str] = []
+    if weak:
+        warnings.append("baja_confianza")
+
+    return {
+        "answer": "\n".join(lines),
+        "evidence": evidence,
+        "summary_line": (
+            f"{len(evidence)} eventos · {distribution or 'sin niveles'} · "
+            f"mejor similitud {best:.2f}"
+        ),
+        "confidence": "alta" if best >= 0.55 else ("media" if best >= QA_MIN_SCORE else "baja"),
+        "engine": "deterministic",
+        "model": None,
+        "warnings": warnings,
+    }
+
+
+def _cited_log_ids(text: str) -> List[str]:
+    """Log_ID candidatos citados en una respuesta (shape derivado de los reales)."""
+    return re.findall(r"\b[A-Za-z]{2,12}[-_]\d{2,}\b", text or "")
+
+
+def _grounding_ok(answer: str, evidence: List[Dict[str, Any]]) -> bool:
+    """Rechaza la respuesta del modelo si cita Log_ID inexistentes.
+
+    Toma el prefijo de los Log_ID reales (p. ej. «EVT-») y exige que todo
+    token con ese formato exista en la evidencia recuperada. Un solo ID
+    inventado invalida la respuesta entera y se usa el fallback determinista.
+    """
+    known = {str(item.get("log_id", "")) for item in evidence}
+    known -= {"", "—", "None"}
+    if not known:
+        return True  # sin ids reales no hay nada que validar
+
+    prefixes = {k.split("-")[0].split("_")[0] for k in known}
+    for token in _cited_log_ids(answer):
+        family = token.split("-")[0].split("_")[0]
+        if family in prefixes and token not in known:
+            return False
+    return True
+
+
+async def _remote_answer(ctx: Dict[str, Any]) -> Optional[str]:
+    """Llama al modelo remoto para redactar la respuesta. None si no aplica."""
+    if not AI_API_URL or not ctx["evidence"]:
+        return None
+
+    payload: Dict[str, Any] = {
+        "model": AI_MODEL,
+        "temperature": 0.1,
+        "messages": [
+            {"role": "system", "content": QA_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    "Responde la consulta usando SOLO estos eventos recuperados.\n"
+                    "Cita los Log_ID entre comillas simples. Si no hay evidencia "
+                    "suficiente, dilo.\n\nCONSULTA:\n"
+                    + ctx["question"]
+                    + "\n\nEVENTOS RECUPERADOS:\n"
+                    + json.dumps(ctx["evidence"], ensure_ascii=False, default=str)
+                ),
+            },
+        ],
+    }
+    headers = {"Content-Type": "application/json"}
+    if AI_API_KEY:
+        headers["Authorization"] = f"Bearer {AI_API_KEY}"
+
+    try:
+        async with httpx.AsyncClient(timeout=AI_TIMEOUT) as client:
+            resp = await client.post(AI_API_URL, json=payload, headers=headers)
+            resp.raise_for_status()
+            body = resp.json()
+    except Exception:  # noqa: BLE001 – cualquier fallo cae al modo local
+        return None
+
+    content = ""
+    try:
+        content = body["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        content = body.get("content") if isinstance(body, dict) else ""
+
+    text = str(content or "").strip()
+    if not text:
+        return None
+    return text if _grounding_ok(text, ctx["evidence"]) else None
+
+
+async def answer_question(
+    question: str,
+    hits: List[Dict[str, Any]],
+    summary: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Responde una consulta en lenguaje natural sobre los eventos indexados.
+
+    Siempre devuelve una respuesta utilizable: primero se construye la
+    determinista (100 % anclada a la evidencia recuperada) y, si hay modelo
+    remoto disponible y su respuesta cita solo Log_ID reales, se usa esa
+    redacción. Nunca se queda sin respuesta ni inventa datos.
+    """
+    ctx = build_qa_context(question, hits, summary)
+    fallback = _qa_fallback(ctx)
+    if not ctx["evidence"]:
+        return fallback
+
+    remote = await _remote_answer(ctx)
+    if remote:
+        return {
+            **fallback,
+            "answer": remote,
+            "engine": "llm",
+            "model": AI_MODEL,
+            "confidence": fallback["confidence"],
+        }
+    return fallback

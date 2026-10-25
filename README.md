@@ -69,6 +69,10 @@ cd backend
 python -m venv .venv
 .venv\Scripts\activate            # Linux/macOS: source .venv/bin/activate
 pip install -r requirements.txt
+
+# OPCIONAL – habilita el índice semántico (RAG) del asistente
+pip install -r requirements-rag.txt
+
 uvicorn backend.main:app --host 127.0.0.1 --port 8500   # desde la raíz del proyecto
 
 # 2) Frontend (Node 20+) — http://localhost:5300
@@ -108,6 +112,51 @@ La interfaz muestra en todo momento la fuente utilizada (IA remota / IA local gr
 
 ---
 
+## Asistente IA con RAG («preguntar a los datos»)
+
+Nueva sección **Asistente IA (RAG)** en el sidebar: una consulta en lenguaje
+natural devuelve una respuesta con las evidencias recuperadas.
+
+| Pieza | Archivo | Qué hace |
+|---|---|---|
+| Índice semántico | `backend/rag_store.py` | ChromaDB persistente + `paraphrase-multilingual-MiniLM-L12-v2` (ES↔EN), indexa cada evento al subir el Excel |
+| Recuperación híbrida | `backend/main.py` → `_hybrid_retrieve()` | combina **semántica** («fuerza bruta» ↔ `brute force`) + **léxica** (IP, `Log_ID`, `Event_ID`, host exactos) |
+| Respuesta fundamentada | `backend/ai_service.py` → `answer_question()` | redacta citando solo los eventos recuperados; si hay modelo remoto lo usa y **valida que cada Log_ID citado exista** (uno inventado → se descarta) |
+| Chat | `frontend/src/components/AssistantChat.tsx` | conversación, filtros por criticidad/sospecha, tarjetas de evidencia con barra de similitud |
+
+**Motor local semántico (gratuito, sin API keys):** los datos nunca salen del
+equipo. `sentence-transformers` instala PyTorch (varios GB); si preferís un peso
+menor, instalá solo `chromadb` y el RAG usará el modelo ONNX por defecto.
+
+> **Primera ejecución:** el modelo `paraphrase-multilingual-MiniLM-L12-v2`
+> (~470 MB) se descarga una sola vez desde Hugging Face y queda en caché en
+> `~/.cache/huggingface/`. El backend lo **precarga al arrancar** (`lifespan` →
+> `rag_store.warmup()`) para que la primera consulta del asistente no pague ese
+> coste. Indexar los 715 eventos del archivo de ejemplo tarda ~40 s en CPU y se
+> hace en un hilo aparte: el análisis queda `done` igualmente y el banner del
+> chat avanza de «Indexando…» a «Recuperación híbrida activa».
+
+**Expansión de consulta ES→EN:** los logs están en inglés (`An account failed to
+log on`) y el analista pregunta en español. `rag_store.expand_query()` amplía la
+consulta con sinónimos técnicos («fuerza bruta» → `brute force failed logon
+attempts`) — solo la consulta, nunca los datos. Sin esto, «fuerza bruta» puntuaba
+0.091 y devolvía eventos 4688 irrelevantes; con expansión sube a 0.267 y
+recupera los Event ID 4625 reales del archivo.
+
+**Degradación elegante:** si `chromadb` no está instalado, el backend avisa
+(`RAG desactivado`) y el asistente funciona igualmente con búsqueda léxica.
+La app **nunca** falla por el RAG. Si la evidencia recuperada es débil (similitud
+< 0.30), la respuesta **niega la conclusión** en lugar de inventarla.
+
+Endpoints nuevos:
+
+```bash
+POST /api/analysis/{id}/ask      # {question, level?, suspicious?, n_results?}
+GET  /api/rag/status             # estado del índice (?analysis_id=...)
+```
+
+---
+
 ## Pruebas
 
 ```bash
@@ -119,6 +168,16 @@ set SOC_SAMPLE_FILE=ruta\archivo.xlsx && python test_backend.py
 
 Comprueba: subida → análisis (`done`) → resumen y niveles → endpoint `/rows`
 con filtros → generación del informe.
+
+Prueba del asistente con recuperación semántica (requiere `requirements-rag.txt`):
+
+```bash
+python test_rag.py                                      # indexación + consultas ES→EN
+python test_rag.py ruta/archivo.xlsx
+```
+
+Comprueba: motor disponible → indexación → 6 consultas en español sobre logs en
+inglés → filtros por criticidad y sospecha → degradación elegante.
 
 Verificación de tipos en el frontend:
 
@@ -132,6 +191,7 @@ cd frontend && npx tsc --noEmit
 
 - **Frontend:** React, TypeScript, Vite, Tailwind CSS, Zustand, Recharts, Framer Motion, SheetJS, `@react-pdf/renderer`, `file-saver`.
 - **Backend:** FastAPI, pandas, openpyxl, httpx, sse-starlette.
+- **RAG (opcional):** ChromaDB, sentence-transformers (multilingüe, local y gratuito).
 
 ---
 

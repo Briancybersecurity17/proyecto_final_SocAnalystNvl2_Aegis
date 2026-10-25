@@ -1,6 +1,6 @@
 import React from 'react';
 
-type Section = 'dashboard' | 'security' | 'risk' | 'upload' | 'report';
+type Section = 'dashboard' | 'security' | 'assistant' | 'risk' | 'upload' | 'report';
 
 interface SidebarProps {
   active: Section;
@@ -39,6 +39,16 @@ const sections: { id: Section; label: string; icon: React.ReactNode }[] = [
     id: 'security',
     label: 'Análisis de seguridad',
     icon: icon(<path d="M12 2l9 5v6c0 5-3 9-9 11-6-2-9-6-9-11V7l9-5z" />),
+  },
+  {
+    id: 'assistant',
+    label: 'Asistente IA (RAG)',
+    icon: icon(
+      <>
+        <path d="M12 3l1.9 4.6L18.5 9.5 13.9 11.4 12 16l-1.9-4.6L5.5 9.5l4.6-1.9L12 3z" />
+        <path d="M18 15l.8 1.9 1.9.8-1.9.8-.8 1.9-.8-1.9-1.9-.8 1.9-.8.8-1.9z" />
+      </>
+    ),
   },
   {
     id: 'risk',

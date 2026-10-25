@@ -5,7 +5,8 @@ Uso:
     python test_backend.py <ruta/al/archivo.xlsx>
     SOC_SAMPLE_FILE=<ruta> python test_backend.py
 
-Comprueba el flujo completo: /api/analyze → resumen → /rows → /report.
+Comprueba el flujo completo: /api/analyze → resumen → /rows → /report →
+/rag/status → /ask (recuperación de evidencias y validación de entrada).
 """
 
 import os
@@ -57,4 +58,39 @@ report = client.post(f"/api/analysis/{analysis_id}/report").json()
 print("report source:", report["source"])
 print("report sections:", len(report["findings"]), "hallazgos |",
       len(report["action_plan"]), "acciones")
+
+# --- Asistente IA (recuperación híbrida: semántica + léxica) ---
+rag = client.get("/api/rag/status", params={"analysis_id": analysis_id}).json()
+print(
+    "rag:", "disponible" if rag.get("available") else "no disponible",
+    "| motor:", rag.get("model"),
+    "| eventos indexados:", rag.get("events", rag.get("total", 0)),
+)
+
+ask = client.post(
+    f"/api/analysis/{analysis_id}/ask",
+    json={"question": "failed authentication events", "n_results": 5},
+).json()
+print(
+    "ask:", ask.get("retrieved"), "evidencias | confianza:", ask.get("confidence"),
+    "| motor:", ask.get("engine"),
+)
+if not ask.get("retrieved"):
+    sys.exit("El asistente no recuperó evidencias")
+if not ask.get("answer"):
+    sys.exit("El asistente no devolvió respuesta")
+if not ask.get("evidence"):
+    sys.exit("El asistente no devolvió evidencias citables")
+
+# Cada evidencia debe traer sus campos citables del archivo importado
+for item in ask["evidence"]:
+    if item.get("log_id") and item["log_id"] != "—":
+        print("   evidencia:", item["log_id"], "|", item["host"], "| nivel", item["level"])
+
+# Consulta demasiado corta → 400 (validación)
+short = client.post(f"/api/analysis/{analysis_id}/ask", json={"question": "ab"})
+print("ask corta:", short.status_code, "(esperado 400)")
+if short.status_code != 400:
+    sys.exit("Una consulta de 2 caracteres debería devolver 400")
+
 print("OK")

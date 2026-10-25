@@ -1,5 +1,8 @@
 import uuid
 import asyncio
+import logging
+import re
+from contextlib import asynccontextmanager
 from datetime import date, datetime
 from io import BytesIO
 from typing import Any, Dict, List
@@ -10,14 +13,33 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
+# Logs de la API y del índice RAG en la consola del backend
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger("soc.backend")
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Precarga el índice semántico sin bloquear el arranque.
+
+    Cargar el modelo de embeddings cuesta unos segundos; se lanza en un hilo
+    mientras el usuario todavía está en el Dashboard, para que la primera
+    consulta del asistente responda ya con el modelo listo. Si falla (p. ej.
+    sin red la primera vez), rag_store.warmup() permite reintentar después.
+    """
+    asyncio.create_task(asyncio.to_thread(rag_store.warmup))
+    yield
+
 # El servicio de IA se importa como paquete (uvicorn backend.main:app) o como
 # módulo suelto (test_backend.py añade /backend al sys.path).
 try:
-    from backend.ai_service import generate_report_narrative, generate_data_insights
+    from backend.ai_service import generate_report_narrative, generate_data_insights, answer_question
+    from backend import rag_store
 except ImportError:  # pragma: no cover
-    from ai_service import generate_report_narrative, generate_data_insights
+    from ai_service import generate_report_narrative, generate_data_insights, answer_question
+    import rag_store
 
-app = FastAPI(title="Comunidad Dojo – SOC Analyst API")
+app = FastAPI(title="Comunidad Dojo – SOC Analyst API", lifespan=lifespan)
 
 # Allow the Vite dev server to call the API
 # NOTE: explicit origins – "*" + credentials is an invalid/unsafe combination.
@@ -154,6 +176,157 @@ def _is_suspicious(row: pd.Series) -> bool:
 
 def _pct(count: int, total: int) -> float:
     return round((count / total) * 100, 1) if total else 0.0
+
+
+def _enrich_records(df: pd.DataFrame) -> List[Dict[str, Any]]:
+    """Filas del Excel + nivel/justificación/sospechoso, para el índice RAG.
+
+    Todo se calcula con las mismas funciones deterministas que usa la API
+    (row_reason / _is_suspicious), así el texto indexado no añade nada que
+    no pueda rastrearse en los registros originales.
+    """
+    records = _records(df)
+    if not records:
+        return records
+    if "Severity" in df.columns:
+        levels = df["Severity"].map(normalize_level)
+    else:
+        levels = pd.Series(["bajo"] * len(df), index=df.index)
+    reasons = df.apply(row_reason, axis=1)
+    flags = df.apply(_is_suspicious, axis=1)
+    for position, record in enumerate(records):
+        record["_level"] = str(levels.iloc[position])
+        record["_reason"] = str(reasons.iloc[position])
+        record["_suspicious"] = bool(flags.iloc[position])
+    return records
+
+
+def _recent_analysis_ids(limit: int = 5) -> List[str]:
+    """Últimos análisis completados (orden de inserción del dict = cronológico)."""
+    done = [key for key, value in analysis_store.items() if value.get("status") == "done"]
+    return done[-limit:]
+
+
+# Palabras vacías de las preguntas (ES/EN) — no aportan a la recuperación léxica
+QA_STOPWORDS = {
+    "que", "qual", "como", "cuando", "donde", "cuales", "cual", "por", "para",
+    "con", "una", "unos", "unos", "los", "las", "del", "por", "hay", "hubo",
+    "fue", "fueron", "esta", "estan", "este", "estos", "entre", "sobre", "mas",
+    "muy", "hay", "algo", "algun", "alguna", "the", "and", "was", "were",
+    "what", "when", "where", "which", "about", "there", "from", "with", "have",
+    "has", "any", "some", "happened", "did", "does", "eventos", "evento",
+    "registros", "registro", "pasó", "paso",
+}
+
+
+def _keyword_hits(
+    df: pd.DataFrame,
+    question: str,
+    limit: int = 20,
+    level: str = "",
+    suspicious: bool = False,
+) -> List[Dict[str, Any]]:
+    """Recuperación léxica (coincidencia de términos) sobre los registros.
+
+    Aporta lo que la búsqueda semántica no cubre bien: identificadores exactos
+    (IP, Log_ID, Event_ID, host, usuario). No depende de ningún paquete extra,
+    por lo que funciona aunque el RAG no esté instalado.
+    """
+    if df is None or df.empty:
+        return []
+    tokens = [
+        token for token in re.findall(r"[\w.:@-]+", question.lower())
+        if len(token) > 2 and token not in QA_STOPWORDS
+    ]
+    if not tokens:
+        return []
+
+    work = df.copy()
+    work["_level"] = work["Severity"].map(normalize_level) if "Severity" in work.columns else "bajo"
+    work["_reason"] = work.apply(row_reason, axis=1)
+    work["_suspicious"] = work.apply(_is_suspicious, axis=1)
+    if level in LEVEL_ORDER:
+        work = work[work["_level"] == level]
+    if suspicious:
+        work = work[work["_suspicious"]]
+    if work.empty:
+        return []
+
+    texts = work.astype(str).agg(" ".join, axis=1).str.lower()
+    matched = texts.apply(lambda text: sum(1 for token in tokens if token in text))
+    candidates = work.loc[matched > 0].copy()
+    if candidates.empty:
+        return []
+    candidates["_score"] = matched[matched > 0]
+    candidates = candidates.sort_values("_score", ascending=False).head(limit)
+
+    hits: List[Dict[str, Any]] = []
+    for _, row in candidates.iterrows():
+        record = row.to_dict()
+        score = min(1.0, float(record.pop("_score")) / len(tokens))
+        level_value = str(record.pop("_level", "bajo"))
+        reason_value = str(record.pop("_reason", ""))
+        suspicious_value = bool(record.pop("_suspicious", False))
+        record["_level"], record["_reason"], record["_suspicious"] = level_value, reason_value, suspicious_value
+        hits.append({
+            "score": round(score, 4),
+            "distance": round(1.0 - score, 4),
+            "document": rag_store.build_document(record),
+            "metadata": rag_store.build_metadata(record, "", 0),
+            "log_id": rag_store._clean(record.get("Log_ID")) or None,
+            "level": level_value,
+            "hostname": rag_store._clean(record.get("Hostname")) or None,
+            "source_ip": rag_store._clean(record.get("Source_IP")) or None,
+            "event_id": rag_store._clean(record.get("Event_ID")) or None,
+            "suspicious": suspicious_value,
+            "retrieval": "lexica",
+        })
+    return hits
+
+
+def _hybrid_retrieve(
+    analysis_id: str,
+    question: str,
+    df: pd.DataFrame,
+    n_results: int = 8,
+    level: str = "",
+    suspicious: bool = False,
+) -> List[Dict[str, Any]]:
+    """Combina recuperación semántica (RAG) + léxica en una sola lista.
+
+    - Semántica: entiende «fuerza bruta» ↔ «brute force» (ES↔EN).
+    - Léxica: captura identificadores exactos (IP, Log_ID, Event_ID, host).
+    - Fusiona por Log_ID; si ambas lo encuentran, sube la puntuación.
+    """
+    # Ampliación bilingüe: los logs están en inglés y el analista pregunta en
+    # español, así que se enriquece SOLO la consulta con sinónimos técnicos.
+    expanded = rag_store.expand_query(question)
+    semantic: List[Dict[str, Any]] = []
+    if rag_store.is_available():
+        semantic = rag_store.query_events(
+            analysis_id, expanded, n_results=n_results, level=level or None,
+            suspicious=suspicious if suspicious else None,
+        )
+    lexical = _keyword_hits(df, expanded, level=level, suspicious=suspicious)
+
+    merged: Dict[str, Dict[str, Any]] = {}
+    for hit in semantic:
+        hit["retrieval"] = "semantica"
+        key = str(hit.get("log_id") or hit.get("document", "")[:80])
+        merged[key] = hit
+
+    for hit in lexical:
+        key = str(hit.get("log_id") or hit.get("document", "")[:80])
+        existing = merged.get(key)
+        if existing is None:
+            merged[key] = hit
+        else:
+            # Ambas rutas lo encontraron → evidencia más sólida
+            existing["score"] = round(min(1.0, max(existing["score"], hit["score"]) + 0.05), 4)
+            existing["retrieval"] = "hibrida"
+
+    ordered = sorted(merged.values(), key=lambda item: -float(item.get("score", 0.0)))
+    return ordered[: max(1, min(n_results, 20))]
 
 
 # ---------------------------------------------------------------------------
@@ -354,6 +527,32 @@ async def process_analysis(analysis_id: str, file_bytes: bytes, file_name: str =
     except Exception as exc:  # noqa: BLE001 – surface any failure to the UI
         analysis_store[analysis_id]["status"] = "error"
         analysis_store[analysis_id]["error"] = str(exc)
+        return
+
+    # ------------------------------------------------------------------
+    # Índice semántico (RAG) — en un hilo para no bloquear el event loop.
+    # Nunca invalida el análisis: si falla, la app sigue en modo determinista.
+    # ------------------------------------------------------------------
+    records = _enrich_records(df)
+    analysis_store[analysis_id]["rag"] = {
+        "available": rag_store.is_available(),
+        "indexed": 0,
+        "total": len(records),
+        "reason": "indexando",
+    }
+    try:
+        rag_result = await asyncio.to_thread(rag_store.index_events, analysis_id, records)
+        analysis_store[analysis_id]["rag"] = rag_result
+        # El índice persiste en disco: nos quedamos solo con los últimos análisis.
+        rag_store.purge_except(_recent_analysis_ids(), max_analyses=5)
+    except Exception as rag_exc:  # noqa: BLE001
+        logger.warning("RAG no disponible para %s: %s", analysis_id[:8], rag_exc)
+        analysis_store[analysis_id]["rag"] = {
+            "available": False,
+            "indexed": 0,
+            "total": len(records),
+            "reason": str(rag_exc),
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +563,8 @@ class AnalysisResult(BaseModel):
     status: str  # pending | processing | done | error
     summary: Dict[str, Any] | None = None
     error: str | None = None
+    # Estado del índice semántico (RAG): available / indexed / total / reason
+    rag: Dict[str, Any] | None = None
 
 
 @app.post("/api/analyze", response_model=AnalysisResult)
@@ -387,6 +588,7 @@ async def get_analysis(analysis_id: str):
         status=entry["status"],
         summary=entry.get("summary"),
         error=entry.get("error"),
+        rag=entry.get("rag"),
     )
 
 
@@ -484,3 +686,61 @@ async def stream_events(analysis_id: str):
             await asyncio.sleep(1)
 
     return EventSourceResponse(event_generator())
+
+
+class AskRequest(BaseModel):
+    question: str = ""
+    level: str = ""  # filtro opcional: critico|alto|medio|bajo
+    suspicious: bool = False
+    n_results: int = 8
+
+
+@app.post("/api/analysis/{analysis_id}/ask")
+async def ask_question(analysis_id: str, payload: AskRequest):
+    """Consulta en lenguaje natural sobre los eventos importados (RAG).
+
+    Recuperación híbrida (semántica + léxica) y respuesta anclada a los
+    eventos recuperados: cada cifra y cada Log_ID procede de los registros,
+    nunca del modelo.
+    """
+    if analysis_id not in analysis_store:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    entry = analysis_store[analysis_id]
+    if entry.get("status") != "done" or not entry.get("summary"):
+        raise HTTPException(status_code=409, detail="El análisis aún no está listo")
+
+    question = (payload.question or "").strip()
+    if len(question) < 3:
+        raise HTTPException(status_code=400, detail="Escribe una consulta de al menos 3 caracteres")
+
+    n_results = max(1, min(int(payload.n_results or 8), 20))
+    level = payload.level if payload.level in LEVEL_ORDER else ""
+
+    df: pd.DataFrame | None = entry.get("dataframe")
+    hits = _hybrid_retrieve(
+        analysis_id, question, df, n_results=n_results,
+        level=level, suspicious=bool(payload.suspicious),
+    )
+    answer = await answer_question(question, hits, entry["summary"])
+
+    return {
+        "analysis_id": analysis_id,
+        "question": question,
+        "retrieved": len(hits),
+        "filters": {"level": level or None, "suspicious": bool(payload.suspicious)},
+        "rag": rag_store.get_stats(),
+        **answer,
+    }
+
+
+@app.get("/api/rag/status")
+async def rag_status(analysis_id: str = Query("", description="Análisis concreto (opcional)")):
+    """Estado del índice semántico local (motor + eventos indexados).
+
+    Responde siempre 200: si el motor no está instalado devuelve
+    `available: false` y la app sigue operativa en modo determinista.
+    """
+    info = rag_store.get_stats(analysis_id or None)
+    if analysis_id and analysis_id not in analysis_store:
+        info["known_analysis"] = False
+    return info

@@ -5,9 +5,10 @@ import SecurityAnalysis from './components/SecurityAnalysis';
 import RiskClassification from './components/RiskClassification';
 import UploadSection from './components/UploadSection';
 import ReportGenerator from './components/ReportGenerator';
+import AssistantChat from './components/AssistantChat';
 import { Sidebar } from './components/Sidebar';
 
-type Section = 'upload' | 'dashboard' | 'security' | 'risk' | 'report';
+type Section = 'upload' | 'dashboard' | 'security' | 'assistant' | 'risk' | 'report';
 
 const SECTION_META: Record<Section, { title: string; subtitle: string }> = {
   dashboard: {
@@ -17,6 +18,10 @@ const SECTION_META: Record<Section, { title: string; subtitle: string }> = {
   security: {
     title: 'Análisis de seguridad',
     subtitle: 'Identificación de eventos sospechosos y correlación entre hosts e IPs',
+  },
+  assistant: {
+    title: 'Asistente IA',
+    subtitle: 'Consulta en lenguaje natural sobre los registros con recuperación RAG',
   },
   risk: {
     title: 'Clasificación de riesgos',
@@ -55,7 +60,7 @@ const App: React.FC = () => {
               title="Motor de análisis y asistente de redacción del informe"
             >
               <span className="h-2 w-2 rounded-full bg-emerald-300" />
-              IA integrada · análisis + informe
+              IA integrada · análisis, informe y RAG
             </span>
             <ServicePulse />
           </div>
@@ -66,6 +71,7 @@ const App: React.FC = () => {
           {activeSection === 'upload' && <UploadSection />}
           {activeSection === 'dashboard' && <Dashboard />}
           {activeSection === 'security' && <SecurityAnalysis />}
+          {activeSection === 'assistant' && <AssistantChat />}
           {activeSection === 'risk' && <RiskClassification />}
           {activeSection === 'report' && <ReportGenerator />}
         </section>

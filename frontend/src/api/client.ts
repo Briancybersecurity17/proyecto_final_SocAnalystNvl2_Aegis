@@ -62,6 +62,83 @@ export const generateReport = async (analysisId: string) => {
   return response.data as ReportNarrative
 }
 
+/**
+ * Un evento recuperado por el RAG como evidencia citable.
+ */
+export interface AskEvidence {
+  log_id: string
+  timestamp: string
+  host: string
+  event_id: string
+  user: string
+  source_ip: string
+  destination: string
+  severity: string
+  level: string
+  suspicious: boolean
+  description: string
+  relevance: number
+  document: string
+}
+
+export interface AskResponse {
+  analysis_id: string
+  question: string
+  retrieved: number
+  filters: { level: string | null; suspicious: boolean }
+  /** Redacción de la respuesta (markdown sencillo, siempre en español). */
+  answer: string
+  evidence: AskEvidence[]
+  summary_line: string
+  confidence: 'alta' | 'media' | 'baja' | 'ninguna'
+  /** 'deterministic' = motor local; 'llm' = modelo remoto (con grounding validado). */
+  engine: string
+  model: string | null
+  warnings: string[]
+  rag: { available: boolean; reason?: string | null; model: string; total: number }
+}
+
+/**
+ * Consulta en lenguaje natural sobre los eventos importados.
+ *
+ * El backend hace recuperación híbrida (semántica + léxica) y devuelve una
+ * respuesta anclada a los eventos recuperados: sin hallazgos inventados.
+ */
+export const askQuestion = async (
+  analysisId: string,
+  question: string,
+  opts: { level?: string; suspicious?: boolean; nResults?: number } = {},
+) => {
+  const response = await API.post(`/analysis/${analysisId}/ask`, {
+    question,
+    level: opts.level ?? '',
+    suspicious: opts.suspicious ?? false,
+    n_results: opts.nResults ?? 8,
+  })
+  return response.data as AskResponse
+}
+
+/**
+ * Estado del índice semántico local (motor + eventos indexados).
+ * Devuelve siempre 200: `available: false` si el motor no está instalado.
+ */
+export interface RagStatusResponse {
+  available: boolean
+  reason?: string | null
+  model: string
+  total: number
+  events?: number
+  levels?: Record<string, number>
+  suspicious?: number
+}
+
+export const getRagStatus = async (analysisId?: string) => {
+  const response = await API.get('/rag/status', {
+    params: analysisId ? { analysis_id: analysisId } : {},
+  })
+  return response.data as RagStatusResponse
+}
+
 export const listenAnalysisEvents = (analysisId: string, onStatus: (status: string) => void) => {
   const eventSource = new EventSource(`${API.defaults.baseURL}/analysis/${analysisId}/events`)
 

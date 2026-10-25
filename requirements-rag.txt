@@ -1,0 +1,13 @@
+# Dependencias opcionales del índice semántico local (RAG).
+#
+#   pip install -r requirements-rag.txt
+#
+# Sin estas librerías la aplicación funciona igualmente: el backend detecta la
+# ausencia de `chromadb` y desactiva el RAG (backend/rag_store.py), dejando el
+# motor determinista actual. Instálalas para el chat "preguntar a los datos".
+#
+# Nota: `sentence-transformers` instala PyTorch (varios GB). Si prefieres un
+# peso menor puedes dejar solo `chromadb`, que usará el modelo ONNX por defecto
+# (inglés) en lugar del multilingüe.
+chromadb>=1.0.0
+sentence-transformers>=3.0.0
