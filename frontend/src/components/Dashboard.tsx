@@ -23,6 +23,8 @@ import {
   PieChart,
   Pie,
   Cell,
+  AreaChart,
+  Area,
   LineChart,
   Line,
   BarChart,
@@ -34,6 +36,24 @@ import {
 
 /** Contador animado para las cifras de las tarjetas de criticidad. */
 const Counter: React.FC<{ value: number }> = ({ value }) => <>{useCountUp(value)}</>
+
+/** "2026-10-23 07:00" → "23/10 07:00" (etiqueta corta para el eje). */
+const hourLabel = (stamp: string): string => {
+  const [date, time] = stamp.split(' ')
+  const [, month, day] = date.split('-')
+  return `${Number(day)}/${Number(month)} ${time}`
+}
+
+/** Un punto de la serie temporal, ya por hora ya por día. */
+type TimePoint = {
+  label: string
+  detail: string
+  total: number
+  critico: number
+  alto: number
+  medio: number
+  bajo: number
+}
 
 const Dashboard: React.FC = () => {
   const summary = useAnalysisStore(state => state.summary)
@@ -62,15 +82,50 @@ const Dashboard: React.FC = () => {
     ([severity, count]) => ({ severity, count: toCount(count) })
   )
 
-  const eventsData = Object.entries(summary.events_per_day_by_level ?? {})
-    .map(([date, levels]) => ({
-      date,
-      critico: toCount(levels.critico),
-      alto: toCount(levels.alto),
-      medio: toCount(levels.medio),
-      bajo: toCount(levels.bajo),
-    }))
-    .sort((a, b) => a.date.localeCompare(b.date))
+  // Serie horaria real (fecha+hora presentes en los timestamps del archivo).
+  // Si hay varios tramos se usa como eje principal: da mucha más resolución
+  // que la agregación diaria y no se inventa ningún dato.
+  const hourlyData: TimePoint[] = Object.entries(summary.events_per_hour_by_level ?? {})
+    .map(([stamp, levels]) => {
+      const critico = toCount(levels.critico)
+      const alto = toCount(levels.alto)
+      const medio = toCount(levels.medio)
+      const bajo = toCount(levels.bajo)
+      return {
+        label: hourLabel(stamp),
+        detail: stamp,
+        critico,
+        alto,
+        medio,
+        bajo,
+        total: critico + alto + medio + bajo,
+      }
+    })
+    .sort((a, b) => a.detail.localeCompare(b.detail))
+
+  const dailyData: TimePoint[] = Object.entries(summary.events_per_day_by_level ?? {})
+    .map(([date, levels]) => {
+      const critico = toCount(levels.critico)
+      const alto = toCount(levels.alto)
+      const medio = toCount(levels.medio)
+      const bajo = toCount(levels.bajo)
+      return {
+        label: date,
+        detail: date,
+        critico,
+        alto,
+        medio,
+        bajo,
+        total: critico + alto + medio + bajo,
+      }
+    })
+    .sort((a, b) => a.detail.localeCompare(b.detail))
+
+  // Granularidad efectiva: hora si el backend la aporta con varios tramos;
+  // si no, día (y si solo hay un día, se avisa en vez de fingir una tendencia)
+  const hourly = hourlyData.length > 1
+  const timeData = hourly ? hourlyData : dailyData
+  const totalByLabel = new Map(timeData.map(p => [p.label, p.total]))
 
   const hostsData = Object.entries(summary.top_hosts_by_level ?? {})
     .map(([host, levels]) => ({
@@ -236,38 +291,88 @@ const Dashboard: React.FC = () => {
         )}
       </DashboardSection>
 
-      {/* Actividad temporal: barra apilada con 1 fecha, línea con varias */}
+      {/* Actividad temporal: hora si el backend la aporta, si no día */}
       <DashboardSection title="Actividad temporal por criticidad">
-        {eventsData.length === 0 ? (
+        {timeData.length === 0 ? (
           <p className="py-10 text-center text-sm text-gray-500">
             El backend no devolvió agrupaciones temporales para este análisis.
           </p>
         ) : (
           <>
-            {eventsData.length === 1 && (
+            <p className="mb-3 text-sm text-gray-600">
+              {hourly
+                ? 'Agrupación por hora a partir de los timestamps reales del archivo; los tramos sin actividad no aparecen.'
+                : 'Agrupación por día a partir de los timestamps reales del archivo.'}
+            </p>
+
+            {!hourly && timeData.length === 1 && (
               <p className="mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                Los datos cubren un solo día ({eventsData[0].date}): se muestra la barra apilada de ese día.
-                Con una sola fecha no hay tendencia que graficar.
+                Los datos cubren un solo día ({timeData[0].detail}) y la respuesta no incluye
+                desglose horario: se muestra el total del día. Con una sola fecha no hay
+                tendencia que graficar.
               </p>
             )}
+
+            {hourly && dailyData.length === 1 && (
+              <p className="mb-3 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+                Los datos cubren un solo día ({dailyData[0].detail}): la serie desglosa las
+                horas con actividad de ese día.
+              </p>
+            )}
+
             <ResponsiveContainer width="100%" height={300}>
-              {eventsData.length === 1 ? (
-                <BarChart data={eventsData} margin={{ top: 14, right: 20, left: 8, bottom: 8 }}>
+              {hourly ? (
+                <AreaChart data={timeData} margin={{ top: 14, right: 20, left: 8, bottom: 8 }}>
                   <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="date" tick={AXIS_TICK} />
+                  <XAxis dataKey="label" tick={AXIS_TICK} />
                   <YAxis allowDecimals={false} tick={AXIS_TICK} />
-                  <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(value: number, name) => [`${toCount(value).toLocaleString()} eventos`, name]} />
+                  <Tooltip
+                    contentStyle={TOOLTIP_STYLE}
+                    formatter={(value: number, name) => [`${toCount(value).toLocaleString()} eventos`, name]}
+                    labelFormatter={label => `${label} · ${totalByLabel.get(String(label)) ?? 0} eventos`}
+                  />
+                  <Legend />
+                  {LEVEL_ORDER.map(level => (
+                    <Area
+                      key={level}
+                      type="monotone"
+                      dataKey={level}
+                      name={LEVEL_LABELS[level]}
+                      stackId="t"
+                      stroke={LEVEL_COLORS[level]}
+                      fill={LEVEL_COLORS[level]}
+                      fillOpacity={0.7}
+                      strokeWidth={2}
+                      activeDot={{ r: 4 }}
+                      isAnimationActive={chartMotion.isAnimationActive}
+                    />
+                  ))}
+                </AreaChart>
+              ) : timeData.length === 1 ? (
+                <BarChart data={timeData} margin={{ top: 14, right: 20, left: 8, bottom: 8 }}>
+                  <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="label" tick={AXIS_TICK} />
+                  <YAxis allowDecimals={false} tick={AXIS_TICK} />
+                  <Tooltip
+                    contentStyle={TOOLTIP_STYLE}
+                    formatter={(value: number, name) => [`${toCount(value).toLocaleString()} eventos`, name]}
+                    labelFormatter={label => `${label} · ${totalByLabel.get(String(label)) ?? 0} eventos`}
+                  />
                   <Legend />
                   {LEVEL_ORDER.map(level => (
                     <Bar key={level} dataKey={level} name={LEVEL_LABELS[level]} stackId="daily" fill={LEVEL_COLORS[level]} isAnimationActive={chartMotion.isAnimationActive} />
                   ))}
                 </BarChart>
               ) : (
-                <LineChart data={eventsData} margin={{ top: 8, right: 20, left: 8, bottom: 8 }}>
+                <LineChart data={timeData} margin={{ top: 8, right: 20, left: 8, bottom: 8 }}>
                   <CartesianGrid stroke={GRID} strokeDasharray="3 3" />
-                  <XAxis dataKey="date" tick={AXIS_TICK} />
+                  <XAxis dataKey="label" tick={AXIS_TICK} />
                   <YAxis allowDecimals={false} tick={AXIS_TICK} />
-                  <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(value: number, name) => [`${toCount(value).toLocaleString()} eventos`, name]} />
+                  <Tooltip
+                    contentStyle={TOOLTIP_STYLE}
+                    formatter={(value: number, name) => [`${toCount(value).toLocaleString()} eventos`, name]}
+                    labelFormatter={label => `${label} · ${totalByLabel.get(String(label)) ?? 0} eventos`}
+                  />
                   <Legend />
                   {LEVEL_ORDER.map(level => (
                     <Line key={level} type="monotone" dataKey={level} name={LEVEL_LABELS[level]} stroke={LEVEL_COLORS[level]} strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} isAnimationActive={chartMotion.isAnimationActive} />

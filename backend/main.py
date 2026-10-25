@@ -382,6 +382,7 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
     # --- timestamps --------------------------------------------------------
     events_per_day: Dict[str, int] = {}
     events_per_day_by_level: Dict[str, Dict[str, int]] = {}
+    events_per_hour_by_level: Dict[str, Dict[str, int]] = {}
     if "Timestamp" in df.columns:
         df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
         dated = df.dropna(subset=["Timestamp"])
@@ -394,6 +395,19 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
             events_per_day_by_level = {
                 str(day): {lvl: int(pivot.loc[day, lvl]) for lvl in LEVEL_ORDER}
                 for day in pivot.index
+            }
+
+            # Serie horaria real: una clave por fecha+hora presente en los
+            # timestamps (no se rellenan horas sin datos). Es la serie que usa
+            # el dashboard cuando hay menos de un día completo de información.
+            hour_keys = dated["Timestamp"].dt.strftime("%Y-%m-%d %H")
+            pivot_h = dated.groupby([hour_keys, "_level"]).size().unstack(fill_value=0)
+            for lvl in LEVEL_ORDER:
+                if lvl not in pivot_h.columns:
+                    pivot_h[lvl] = 0
+            events_per_hour_by_level = {
+                f"{stamp}:00": {lvl: int(pivot_h.loc[stamp, lvl]) for lvl in LEVEL_ORDER}
+                for stamp in sorted(pivot_h.index)
             }
 
     # --- hosts -------------------------------------------------------------
@@ -503,6 +517,7 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
         "unique_hosts": unique_hosts,
         "events_per_day": events_per_day,
         "events_per_day_by_level": events_per_day_by_level,
+        "events_per_hour_by_level": events_per_hour_by_level,
         "top_hosts": top_hosts,
         "top_hosts_by_level": top_hosts_by_level,
         "suspicious_events": suspicious_events,

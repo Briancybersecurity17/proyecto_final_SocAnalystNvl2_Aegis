@@ -77,6 +77,8 @@ export interface AnalysisSummary {
   unique_hosts: number | null
   events_per_day: Record<string, number>
   events_per_day_by_level: Record<string, Record<string, number>>
+  /** Serie por fecha+hora presente en los datos: "2026-10-23 07:00" → niveles. */
+  events_per_hour_by_level?: Record<string, Record<string, number>>
   top_hosts: Record<string, number>
   top_hosts_by_level: Record<string, Record<string, number>>
   suspicious_events: number
