@@ -1,0 +1,1587 @@
+[
+  {
+    "kind": "technique",
+    "id": "T1003",
+    "name": "OS Credential Dumping",
+    "tactic": "Credential Access",
+    "tactic_es": "Acceso a credenciales",
+    "url": "https://attack.mitre.org/techniques/T1003",
+    "description": "Adversaries may attempt to dump credentials to obtain account login and credential material, normally in the form of a hash or a clear text password. Credentials can be obtained from OS caches, memory, or structures.(Citation: Brining MimiKatz to Unix) Credentials can then be used to perform Lateral Movement and access restricted information. Several of the tools mentioned in associated sub-techniques may be used by both adversaries and professional security testers.",
+    "descripcion_es": "Volca credenciales del sistema operativo (LSASS, SAM, NTDS).",
+    "se_detecta": "Accesos de lectura a lsass.exe (4663/4656) y volcados de memoria; herramientas conocidas (mimikatz) invocadas desde 4688.",
+    "eventos": [
+      "4663",
+      "4688"
+    ],
+    "subtechniques": [
+      "T1003.001",
+      "T1003.002",
+      "T1003.003",
+      "T1003.004",
+      "T1003.005",
+      "T1003.006",
+      "T1003.007",
+      "T1003.008"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1003.001",
+    "name": "LSASS Memory",
+    "tactic": "Credential Access",
+    "tactic_es": "Acceso a credenciales",
+    "url": "https://attack.mitre.org/techniques/T1003/001",
+    "description": "Adversaries may attempt to access credential material stored in the process memory of the Local Security Authority Subsystem Service (LSASS). After a user logs on, the system generates and stores a variety of credential materials in LSASS process memory. These credential materials can be harvested by an administrative user or SYSTEM and used to conduct Lateral Movement using Use Alternate Authentication Material.",
+    "descripcion_es": "Volcado del proceso LSASS para extraer credenciales en claro.",
+    "se_detecta": "4663 sobre lsass.exe con AccessMask de lectura desde procesos no legítimos.",
+    "eventos": [
+      "4663",
+      "4656"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1007",
+    "name": "System Service Discovery",
+    "tactic": "Discovery",
+    "tactic_es": "Descubrimiento",
+    "url": "https://attack.mitre.org/techniques/T1007",
+    "description": "Adversaries may try to gather information about registered local system services. Adversaries may obtain information about services using tools as well as OS utility commands such as <code>sc query</code>, <code>tasklist /svc</code>, <code>systemctl --type=service</code>, and <code>net start</code>.",
+    "descripcion_es": "Enumera servicios del sistema instalados.",
+    "se_detecta": "sc query / net start fuera de ventanas de mantenimiento (4688) y consultas frecuentes de 7036.",
+    "eventos": [
+      "4688",
+      "7036"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1012",
+    "name": "Query Registry",
+    "tactic": "Discovery",
+    "tactic_es": "Descubrimiento",
+    "url": "https://attack.mitre.org/techniques/T1012",
+    "description": "Adversaries may interact with the Windows Registry to gather information about the system, configuration, and installed software. The Registry contains a significant amount of information about the operating system, configuration, software, and security.(Citation: Wikipedia Windows Registry) Information can easily be queried using the Reg utility, though other means to access the Registry exist.",
+    "descripcion_es": "Consulta el registro para leer configuraciones o claves guardadas.",
+    "se_detecta": "reg query por procesos no habituales (4688).",
+    "eventos": [
+      "4688"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1016",
+    "name": "System Network Configuration Discovery",
+    "tactic": "Discovery",
+    "tactic_es": "Descubrimiento",
+    "url": "https://attack.mitre.org/techniques/T1016",
+    "description": "Adversaries may look for details about the network configuration and settings, such as IP and/or MAC addresses, of systems they access or through information discovery of remote systems. Several operating system administration utilities exist that can be used to gather this information. Examples include Arp, ipconfig/ifconfig, nbtstat, and route.",
+    "descripcion_es": "Recolecta configuración de red (interfaces, rutas, DNS).",
+    "se_detecta": "ipconfig / route print / netsh desde sesiones interactivas inusuales.",
+    "eventos": [
+      "4688"
+    ],
+    "subtechniques": [
+      "T1016.001",
+      "T1016.002"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1021",
+    "name": "Remote Services",
+    "tactic": "Lateral Movement",
+    "tactic_es": "Movimiento lateral",
+    "url": "https://attack.mitre.org/techniques/T1021",
+    "description": "Adversaries may use Valid Accounts to log into a service that accepts remote connections, such as telnet, SSH, and VNC. The adversary may then perform actions as the logged-on user. In an enterprise environment, servers and workstations can be organized into domains. Domains provide centralized identity management, allowing users to login using one set of credentials across the entire network.",
+    "descripcion_es": "Usa servicios remotos (RDP, SMB, WinRM) para moverse entre hosts.",
+    "se_detecta": "4624 LogonType 3/10 hacia otros servidores y 5140/5145 sobre Shares administrativos (C$, ADMIN$).",
+    "eventos": [
+      "4624",
+      "5140",
+      "5145"
+    ],
+    "subtechniques": [
+      "T1021.001",
+      "T1021.002",
+      "T1021.003",
+      "T1021.004",
+      "T1021.005",
+      "T1021.006",
+      "T1021.007",
+      "T1021.008"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1021.001",
+    "name": "Remote Desktop Protocol",
+    "tactic": "Lateral Movement",
+    "tactic_es": "Movimiento lateral",
+    "url": "https://attack.mitre.org/techniques/T1021/001",
+    "description": "Adversaries may use Valid Accounts to log into a computer using the Remote Desktop Protocol (RDP). The adversary may then perform actions as the logged-on user. Remote desktop is a common feature in operating systems. It allows a user to log into an interactive session with a system desktop graphical user interface on a remote system.",
+    "descripcion_es": "RDP para acceder remotamente a otra máquina.",
+    "se_detecta": "4624 LogonType 10 y 1149 (sesión RDP autenticada) desde hosts no incluidos en la matriz de administración.",
+    "eventos": [
+      "4624",
+      "1149"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1021.002",
+    "name": "SMB/Windows Admin Shares",
+    "tactic": "Lateral Movement",
+    "tactic_es": "Movimiento lateral",
+    "url": "https://attack.mitre.org/techniques/T1021/002",
+    "description": "Adversaries may use Valid Accounts to interact with a remote network share using Server Message Block (SMB). The adversary may then perform actions as the logged-on user. SMB is a file, printer, and serial port sharing protocol for Windows machines on the same network or domain. Adversaries may use SMB to interact with file shares, allowing them to move laterally throughout a network. Linux and macOS implementations of SMB typically use Samba.",
+    "descripcion_es": "Shares administrativos SMB (C$, ADMIN$, IPC$) para copiar ejecutables.",
+    "se_detecta": "5140/5145 en \\ADMIN$ o \\C$ seguido de 4688 en el host destino.",
+    "eventos": [
+      "5140",
+      "5145",
+      "4624"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1027",
+    "name": "Obfuscated Files or Information",
+    "tactic": "Stealth",
+    "tactic_es": "Sigilo",
+    "url": "https://attack.mitre.org/techniques/T1027",
+    "description": "Adversaries may attempt to make an executable or file difficult to discover or analyze by encrypting, encoding, or otherwise obfuscating its contents on the system or in transit. This is common behavior that can be used across different platforms and the network to evade defenses. Payloads may be compressed, archived, or encrypted in order to avoid detection. These payloads may be used during Initial Access or later to mitigate detection.",
+    "descripcion_es": "Ofusca scripts o binarios para evadir detección por firma.",
+    "se_detecta": "4104 con bloques ofuscados o decodificaciones largas; 4688 con powershell -enc / base64.",
+    "eventos": [
+      "4104",
+      "4688"
+    ],
+    "subtechniques": [
+      "T1027.001",
+      "T1027.002",
+      "T1027.003",
+      "T1027.004",
+      "T1027.005",
+      "T1027.006",
+      "T1027.007",
+      "T1027.008",
+      "T1027.009",
+      "T1027.010",
+      "T1027.011",
+      "T1027.012",
+      "T1027.013",
+      "T1027.014",
+      "T1027.015",
+      "T1027.016",
+      "T1027.017",
+      "T1027.018"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1033",
+    "name": "System Owner/User Discovery",
+    "tactic": "Discovery",
+    "tactic_es": "Descubrimiento",
+    "url": "https://attack.mitre.org/techniques/T1033",
+    "description": "Adversaries may attempt to identify the primary user, currently logged in user, set of users that commonly uses a system, or whether a user is actively using the system. They may do this, for example, by retrieving account usernames or by using OS Credential Dumping.",
+    "descripcion_es": "Determina qué usuario y privilegios tiene la sesión actual.",
+    "se_detecta": "whoami / query user ejecutados (4688) al inicio de una sesión.",
+    "eventos": [
+      "4688"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1036",
+    "name": "Masquerading",
+    "tactic": "Stealth",
+    "tactic_es": "Sigilo",
+    "url": "https://attack.mitre.org/techniques/T1036",
+    "description": "Adversaries may attempt to manipulate features of their artifacts to make them appear legitimate or benign to users and/or security tools. Masquerading occurs when the name or location of an object, legitimate or malicious, is manipulated or abused for the sake of evading defenses and observation. This may include manipulating file metadata, tricking users into misidentifying the file type, and giving legitimate task or service names.",
+    "descripcion_es": "Se hace pasar por software o rutas legítimas para no ser detectado.",
+    "se_detecta": "4688 con nombres de proceso parecidos a sistemas (svchost, explorer) en rutas que no son System32.",
+    "eventos": [
+      "4688"
+    ],
+    "subtechniques": [
+      "T1036.001",
+      "T1036.002",
+      "T1036.003",
+      "T1036.004",
+      "T1036.005",
+      "T1036.006",
+      "T1036.007",
+      "T1036.008",
+      "T1036.009",
+      "T1036.010",
+      "T1036.011",
+      "T1036.012"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1036.005",
+    "name": "Match Legitimate Resource Name or Location",
+    "tactic": "Stealth",
+    "tactic_es": "Sigilo",
+    "url": "https://attack.mitre.org/techniques/T1036/005",
+    "description": "Adversaries may match or approximate the name or location of legitimate files, Registry keys, or other resources when naming/placing them. This is done for the sake of evading defenses and observation. This may be done by placing an executable in a commonly trusted directory (ex: under System32) or giving it the name of a legitimate, trusted program (ex: svchost.exe).",
+    "descripcion_es": "Coincide con nombre o ubicación legítima (falso svchost, falsa ruta).",
+    "se_detecta": "4688 con Image fuera de %SystemRoot%\\System32 pero nombre idéntico.",
+    "eventos": [
+      "4688"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1041",
+    "name": "Exfiltration Over C2 Channel",
+    "tactic": "Exfiltration",
+    "tactic_es": "Exfiltración",
+    "url": "https://attack.mitre.org/techniques/T1041",
+    "description": "Adversaries may steal data by exfiltrating it over an existing command and control channel. Stolen data is encoded into the normal communications channel using the same protocol as command and control communications.(Citation: C2 FRAMEWORKS)",
+    "descripcion_es": "Envía datos robados por el mismo canal de C2.",
+    "se_detecta": "Salidas sostenidas de volumen alto hacia un destino ya visto en C2.",
+    "eventos": [
+      "PROXY_ACCESS",
+      "HTTP_ACCESS"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1046",
+    "name": "Network Service Discovery",
+    "tactic": "Discovery",
+    "tactic_es": "Descubrimiento",
+    "url": "https://attack.mitre.org/techniques/T1046",
+    "description": "Adversaries may attempt to get a listing of services running on remote hosts and local network infrastructure devices, including those that may be vulnerable to remote software exploitation. Common methods to acquire this information include port, vulnerability, and/or wordlist scans using tools that are brought onto a system.(Citation: CISA AR21-126A FIVEHANDS May 2021) Within cloud environments, adversaries may attempt to discover services running on other cloud hosts.",
+    "descripcion_es": "Escanea la red buscando servicios abiertos (reconocimiento interno).",
+    "se_detecta": "Origen con muchos destinos/puertos distintos en 5156 o en el firewall; patrón de barrido.",
+    "eventos": [
+      "5156",
+      "FIREWALL"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1047",
+    "name": "Windows Management Instrumentation",
+    "tactic": "Execution",
+    "tactic_es": "Ejecución",
+    "url": "https://attack.mitre.org/techniques/T1047",
+    "description": "Adversaries may abuse Windows Management Instrumentation (WMI) to execute malicious commands and payloads. WMI is designed for programmers and is the infrastructure for management data and operations on Windows systems.(Citation: WMI 1-3) WMI is an administration feature that provides a uniform environment to access Windows system components.",
+    "descripcion_es": "Ejecuta comandos vía WMI, también para movimiento lateral remoto.",
+    "se_detecta": "WmiPrvSE.exe como padre de procesos; 4624 LogonType 3 hacia otros hosts acompañado de 4688 remoto.",
+    "eventos": [
+      "4688",
+      "4624"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1048",
+    "name": "Exfiltration Over Alternative Protocol",
+    "tactic": "Exfiltration",
+    "tactic_es": "Exfiltración",
+    "url": "https://attack.mitre.org/techniques/T1048",
+    "description": "Adversaries may steal data by exfiltrating it over a different protocol than that of the existing command and control channel. The data may also be sent to an alternate network location from the main command and control server. Alternate protocols include FTP, SMTP, HTTP/S, DNS, SMB, or any other network protocol not being used as the main command and control channel. Adversaries may also opt to encrypt and/or obfuscate these alternate channels.",
+    "descripcion_es": "Exfiltra por protocolos alternativos al C2 (DNS, correo, nube).",
+    "se_detecta": "Consultas DNS atípicas por tamaño o volumen; adjuntos salientes grandes.",
+    "eventos": [
+      "PROXY_ACCESS",
+      "FIREWALL"
+    ],
+    "subtechniques": [
+      "T1048.001",
+      "T1048.002",
+      "T1048.003"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1049",
+    "name": "System Network Connections Discovery",
+    "tactic": "Discovery",
+    "tactic_es": "Descubrimiento",
+    "url": "https://attack.mitre.org/techniques/T1049",
+    "description": "Adversaries may attempt to get a listing of network connections to or from the compromised system they are currently accessing or from remote systems by querying for information over the network. An adversary who gains access to a system that is part of a cloud-based environment may map out Virtual Private Clouds or Virtual Networks in order to determine what systems and services are connected.",
+    "descripcion_es": "Revisa conexiones de red activas del host.",
+    "se_detecta": "netstat / Get-NetTCPConnection ejecutados fuera de mantenimiento.",
+    "eventos": [
+      "4688",
+      "5156"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1053",
+    "name": "Scheduled Task/Job",
+    "tactic": "Execution",
+    "tactic_es": "Ejecución",
+    "url": "https://attack.mitre.org/techniques/T1053",
+    "description": "Adversaries may abuse task scheduling functionality to facilitate initial or recurring execution of malicious code. Utilities exist within all major operating systems to schedule programs or scripts to be executed at a specified date and time. A task can also be scheduled on a remote system, provided the proper authentication is met (ex: RPC and file and printer sharing in Windows environments).",
+    "descripcion_es": "Crea o modifica tareas programadas para ejecución recurrente.",
+    "se_detecta": "4698 (tarea creada) y 4702 (tarea actualizada) con rutas o acciones sospechosas.",
+    "eventos": [
+      "4698",
+      "106"
+    ],
+    "subtechniques": [
+      "T1053.002",
+      "T1053.003",
+      "T1053.005",
+      "T1053.006",
+      "T1053.007"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1053.005",
+    "name": "Scheduled Task",
+    "tactic": "Execution",
+    "tactic_es": "Ejecución",
+    "url": "https://attack.mitre.org/techniques/T1053/005",
+    "description": "Adversaries may abuse the Windows Task Scheduler to perform task scheduling for initial or recurring execution of malicious code. There are multiple ways to access the Task Scheduler in Windows. The schtasks utility can be run directly on the command line, or the Task Scheduler can be opened through the GUI within the Administrator Tools section of the Control Panel.(Citation: Stack Overflow) In some cases, adversaries have used a .NET wrapper for the Windows Task Scheduler,",
+    "descripcion_es": "Tareas programadas de Windows como mecanismo de persistencia.",
+    "se_detecta": "Tareas nuevas apuntando a binarios en Temp/AppData o a scripts descargados.",
+    "eventos": [
+      "4698",
+      "4699",
+      "106"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1055",
+    "name": "Process Injection",
+    "tactic": "Stealth",
+    "tactic_es": "Sigilo",
+    "url": "https://attack.mitre.org/techniques/T1055",
+    "description": "Adversaries may inject code into processes in order to evade process-based defenses as well as possibly elevate privileges. Process injection is a method of executing arbitrary code in the address space of a separate live process. Running code in the context of another process may allow access to the process's memory, system/network resources, and possibly elevated privileges.",
+    "descripcion_es": "Inyecta código en procesos legítimos para ocultarse y persistir.",
+    "se_detecta": "Procesos con módulos no firmados; comportamientos que en Windows no generan log propio — se sospecha por padres/hijos anómalos en 4688.",
+    "eventos": [
+      "4688"
+    ],
+    "subtechniques": [
+      "T1055.001",
+      "T1055.002",
+      "T1055.003",
+      "T1055.004",
+      "T1055.005",
+      "T1055.008",
+      "T1055.009",
+      "T1055.011",
+      "T1055.012",
+      "T1055.013",
+      "T1055.014",
+      "T1055.015"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1057",
+    "name": "Process Discovery",
+    "tactic": "Discovery",
+    "tactic_es": "Descubrimiento",
+    "url": "https://attack.mitre.org/techniques/T1057",
+    "description": "Adversaries may attempt to get information about running processes on a system. Information obtained could be used to gain an understanding of common software/applications running on systems within the network. Administrator or otherwise elevated access may provide better process details.",
+    "descripcion_es": "Enumera procesos en ejecución para localizar seguridad o datos.",
+    "se_detecta": "tasklist / ps / Get-Process lanzados en hosts sin operación de soporte.",
+    "eventos": [
+      "4688"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1059",
+    "name": "Command and Scripting Interpreter",
+    "tactic": "Execution",
+    "tactic_es": "Ejecución",
+    "url": "https://attack.mitre.org/techniques/T1059",
+    "description": "Adversaries may abuse command and script interpreters to execute commands, scripts, or binaries. These interfaces and languages provide ways of interacting with computer systems and are a common feature across many different platforms. Most systems come with some built-in command-line interface and scripting capabilities, for example, macOS and Linux distributions include some flavor of Unix Shell while Windows installations include the Windows Command Shell and PowerShell.",
+    "descripcion_es": "Ejecuta intérpretes de comandos o scripts para controlar la máquina.",
+    "se_detecta": "Procesos hijos inusuales de cmd/powershell/wscript y líneas de comienzo de sesión anómalas en 4688.",
+    "eventos": [
+      "4688",
+      "4104"
+    ],
+    "subtechniques": [
+      "T1059.001",
+      "T1059.002",
+      "T1059.003",
+      "T1059.004",
+      "T1059.005",
+      "T1059.006",
+      "T1059.007",
+      "T1059.008",
+      "T1059.009",
+      "T1059.010",
+      "T1059.011",
+      "T1059.012",
+      "T1059.013"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1059.001",
+    "name": "PowerShell",
+    "tactic": "Execution",
+    "tactic_es": "Ejecución",
+    "url": "https://attack.mitre.org/techniques/T1059/001",
+    "description": "Adversaries may abuse PowerShell commands and scripts for execution. PowerShell is a powerful interactive command-line interface and scripting environment included in the Windows operating system.(Citation: TechNet PowerShell) PowerShell can also be installed on Linux and macOS.(Citation: Powershell installation) Adversaries can use PowerShell to perform a number of actions, including discovery of information and execution of code.",
+    "descripcion_es": "PowerShell para ejecutar código, a menudo ofuscado o descargado.",
+    "se_detecta": "Bloques 4104 con `enc`/codificación, `DownloadString` o IEX; procesos powershell.exe -enc desde estaciones sin administración remota.",
+    "eventos": [
+      "4104",
+      "4103",
+      "4688"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1059.003",
+    "name": "Windows Command Shell",
+    "tactic": "Execution",
+    "tactic_es": "Ejecución",
+    "url": "https://attack.mitre.org/techniques/T1059/003",
+    "description": "Adversaries may abuse the Windows command shell for execution. The Windows command shell (cmd) is the primary command prompt on Windows systems. The Windows command prompt can be used to control almost any aspect of a system, with various permission levels required for different subsets of commands.",
+    "descripcion_es": "Intérprete de comandos de Windows (cmd.exe).",
+    "se_detecta": "cmd.exe lanzado por procesos no habituales (Office, instaladores, servicios).",
+    "eventos": [
+      "4688"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1069",
+    "name": "Permission Groups Discovery",
+    "tactic": "Discovery",
+    "tactic_es": "Descubrimiento",
+    "url": "https://attack.mitre.org/techniques/T1069",
+    "description": "Adversaries may attempt to discover group and permission settings. This information can help adversaries determine which user accounts and groups are available, the membership of users in particular groups, and which users and groups have elevated permissions. Adversaries may attempt to discover group permission settings in many different ways.",
+    "descripcion_es": "Enumera permisos y grupos para saber a quién puede apoderarse.",
+    "se_detecta": "4799 (grupos con seguridad) y 4732 fuera de operaciones de administración.",
+    "eventos": [
+      "4799",
+      "4732"
+    ],
+    "subtechniques": [
+      "T1069.001",
+      "T1069.002",
+      "T1069.003"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1070",
+    "name": "Indicator Removal",
+    "tactic": "Stealth",
+    "tactic_es": "Sigilo",
+    "url": "https://attack.mitre.org/techniques/T1070",
+    "description": "Adversaries may selectively delete or modify artifacts generated to reduce indications of their presence and blend in with legitimate activity. Rather than broadly removing evidence, adversaries may target specific artifacts that appear anomalous or are likely to draw scrutiny, while leaving sufficient data intact to maintain the appearance of normal system behavior.",
+    "descripcion_es": "Borra o altera rastros para dificultar la investigación.",
+    "se_detecta": "1102 (registro de seguridad borrado), 4699 (tarea eliminada) y discontinuidades en la secuencia de eventos.",
+    "eventos": [
+      "1102",
+      "4699"
+    ],
+    "subtechniques": [
+      "T1070.003",
+      "T1070.004",
+      "T1070.005",
+      "T1070.006",
+      "T1070.007",
+      "T1070.008",
+      "T1070.009",
+      "T1070.010"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1071",
+    "name": "Application Layer Protocol",
+    "tactic": "Command And Control",
+    "tactic_es": "Control y mando",
+    "url": "https://attack.mitre.org/techniques/T1071",
+    "description": "Adversaries may communicate using OSI application layer protocols to avoid detection/network filtering by blending in with existing traffic. Commands to the remote system, and often the results of those commands, will be embedded within the protocol traffic between the client and server. Adversaries may utilize many different protocols, including those used for web browsing, transferring files, electronic mail, DNS, or publishing/subscribing.",
+    "descripcion_es": "Se comunica con el comando y mando usando protocolos habituales.",
+    "se_detecta": "Dominios desconocidos en el proxy con periodos regulares (beacon) y tamaños de respuesta similares.",
+    "eventos": [
+      "PROXY_ACCESS",
+      "HTTP_ACCESS"
+    ],
+    "subtechniques": [
+      "T1071.001",
+      "T1071.002",
+      "T1071.003",
+      "T1071.004",
+      "T1071.005"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1071.001",
+    "name": "Web Protocols",
+    "tactic": "Command And Control",
+    "tactic_es": "Control y mando",
+    "url": "https://attack.mitre.org/techniques/T1071/001",
+    "description": "Adversaries may communicate using application layer protocols associated with web traffic to avoid detection/network filtering by blending in with existing traffic. Commands to the remote system, and often the results of those commands, will be embedded within the protocol traffic between the client and server. Protocols such as HTTP/S(Citation: CrowdStrike Putter Panda) and WebSocket(Citation: Brazking-Websockets) that carry web traffic may be very common in environments.",
+    "descripcion_es": "C2 sobre HTTP/HTTPS enmascarado en tráfico web normal.",
+    "se_detecta": "User-Agents extraños, peticiones POST periódicas a un solo destino.",
+    "eventos": [
+      "HTTP_ACCESS",
+      "PROXY_ACCESS"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1074",
+    "name": "Data Staged",
+    "tactic": "Collection",
+    "tactic_es": "Recopilación",
+    "url": "https://attack.mitre.org/techniques/T1074",
+    "description": "Adversaries may stage collected data in a central location or directory prior to Exfiltration. Data may be kept in separate files or combined into one file through techniques such as Archive Collected Data. Interactive command shells may be used, and common functionality within cmd and bash may be used to copy data into a staging location.(Citation: PWC Cloud Hopper April 2017) In cloud environments, adversaries may stage data within a particular instance or virtual machine b",
+    "descripcion_es": "Deja datos recopilados en un directorio de trabajo antes de exfiltrar.",
+    "se_detecta": "Creación de carpetas en Temp/AppData con accesos 4663 repetidos.",
+    "eventos": [
+      "4663",
+      "5145"
+    ],
+    "subtechniques": [
+      "T1074.001",
+      "T1074.002"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1078",
+    "name": "Valid Accounts",
+    "tactic": "Stealth",
+    "tactic_es": "Sigilo",
+    "url": "https://attack.mitre.org/techniques/T1078",
+    "description": "Adversaries may obtain and abuse credentials of existing accounts as a means of gaining Initial Access, Persistence, Privilege Escalation, or Defense Evasion. Compromised credentials may be used to bypass access controls placed on various resources on systems within the network and may even be used for persistent access to remote systems and externally available services, such as VPNs, Outlook Web Access, network devices, and remote desktop.(Citation: volexity_0day_sophos_FW)",
+    "descripcion_es": "Usa cuentas legítimas (creadas o comprometidas) para mantener el acceso.",
+    "se_detecta": "Autenticaciones exitosas con cuentas nuevas, sin MFA o fuera de horario; correlacionar 4624 con 4720 (creación de cuenta).",
+    "eventos": [
+      "4624",
+      "4720",
+      "4768"
+    ],
+    "subtechniques": [
+      "T1078.001",
+      "T1078.002",
+      "T1078.003",
+      "T1078.004"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1078.002",
+    "name": "Domain Accounts",
+    "tactic": "Stealth",
+    "tactic_es": "Sigilo",
+    "url": "https://attack.mitre.org/techniques/T1078/002",
+    "description": "Adversaries may obtain and abuse credentials of a domain account as a means of gaining Initial Access, Persistence, Privilege Escalation, or Defense Evasion.(Citation: TechNet Credential Theft) Domain accounts are those managed by Active Directory Domain Services where access and permissions are configured across systems and services that are part of that domain.",
+    "descripcion_es": "Cuentas de dominio válidas usadas por el atacante.",
+    "se_detecta": "Logons de cuentas de dominio desde hosts que normalmente no las usan.",
+    "eventos": [
+      "4624",
+      "4768",
+      "4769"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1078.003",
+    "name": "Local Accounts",
+    "tactic": "Stealth",
+    "tactic_es": "Sigilo",
+    "url": "https://attack.mitre.org/techniques/T1078/003",
+    "description": "Adversaries may obtain and abuse credentials of a local account as a means of gaining Initial Access, Persistence, Privilege Escalation, or Defense Evasion. Local accounts are those configured by an organization for use by users, remote support, services, or for administration on a single system or service. Local Accounts may also be abused to elevate privileges and harvest credentials through OS Credential Dumping.",
+    "descripcion_es": "Cuentas locales válidas usadas para evadir controles de dominio.",
+    "se_detecta": "4624/4672 con cuentas locales en estaciones o servidores donde no deberían.",
+    "eventos": [
+      "4624",
+      "4672"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1082",
+    "name": "System Information Discovery",
+    "tactic": "Discovery",
+    "tactic_es": "Descubrimiento",
+    "url": "https://attack.mitre.org/techniques/T1082",
+    "description": "An adversary may attempt to get detailed information about the operating system and hardware, including version, patches, hotfixes, service packs, and architecture. Adversaries may use this information to shape follow-on behaviors, including whether or not the adversary fully infects the target and/or attempts specific actions. This behavior is distinct from Local Storage Discovery which is an adversary's discovery of local drive, disks and/or volumes.",
+    "descripcion_es": "Recoge información del sistema para planificar el siguiente paso.",
+    "se_detecta": "Procesos systeminfo, hostname, systeminfo o scripting de inventario fuera de ventanas de mantenimiento.",
+    "eventos": [
+      "4688"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1083",
+    "name": "File and Directory Discovery",
+    "tactic": "Discovery",
+    "tactic_es": "Descubrimiento",
+    "url": "https://attack.mitre.org/techniques/T1083",
+    "description": "Adversaries may enumerate files and directories or may search in specific locations of a host or network share for certain information within a file system. Adversaries may use the information from File and Directory Discovery during automated discovery to shape follow-on behaviors, including whether or not the adversary fully infects the target and/or attempts specific actions. Many command shell utilities can be used to obtain this information.",
+    "descripcion_es": "Explora directorios y archivos buscando datos sensibles.",
+    "se_detecta": "5145/5140 sobre rutas de Shares sensibles (SYSVOL, backups) y accesos 4663 masivos a carpetas nuevas.",
+    "eventos": [
+      "4663",
+      "5140",
+      "5145"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1087",
+    "name": "Account Discovery",
+    "tactic": "Discovery",
+    "tactic_es": "Descubrimiento",
+    "url": "https://attack.mitre.org/techniques/T1087",
+    "description": "Adversaries may attempt to get a listing of valid accounts, usernames, or email addresses on a system or within a compromised environment. This information can help adversaries determine which accounts exist, which can aid in follow-on behavior such as brute-forcing, spear-phishing attacks, or account takeovers (e.g., Valid Accounts).",
+    "descripcion_es": "Enumera cuentas de usuario para elegir objetivos.",
+    "se_detecta": "Enumeración de grupos (4799) o consultas de directorio desde estaciones comunes.",
+    "eventos": [
+      "4799",
+      "4728"
+    ],
+    "subtechniques": [
+      "T1087.001",
+      "T1087.002",
+      "T1087.003",
+      "T1087.004"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1087.002",
+    "name": "Domain Account",
+    "tactic": "Discovery",
+    "tactic_es": "Descubrimiento",
+    "url": "https://attack.mitre.org/techniques/T1087/002",
+    "description": "Adversaries may attempt to get a listing of domain accounts. This information can help adversaries determine which domain accounts exist to aid in follow-on behavior such as targeting specific accounts which possess particular privileges. Commands such as <code>net user /domain</code> and <code>net group /domain</code> of the Net utility, <code>dscacheutil -q group</code> on macOS, and <code>ldapsearch</code> on Linux can list domain users and groups.",
+    "descripcion_es": "Enumera cuentas de dominio (LDAP, grupos de seguridad).",
+    "se_detecta": "4799/4728 frecuentes desde un host que no es controlador de dominio.",
+    "eventos": [
+      "4799",
+      "4728"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1090",
+    "name": "Proxy",
+    "tactic": "Command And Control",
+    "tactic_es": "Control y mando",
+    "url": "https://attack.mitre.org/techniques/T1090",
+    "description": "Adversaries may use a connection proxy to direct network traffic between systems or act as an intermediary for network communications to a command and control server to avoid direct connections to their infrastructure. Many tools exist that enable traffic redirection through proxies or port redirection, including HTRAN, ZXProxy, and ZXPortMap.(Citation: Trend Micro APT Attack Tools) Adversaries use these types of proxies to manage command and control communications, reduce th",
+    "descripcion_es": "Usa un proxy (o cadena de ellos) para ocultar su origen real.",
+    "se_detecta": "Destinos de proxy coincidentes con listas de proxies públicos; saltos encadenados en las cabeceras de acceso.",
+    "eventos": [
+      "PROXY_ACCESS"
+    ],
+    "subtechniques": [
+      "T1090.001",
+      "T1090.002",
+      "T1090.003",
+      "T1090.004"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1095",
+    "name": "Non-Application Layer Protocol",
+    "tactic": "Command And Control",
+    "tactic_es": "Control y mando",
+    "url": "https://attack.mitre.org/techniques/T1095",
+    "description": "Adversaries may use an OSI non-application layer protocol for communication between host and C2 server or among infected hosts within a network. The list of possible protocols is extensive.(Citation: Wikipedia OSI) Specific examples include use of network layer protocols, such as the Internet Control Message Protocol (ICMP), transport layer protocols, such as the User Datagram Protocol (UDP), session layer protocols, such as Socket Secure (SOCKS), as well as redirected/tunnel",
+    "descripcion_es": "Protocolos de capa de red no aplicativos (ICMP, TCP crudo) como C2.",
+    "se_detecta": "ICMP con carga útil o conexiones TCP directas sin servicio conocido.",
+    "eventos": [
+      "FIREWALL",
+      "5156"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1098",
+    "name": "Account Manipulation",
+    "tactic": "Persistence",
+    "tactic_es": "Persistencia",
+    "url": "https://attack.mitre.org/techniques/T1098",
+    "description": "Adversaries may manipulate accounts to maintain and/or elevate access to victim systems. Account manipulation may consist of any action that preserves or modifies adversary access to a compromised account, such as modifying credentials or permission groups.(Citation: FireEye SMOKEDHAM June 2021) These actions could also include account activity designed to subvert security policies, such as performing iterative password updates to bypass password duration policies and preserv",
+    "descripcion_es": "Modifica cuentas existentes (grupos, contraseñas, atributos) para escalar.",
+    "se_detecta": "4738/4742 con cambios de atributos, 4728/4732 con agregados a grupos administradores.",
+    "eventos": [
+      "4738",
+      "4728",
+      "4732"
+    ],
+    "subtechniques": [
+      "T1098.001",
+      "T1098.002",
+      "T1098.003",
+      "T1098.004",
+      "T1098.005",
+      "T1098.006",
+      "T1098.007"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1105",
+    "name": "Ingress Tool Transfer",
+    "tactic": "Command And Control",
+    "tactic_es": "Control y mando",
+    "url": "https://attack.mitre.org/techniques/T1105",
+    "description": "Adversaries may transfer tools or other files from an external system into a compromised environment. Tools or files may be copied from an external adversary-controlled system to the victim network through the command and control channel or through alternate protocols such as ftp. Once present, adversaries may also transfer/spread tools between victim devices within a compromised environment (i.e. Lateral Tool Transfer).",
+    "descripcion_es": "Descarga herramientas o payloads desde Internet hacia la víctima.",
+    "se_detecta": "Transferencias grandes por proxy/firewall desde dominios nuevos; 4688 con certutil/mshta bitsadmin.",
+    "eventos": [
+      "4688",
+      "PROXY_ACCESS",
+      "HTTP_ACCESS"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1110",
+    "name": "Brute Force",
+    "tactic": "Credential Access",
+    "tactic_es": "Acceso a credenciales",
+    "url": "https://attack.mitre.org/techniques/T1110",
+    "description": "Adversaries may use brute force techniques to gain access to accounts when passwords are unknown or when password hashes are obtained.(Citation: TrendMicro Pawn Storm Dec 2020) Without knowledge of the password for an account or set of accounts, an adversary may systematically guess the password using a repetitive or iterative mechanism.(Citation: Dragos Crashoverride 2018) Brute forcing passwords can take place via interaction with a service that will check the validity of t",
+    "descripcion_es": "Fuerza bruta: prueba masiva de contraseñas contra cuentas.",
+    "se_detecta": "Ráfagas de 4625 sobre la misma cuenta o desde la misma IP; escalada a 4740 (lockout) y picos de 4624 tardíos tras muchos fallos.",
+    "eventos": [
+      "4625",
+      "4740",
+      "4771"
+    ],
+    "subtechniques": [
+      "T1110.001",
+      "T1110.002",
+      "T1110.003",
+      "T1110.004"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1110.001",
+    "name": "Password Guessing",
+    "tactic": "Credential Access",
+    "tactic_es": "Acceso a credenciales",
+    "url": "https://attack.mitre.org/techniques/T1110/001",
+    "description": "Adversaries with no prior knowledge of legitimate credentials within the system or environment may guess passwords to attempt access to accounts. Without knowledge of the password for an account, an adversary may opt to systematically guess the password using a repetitive or iterative mechanism. An adversary may guess login credentials without prior knowledge of system or environment passwords during an operation by using a list of common passwords.",
+    "descripcion_es": "Fuerza bruta por diccionario contra una sola cuenta.",
+    "se_detecta": "Muchos 4625 consecutivos con el mismo User y distinta Source_IP.",
+    "eventos": [
+      "4625",
+      "4740"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1110.003",
+    "name": "Password Spraying",
+    "tactic": "Credential Access",
+    "tactic_es": "Acceso a credenciales",
+    "url": "https://attack.mitre.org/techniques/T1110/003",
+    "description": "Adversaries may use a single or small list of commonly used passwords against many different accounts to attempt to acquire valid account credentials. Password spraying uses one password (e.g. 'Password01'), or a small list of commonly used passwords, that may match the complexity policy of the domain.",
+    "descripcion_es": "Password spraying: una contraseña contra muchas cuentas.",
+    "se_detecta": "4625 con el mismo patrón temporal desde una IP sobre cientos de usuarios distintos (baja tasa por cuenta, alta tasa por origen).",
+    "eventos": [
+      "4625"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1112",
+    "name": "Modify Registry",
+    "tactic": "Defense Impairment",
+    "tactic_es": "Neutralización de defensas",
+    "url": "https://attack.mitre.org/techniques/T1112",
+    "description": "Adversaries may interact with the Windows Registry as part of a variety of other techniques to aid in defense evasion, persistence, and execution. Access to specific areas of the Registry depends on account permissions, with some keys requiring administrator-level access.",
+    "descripcion_es": "Modifica el registro para cambiar configuraciones de seguridad.",
+    "se_detecta": "4657 sobre claves de auditoría, firewall o ejecución automática.",
+    "eventos": [
+      "4657",
+      "4688"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1133",
+    "name": "External Remote Services",
+    "tactic": "Persistence",
+    "tactic_es": "Persistencia",
+    "url": "https://attack.mitre.org/techniques/T1133",
+    "description": "Adversaries may leverage external-facing remote services to initially access and/or persist within a network. Remote services such as VPNs, Citrix, and other access mechanisms allow users to connect to internal enterprise network resources from external locations. There are often remote service gateways that manage connections and credential authentication for these services.",
+    "descripcion_es": "Abre un servicio de acceso remoto legítimo (VPN, RDP, correo) con credenciales válidas.",
+    "se_detecta": "Inicios de sesión desde geolocalizaciones o horarios inusuales, LogonType 10 (RDP) o 3 (red) desde orígenes no habitualmente.",
+    "eventos": [
+      "4624",
+      "4768"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1134",
+    "name": "Access Token Manipulation",
+    "tactic": "Stealth",
+    "tactic_es": "Sigilo",
+    "url": "https://attack.mitre.org/techniques/T1134",
+    "description": "Adversaries may modify access tokens to operate under a different user or system security context to perform actions and bypass access controls. Windows uses access tokens to determine the ownership of a running process. A user can manipulate access tokens to make a running process appear as though it is the child of a different process or belongs to someone other than the user that started the process.",
+    "descripcion_es": "Manipula tokens de acceso para impersonar a otros usuarios o SYSTEM.",
+    "se_detecta": "4672 (privilegios especiales) en sesiones que no deberían tenerlos.",
+    "eventos": [
+      "4672",
+      "4624"
+    ],
+    "subtechniques": [
+      "T1134.001",
+      "T1134.002",
+      "T1134.003",
+      "T1134.004",
+      "T1134.005"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1134.001",
+    "name": "Token Impersonation/Theft",
+    "tactic": "Stealth",
+    "tactic_es": "Sigilo",
+    "url": "https://attack.mitre.org/techniques/T1134/001",
+    "description": "Adversaries may duplicate then impersonate another user's existing token to escalate privileges and bypass access controls. For example, an adversary can duplicate an existing token using DuplicateToken or DuplicateTokenEx.(Citation: DuplicateToken function) The token can then be used with ImpersonateLoggedOnUser to allow the calling thread to impersonate a logged on user's security context, or with SetThreadToken to assign the impersonated token to a thread.",
+    "descripcion_es": "Robo o duplicación de tokens para impersonación.",
+    "se_detecta": "Sesiones con privilegios anómalos (4672) tras procesos no elevados.",
+    "eventos": [
+      "4672"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1136",
+    "name": "Create Account",
+    "tactic": "Persistence",
+    "tactic_es": "Persistencia",
+    "url": "https://attack.mitre.org/techniques/T1136",
+    "description": "Adversaries may create an account to maintain access to victim systems.(Citation: Symantec WastedLocker June 2020) With a sufficient level of access, creating such accounts may be used to establish secondary credentialed access that do not require persistent remote access tools to be deployed on the system. Accounts may be created on the local system or within a domain or cloud tenant.",
+    "descripcion_es": "Crea cuentas nuevas para tener acceso persistente.",
+    "se_detecta": "4720 seguido de 4728/4732 (agregado a grupos) y de 4722 (habilitación).",
+    "eventos": [
+      "4720",
+      "4728",
+      "4732"
+    ],
+    "subtechniques": [
+      "T1136.001",
+      "T1136.002",
+      "T1136.003"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1136.001",
+    "name": "Local Account",
+    "tactic": "Persistence",
+    "tactic_es": "Persistencia",
+    "url": "https://attack.mitre.org/techniques/T1136/001",
+    "description": "Adversaries may create a local account to maintain access to victim systems. Local accounts are those configured by an organization for use by users, remote support, services, or for administration on a single system or service. For example, with a sufficient level of access, the Windows <code>net user /add</code> command can be used to create a local account.",
+    "descripcion_es": "Cuenta local creada fuera del ciclo normal de altas.",
+    "se_detecta": "4720 en hosts sin gestión de identidad, con nombre genérico o administrador.",
+    "eventos": [
+      "4720",
+      "4732"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1136.002",
+    "name": "Domain Account",
+    "tactic": "Persistence",
+    "tactic_es": "Persistencia",
+    "url": "https://attack.mitre.org/techniques/T1136/002",
+    "description": "Adversaries may create a domain account to maintain access to victim systems. Domain accounts are those managed by Active Directory Domain Services where access and permissions are configured across systems and services that are part of that domain. Domain accounts can cover user, administrator, and service accounts.",
+    "descripcion_es": "Cuenta de dominio creada para persistencia o movimiento lateral.",
+    "se_detecta": "4720/4728 en el controlador de dominio con usuarios que no existen en RRHH/IT.",
+    "eventos": [
+      "4720",
+      "4728",
+      "4732"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1140",
+    "name": "Deobfuscate/Decode Files or Information",
+    "tactic": "Stealth",
+    "tactic_es": "Sigilo",
+    "url": "https://attack.mitre.org/techniques/T1140",
+    "description": "Adversaries may use Obfuscated Files or Information to hide artifacts of an intrusion from analysis. They may require separate mechanisms to decode or deobfuscate that information depending on how they intend to use it. Methods for doing that include built-in functionality of malware or by using utilities present on the system.",
+    "descripcion_es": "Decodifica o deobfusca contenido para ejecutarlo en memoria.",
+    "se_detecta": "cmd/powershell que decodifica base64 justo antes de ejecutar (4688+4104).",
+    "eventos": [
+      "4688",
+      "4104"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1190",
+    "name": "Exploit Public-Facing Application",
+    "tactic": "Initial Access",
+    "tactic_es": "Acceso inicial",
+    "url": "https://attack.mitre.org/techniques/T1190",
+    "description": "Adversaries may attempt to exploit a weakness in an Internet-facing host or system to initially access a network. The weakness in the system can be a software bug, a temporary glitch, or a misconfiguration. Exploited applications are often websites/web servers, but can also include databases (like SQL), standard services (like SMB or SSH), network device administration and management protocols (like SNMP and Smart Install), and any other system with Internet-accessible open s",
+    "descripcion_es": "Explota una aplicación expuesta a Internet para entrar a la red.",
+    "se_detecta": "Patrones anómalos en logs de proxy/IIS: respuestas 4xx/5xx repetidas, payloads con caracteres escapados o rutas de traversal desde una IP.",
+    "eventos": [
+      "HTTP_ACCESS",
+      "PROXY_ACCESS"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1218",
+    "name": "System Binary Proxy Execution",
+    "tactic": "Stealth",
+    "tactic_es": "Sigilo",
+    "url": "https://attack.mitre.org/techniques/T1218",
+    "description": "Adversaries may bypass process and/or signature-based defenses by proxying execution of malicious content with signed, or otherwise trusted, binaries. Binaries used in this technique are often Microsoft-signed files, indicating that they have been either downloaded from Microsoft or are already native in the operating system.(Citation: LOLBAS Project) Binaries signed with trusted digital certificates can typically execute on Windows systems protected by digital signature vali",
+    "descripcion_es": "Usa binarios firmados de Windows para ejecutar código y evadir control.",
+    "se_detecta": "rundll32, regsvr32, msiexec, mshta o verisign.dll invocados con argumentos sospechosos (http, /sc:, dll descargada).",
+    "eventos": [
+      "4688"
+    ],
+    "subtechniques": [
+      "T1218.001",
+      "T1218.002",
+      "T1218.003",
+      "T1218.004",
+      "T1218.005",
+      "T1218.007",
+      "T1218.008",
+      "T1218.009",
+      "T1218.010",
+      "T1218.011",
+      "T1218.012",
+      "T1218.013",
+      "T1218.014",
+      "T1218.015"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1218.011",
+    "name": "Rundll32",
+    "tactic": "Stealth",
+    "tactic_es": "Sigilo",
+    "url": "https://attack.mitre.org/techniques/T1218/011",
+    "description": "Adversaries may abuse rundll32.exe to proxy execution of malicious code. Using rundll32.exe, vice executing directly (i.e. Shared Modules), may avoid triggering security tools that may not monitor execution of the rundll32.exe process because of allowlists or false positives from normal operations. Rundll32.exe is commonly associated with executing DLL payloads (ex: <code>rundll32.exe {DLLname, DLLfunction}</code>).",
+    "descripcion_es": "rundll32.exe para ejecutar código en DLL.",
+    "se_detecta": "rundll32 con rutas a Temp/AppData o con parámetros de exportación raros.",
+    "eventos": [
+      "4688"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1485",
+    "name": "Data Destruction",
+    "tactic": "Impact",
+    "tactic_es": "Impacto",
+    "url": "https://attack.mitre.org/techniques/T1485",
+    "description": "Adversaries may destroy data and files on specific systems or in large numbers on a network to interrupt availability to systems, services, and network resources. Data destruction is likely to render stored data irrecoverable by forensic techniques through overwriting files or data on local and remote drives.(Citation: Symantec Shamoon 2012)(Citation: FireEye Shamoon Nov 2016)(Citation: Palo Alto Shamoon Nov 2016)(Citation: Kaspersky StoneDrill 2017)(Citation: Unit 42 Shamoon",
+    "descripcion_es": "Destruye datos para causar daño aunque no haya rescate.",
+    "se_detecta": "Borrados masivos (4663 con DELETE) y formatos fuera de procedimiento.",
+    "eventos": [
+      "4663",
+      "4688"
+    ],
+    "subtechniques": [
+      "T1485.001"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1486",
+    "name": "Data Encrypted for Impact",
+    "tactic": "Impact",
+    "tactic_es": "Impacto",
+    "url": "https://attack.mitre.org/techniques/T1486",
+    "description": "Adversaries may encrypt data on target systems or on large numbers of systems in a network to interrupt availability to system and network resources. They can attempt to render stored data inaccessible by encrypting files or data on local and remote drives and withholding access to a decryption key.",
+    "descripcion_es": "Cifra archivos exigiendo rescate (ransomware).",
+    "se_detecta": "Explosión de accesos 4663/5145 a muchos archivos en poco tiempo, cambios de extensión y 4688 con vssadmin/bcdedit.",
+    "eventos": [
+      "4663",
+      "4688",
+      "5145"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1489",
+    "name": "Service Stop",
+    "tactic": "Impact",
+    "tactic_es": "Impacto",
+    "url": "https://attack.mitre.org/techniques/T1489",
+    "description": "Adversaries may stop or disable services on a system to render those services unavailable to legitimate users. Stopping critical services or processes can inhibit or stop response to an incident or aid in the adversary's overall objectives to cause damage to the environment.(Citation: Talos Olympic Destroyer 2018)(Citation: Novetta Blockbuster) Adversaries may accomplish this by disabling individual services of high importance to an organization, such as <code>MSExchangeIS</c",
+    "descripcion_es": "Detiene servicios clave (bases de datos, correo) para forzar impacto.",
+    "se_detecta": "7036/7040 con paradas de servicios críticos fuera de mantenimiento.",
+    "eventos": [
+      "7036",
+      "7040",
+      "4688"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1490",
+    "name": "Inhibit System Recovery",
+    "tactic": "Impact",
+    "tactic_es": "Impacto",
+    "url": "https://attack.mitre.org/techniques/T1490",
+    "description": "Adversaries may delete or remove built-in data and turn off services designed to aid in the recovery of a corrupted system to prevent recovery.(Citation: Talos Olympic Destroyer 2018)(Citation: FireEye WannaCry 2017) This may deny access to available backups and recovery options. Operating systems may contain features that can help fix corrupted systems, such as a backup catalog, volume shadow copies, and automatic repair features.",
+    "descripcion_es": "Impide la recuperación borrando copias de seguridad y instantáneas.",
+    "se_detecta": "4688 con `vssadmin delete shadows` / `bcdedit /set recoveryenabled no`.",
+    "eventos": [
+      "4688"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1543",
+    "name": "Create or Modify System Process",
+    "tactic": "Persistence",
+    "tactic_es": "Persistencia",
+    "url": "https://attack.mitre.org/techniques/T1543",
+    "description": "Adversaries may create or modify system-level processes to repeatedly execute malicious payloads as part of persistence. When operating systems boot up, they can start processes that perform background system functions. On Windows and Linux, these system processes are referred to as services.(Citation: TechNet Services) On macOS, launchd processes known as Launch Daemon and Launch Agent are run to finish system initialization and load user specific parameters.(Citation: Apple",
+    "descripcion_es": "Crea o modifica procesos de sistema (servicios) para persistir.",
+    "se_detecta": "7045 + 7036 en hosts donde no hay despliegues; imagen del servicio en rutas de usuario.",
+    "eventos": [
+      "7045",
+      "7036",
+      "7040"
+    ],
+    "subtechniques": [
+      "T1543.001",
+      "T1543.002",
+      "T1543.003",
+      "T1543.004",
+      "T1543.005"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1543.003",
+    "name": "Windows Service",
+    "tactic": "Persistence",
+    "tactic_es": "Persistencia",
+    "url": "https://attack.mitre.org/techniques/T1543/003",
+    "description": "Adversaries may create or modify Windows services to repeatedly execute malicious payloads as part of persistence. When Windows boots up, it starts programs or applications called services that perform background system functions.(Citation: TechNet Services) Windows service configuration information, including the file path to the service's executable or recovery programs/commands, is stored in the Windows Registry.",
+    "descripcion_es": "Servicio de Windows creado o modificado por el atacante.",
+    "se_detecta": "Servicio nuevo con start type automático y binario no firmado.",
+    "eventos": [
+      "7045",
+      "7036"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1547",
+    "name": "Boot or Logon Autostart Execution",
+    "tactic": "Persistence",
+    "tactic_es": "Persistencia",
+    "url": "https://attack.mitre.org/techniques/T1547",
+    "description": "Adversaries may configure system settings to automatically execute a program during system boot or logon to maintain persistence or gain higher-level privileges on compromised systems. Operating systems may have mechanisms for automatically running a program on system boot or account logon.(Citation: Microsoft Run Key)(Citation: MSDN Authentication Packages)(Citation: Microsoft TimeProvider)(Citation: Cylance Reg Persistence Sept 2013)(Citation: Linux Kernel Programming) Thes",
+    "descripcion_es": "Ejecuta al arrancar o al iniciar sesión para sobrevivir reinicios.",
+    "se_detecta": "Modificaciones de claves de ejecución automática (Run, Winlogon) — 4657 sobre HKCU/HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run.",
+    "eventos": [
+      "4657",
+      "4688"
+    ],
+    "subtechniques": [
+      "T1547.001",
+      "T1547.002",
+      "T1547.003",
+      "T1547.004",
+      "T1547.005",
+      "T1547.006",
+      "T1547.007",
+      "T1547.008",
+      "T1547.009",
+      "T1547.010",
+      "T1547.012",
+      "T1547.013",
+      "T1547.014",
+      "T1547.015"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1547.001",
+    "name": "Registry Run Keys / Startup Folder",
+    "tactic": "Persistence",
+    "tactic_es": "Persistencia",
+    "url": "https://attack.mitre.org/techniques/T1547/001",
+    "description": "Adversaries may achieve persistence by adding a program to a startup folder or referencing it with a Registry run key. Adding an entry to the \"run keys\" in the Registry or startup folder will cause the program referenced to be executed when a user logs in.(Citation: Microsoft Run Key) These programs will be executed under the context of the user and will have the account's associated permissions level.",
+    "descripcion_es": "Claves de registro Run o carpeta Startup como arranque automático.",
+    "se_detecta": "4657 sobre valores Run apuntando a AppData, Temp o scripts.",
+    "eventos": [
+      "4657",
+      "4688"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1548",
+    "name": "Abuse Elevation Control Mechanism",
+    "tactic": "Privilege Escalation",
+    "tactic_es": "Elevación de privilegios",
+    "url": "https://attack.mitre.org/techniques/T1548",
+    "description": "Adversaries may circumvent mechanisms designed to control privilege elevation to gain higher-level permissions. Most modern systems contain native elevation control mechanisms that are intended to limit privileges that a user can perform on a machine.",
+    "descripcion_es": "Abusa de mecanismos de control de elevación para obtener más privilegios.",
+    "se_detecta": "Procesos elevados inesperados; 4672 (permisos especiales) asociado a sesiones no administrativas.",
+    "eventos": [
+      "4672",
+      "4688"
+    ],
+    "subtechniques": [
+      "T1548.001",
+      "T1548.002",
+      "T1548.003",
+      "T1548.004",
+      "T1548.005",
+      "T1548.006"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1548.002",
+    "name": "Bypass User Account Control",
+    "tactic": "Privilege Escalation",
+    "tactic_es": "Elevación de privilegios",
+    "url": "https://attack.mitre.org/techniques/T1548/002",
+    "description": "Adversaries may bypass UAC mechanisms to elevate process privileges on system. Windows User Account Control (UAC) allows a program to elevate its privileges (tracked as integrity levels ranging from low to high) to perform a task under administrator-level permissions, possibly by prompting the user for confirmation.",
+    "descripcion_es": "Bypass de UAC para obtener token de administrador sin consentimiento.",
+    "se_detecta": "fodhelper.exe / sdclt / eventvwr.exe lanzados por procesos de usuario comunes; 4672 justo después.",
+    "eventos": [
+      "4672",
+      "4688"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1550",
+    "name": "Use Alternate Authentication Material",
+    "tactic": "Lateral Movement",
+    "tactic_es": "Movimiento lateral",
+    "url": "https://attack.mitre.org/techniques/T1550",
+    "description": "Adversaries may use alternate authentication material, such as password hashes, Kerberos tickets, and application access tokens, in order to move laterally within an environment and bypass normal system access controls. Authentication processes generally require a valid identity (e.g., username) along with one or more authentication factors (e.g., password, pin, physical smart card, token generator, etc.).",
+    "descripcion_es": "Usa material de autenticación alternativo (hash, ticket) sin contraseña.",
+    "se_detecta": "4624 con LogonType 9/3 y sesiones que no siguen el flujo 4768→4769.",
+    "eventos": [
+      "4624",
+      "4648"
+    ],
+    "subtechniques": [
+      "T1550.001",
+      "T1550.002",
+      "T1550.003",
+      "T1550.004"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1550.002",
+    "name": "Pass the Hash",
+    "tactic": "Lateral Movement",
+    "tactic_es": "Movimiento lateral",
+    "url": "https://attack.mitre.org/techniques/T1550/002",
+    "description": "Adversaries may “pass the hash” using stolen password hashes to move laterally within an environment, bypassing normal system access controls. Pass the hash (PtH) is a method of authenticating as a user without having access to the user's cleartext password. This method bypasses standard authentication steps that require a cleartext password, moving directly into the portion of the authentication that uses the password hash.",
+    "descripcion_es": "Pass the Hash: autenticación con el hash NTLM en lugar de la contraseña.",
+    "se_detecta": "4624 LogonType 3/9 con NTLM en hosts donde no hay administración remota.",
+    "eventos": [
+      "4624",
+      "4648"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1550.003",
+    "name": "Pass the Ticket",
+    "tactic": "Lateral Movement",
+    "tactic_es": "Movimiento lateral",
+    "url": "https://attack.mitre.org/techniques/T1550/003",
+    "description": "Adversaries may “pass the ticket” using stolen Kerberos tickets to move laterally within an environment, bypassing normal system access controls. Pass the ticket (PtT) is a method of authenticating to a system using Kerberos tickets without having access to an account's password. Kerberos authentication can be used as the first step to lateral movement to a remote system. When preforming PtT, valid Kerberos tickets for Valid Accounts are captured by OS Credential Dumping.",
+    "descripcion_es": "Pass the Ticket: reutiliza tickets Kerberos robados.",
+    "se_detecta": "4769 sin 4768 previo en la misma sesión o desde otro host.",
+    "eventos": [
+      "4769",
+      "4768"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1558",
+    "name": "Steal or Forge Kerberos Tickets",
+    "tactic": "Credential Access",
+    "tactic_es": "Acceso a credenciales",
+    "url": "https://attack.mitre.org/techniques/T1558",
+    "description": "Adversaries may attempt to subvert Kerberos authentication by stealing or forging Kerberos tickets to enable Pass the Ticket. Kerberos is an authentication protocol widely used in modern Windows domain environments. In Kerberos environments, referred to as “realms”, there are three basic participants: client, service, and Key Distribution Center (KDC).(Citation: ADSecurity Kerberos Ring Decoder) Clients request access to a service and through the exchange of Kerberos tickets,",
+    "descripcion_es": "Roba o forja tickets Kerberos (Golden/Silver Ticket).",
+    "se_detecta": "4769 con encriptación inusual (0x17 RC4) o tickets con vida larga; servicios solicitados que no existen.",
+    "eventos": [
+      "4768",
+      "4769"
+    ],
+    "subtechniques": [
+      "T1558.001",
+      "T1558.002",
+      "T1558.003",
+      "T1558.004",
+      "T1558.005"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1558.003",
+    "name": "Kerberoasting",
+    "tactic": "Credential Access",
+    "tactic_es": "Acceso a credenciales",
+    "url": "https://attack.mitre.org/techniques/T1558/003",
+    "description": "Adversaries may abuse a valid Kerberos ticket-granting ticket (TGT) or sniff network traffic to obtain a ticket-granting service (TGS) ticket that may be vulnerable to Brute Force.(Citation: Empire InvokeKerberoast Oct 2016)(Citation: AdSecurity Cracking Kerberos Dec 2015) Service principal names (SPNs) are used to uniquely identify each instance of a Windows service.",
+    "descripcion_es": "Kerberoasting: solicita tickets de servicio para crackear el hash.",
+    "se_detecta": "4769 de servicios con encriptación RC4 (0x17) desde una cuenta sin relación con el servicio.",
+    "eventos": [
+      "4769",
+      "4768"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1566",
+    "name": "Phishing",
+    "tactic": "Initial Access",
+    "tactic_es": "Acceso inicial",
+    "url": "https://attack.mitre.org/techniques/T1566",
+    "description": "Adversaries may send phishing messages to gain access to victim systems. All forms of phishing are electronically delivered social engineering. Phishing can be targeted, known as spearphishing. In spearphishing, a specific individual, company, or industry will be targeted by the adversary. More generally, adversaries can conduct non-targeted phishing, such as in mass malware spam campaigns.",
+    "descripcion_es": "Envía adjuntos o enlaces maliciosos para que el usuario ejecute código.",
+    "se_detecta": "Dominios de correo/descarga recién registrados o desconocidos en el proxy, clics a acortadores desde estaciones de usuario.",
+    "eventos": [
+      "PROXY_ACCESS",
+      "HTTP_ACCESS"
+    ],
+    "subtechniques": [
+      "T1566.001",
+      "T1566.002",
+      "T1566.003",
+      "T1566.004"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1567",
+    "name": "Exfiltration Over Web Service",
+    "tactic": "Exfiltration",
+    "tactic_es": "Exfiltración",
+    "url": "https://attack.mitre.org/techniques/T1567",
+    "description": "Adversaries may use an existing, legitimate external Web service to exfiltrate data rather than their primary command and control channel. Popular Web services acting as an exfiltration mechanism may give a significant amount of cover due to the likelihood that hosts within a network are already communicating with them prior to compromise. Firewall rules may also already exist to permit traffic to these services.",
+    "descripcion_es": "Exfiltra a servicios web o nube públicos.",
+    "se_detecta": "Subidas a almacenamiento en nube desde estaciones que no lo usan.",
+    "eventos": [
+      "PROXY_ACCESS",
+      "HTTP_ACCESS"
+    ],
+    "subtechniques": [
+      "T1567.001",
+      "T1567.002",
+      "T1567.003",
+      "T1567.004"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1567.002",
+    "name": "Exfiltration to Cloud Storage",
+    "tactic": "Exfiltration",
+    "tactic_es": "Exfiltración",
+    "url": "https://attack.mitre.org/techniques/T1567/002",
+    "description": "Adversaries may exfiltrate data to a cloud storage service rather than over their primary command and control channel. Cloud storage services allow for the storage, edit, and retrieval of data from a remote cloud storage server over the Internet. Examples of cloud storage services include Dropbox and Google Docs.",
+    "descripcion_es": "Exfiltra a almacenamiento en la nube (Drive, Dropbox, S3…).",
+    "se_detecta": "POST de gran tamaño a dominios de proveedores de nube conocidos.",
+    "eventos": [
+      "PROXY_ACCESS",
+      "HTTP_ACCESS"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1569",
+    "name": "System Services",
+    "tactic": "Execution",
+    "tactic_es": "Ejecución",
+    "url": "https://attack.mitre.org/techniques/T1569",
+    "description": "Adversaries may abuse system services or daemons to execute commands or programs. Adversaries can execute malicious content by interacting with or creating services either locally or remotely. Many services are set to run at boot, which can aid in achieving persistence (Create or Modify System Process), but adversaries can also abuse services for one-time or temporary execution.",
+    "descripcion_es": "Ejecuta servicios del sistema para correr con privilegios.",
+    "se_detecta": "Servicios que arrancan binarios en rutas de usuario o temporales.",
+    "eventos": [
+      "7045",
+      "7036"
+    ],
+    "subtechniques": [
+      "T1569.001",
+      "T1569.002",
+      "T1569.003"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1569.001",
+    "name": "Launchctl",
+    "tactic": "Execution",
+    "tactic_es": "Ejecución",
+    "url": "https://attack.mitre.org/techniques/T1569/001",
+    "description": "Adversaries may abuse launchctl to execute commands or programs. Launchctl interfaces with launchd, the service management framework for macOS. Launchctl supports taking subcommands on the command-line, interactively, or even redirected from standard input.(Citation: Launchctl Man) Adversaries use launchctl to execute commands and programs as Launch Agents or Launch Daemons.",
+    "descripcion_es": "Creación de servicio para ejecutar con SYSTEM.",
+    "se_detecta": "7045 (servicio nuevo) con imagen fuera de rutas estándar de Windows.",
+    "eventos": [
+      "7045",
+      "7036",
+      "4688"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1571",
+    "name": "Non-Standard Port",
+    "tactic": "Command And Control",
+    "tactic_es": "Control y mando",
+    "url": "https://attack.mitre.org/techniques/T1571",
+    "description": "Adversaries may communicate using a protocol and port pairing that are typically not associated. For example, HTTPS over port 8088(Citation: Symantec Elfin Mar 2019) or port 587(Citation: Fortinet Agent Tesla April 2018) as opposed to the traditional port 443. Adversaries may make changes to the standard port used by a protocol to bypass filtering or muddle analysis/parsing of network data. Adversaries may also make changes to victim systems to abuse non-standard ports.",
+    "descripcion_es": "Usa puertos no estándar para evadir filtrados por puerto.",
+    "se_detecta": "5156 o firewall con sesiones a puertos fuera del inventario autorizado.",
+    "eventos": [
+      "5156",
+      "FIREWALL"
+    ],
+    "subtechniques": [],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1573",
+    "name": "Encrypted Channel",
+    "tactic": "Command And Control",
+    "tactic_es": "Control y mando",
+    "url": "https://attack.mitre.org/techniques/T1573",
+    "description": "Adversaries may employ an encryption algorithm to conceal command and control traffic rather than relying on any inherent protections provided by a communication protocol. Despite the use of a secure algorithm, these implementations may be vulnerable to reverse engineering if secret keys are encoded and/or generated within malware samples/configuration files.",
+    "descripcion_es": "Cifra el canal de comunicación para evitar inspección.",
+    "se_detecta": "TLS con SNI no coincidente con el certificado o tráfico cifrado a puertos inusuales en 5156.",
+    "eventos": [
+      "PROXY_ACCESS",
+      "5156"
+    ],
+    "subtechniques": [
+      "T1573.001",
+      "T1573.002"
+    ],
+    "aliases": []
+  },
+  {
+    "kind": "technique",
+    "id": "T1685",
+    "name": "Disable or Modify Tools",
+    "tactic": "Defense Impairment",
+    "tactic_es": "Neutralización de defensas",
+    "url": "https://attack.mitre.org/techniques/T1685",
+    "description": "Adversaries may disable, degrade, or tamper with security tools or applications (e.g., endpoint detection and response (EDR) tools, intrusion detection systems (IDS), antivirus, logging agents, sensors, etc.) to impair or reduce visibility of defensive capabilities. This may include stopping specific services, killing processes, modifying or deleting tool configuration files and Registry keys, or preventing tools from updating.",
+    "descripcion_es": "Debilita herramientas y controles de seguridad del entorno.",
+    "se_detecta": "Servicio de Defender detenido, reglas de firewall cambiadas (4946/4950) o eventos 5156 que permiten tráfico antes bloqueado.",
+    "eventos": [
+      "5156",
+      "1116"
+    ],
+    "subtechniques": [
+      "T1685.001",
+      "T1685.002",
+      "T1685.003",
+      "T1685.004",
+      "T1685.005",
+      "T1685.006",
+      "T1685.007"
+    ],
+    "aliases": [
+      "T1562",
+      "T1562.001"
+    ]
+  },
+  {
+    "kind": "technique",
+    "id": "T1685.005",
+    "name": "Clear Windows Event Logs",
+    "tactic": "Defense Impairment",
+    "tactic_es": "Neutralización de defensas",
+    "url": "https://attack.mitre.org/techniques/T1685/005",
+    "description": "Adversaries may clear Windows Event Logs to hide the activity of an intrusion. Windows Event Logs are a record of a computer's alerts and notifications. There are three system-defined sources of events: System, Application, and Security, with five event types: Error, Warning, Information, Success Audit, and Failure Audit.",
+    "descripcion_es": "Borra el registro de seguridad de Windows.",
+    "se_detecta": "1102 en cualquier host: es una alerta de por sí, revisar quién lo generó.",
+    "eventos": [
+      "1102"
+    ],
+    "subtechniques": [],
+    "aliases": [
+      "T1070.001"
+    ]
+  },
+  {
+    "kind": "technique",
+    "id": "T1686",
+    "name": "Disable or Modify System Firewall",
+    "tactic": "Defense Impairment",
+    "tactic_es": "Neutralización de defensas",
+    "url": "https://attack.mitre.org/techniques/T1686",
+    "description": "Adversaries may disable or modify host-based or network firewalls to impair defensive mechanisms and enable further action. Once an adversary has gathered sufficient privileges, they can tamper with firewall services, policies, or rule sets to remove restrictions on inbound or outbound traffic.",
+    "descripcion_es": "Deshabilita o modifica el firewall de Windows.",
+    "se_detecta": "4946 (regla de firewall añadida/cambiada), 5156 con Allow-any, perfiles de firewall cambiados (4950).",
+    "eventos": [
+      "5156",
+      "4946"
+    ],
+    "subtechniques": [
+      "T1686.001",
+      "T1686.002",
+      "T1686.003"
+    ],
+    "aliases": [
+      "T1562.004"
+    ]
+  }
+]

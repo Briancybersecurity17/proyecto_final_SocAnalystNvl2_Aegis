@@ -35,12 +35,20 @@ sospechosos, clasifica el riesgo en cuatro niveles con justificación, y genera 
 
 ```
 proyecto_final_bootcamp_ComunidadDojo_SocAnalystNvl2/
-├─ .gitignore                 # node_modules, .venv, .env, logs, editores
+├─ .gitignore                 # node_modules, .venv, .env, logs, editores, cachés RAG/KB
 ├─ README.md
 ├─ test_backend.py            # prueba end-to-end del backend
+├─ test_rag.py                # prueba del índice semántico (RAG)
+├─ test_kb.py                 # prueba de la base de conocimiento (ATT&CK + Event IDs)
 ├─ backend/
-│  ├─ main.py                 # FastAPI: /analyze, /rows, /report, SSE (puerto 8500)
+│  ├─ main.py                 # FastAPI: /analyze, /rows, /report, /ask, /kb/status, SSE (8500)
 │  ├─ ai_service.py           # IA de redacción con grounding estricto + fallback local
+│  ├─ rag_store.py            # índice semántico de los eventos (ChromaDB, colección soc_events)
+│  ├─ kb_store.py             # base de conocimiento: ATT&CK + glosario (colección soc_kb)
+│  ├─ knowledge/
+│  │  ├─ mitre_attack.json    # 79 técnicas (generada por scripts/build_kb.py)
+│  │  └─ event_ids.json       # 44 Event IDs de Windows (curado a mano)
+│  ├─ scripts/build_kb.py     # descarga el bundle STIX oficial y regenera la KB
 │  └─ requirements.txt
 └─ frontend/                  # React + Vite + TypeScript (puerto 5300)
    ├─ index.html
@@ -56,6 +64,7 @@ proyecto_final_bootcamp_ComunidadDojo_SocAnalystNvl2/
          ├─ SecurityAnalysis.tsx
          ├─ RiskClassification.tsx
          ├─ ReportGenerator.tsx
+         ├─ AssistantChat.tsx / ReferenceBlock (tarjetas ATT&CK + Event IDs)
          └─ ServicePulse.tsx / SummaryCard.tsx / DashboardSection.tsx
 ```
 
@@ -153,7 +162,49 @@ Endpoints nuevos:
 ```bash
 POST /api/analysis/{id}/ask      # {question, level?, suspicious?, n_results?}
 GET  /api/rag/status             # estado del índice (?analysis_id=...)
+GET  /api/kb/status              # estado de la base de conocimiento
 ```
+
+---
+
+## Base de conocimiento RAG (MITRE ATT&CK + significado de eventos)
+
+El asistente no solo recupera registros: también **explica qué significan**. Dos
+fuentes locales, versionadas en el repositorio y sin API keys:
+
+| Fuente | Archivo | Contenido |
+|---|---|---|
+| **MITRE ATT&CK** | `backend/knowledge/mitre_attack.json` | **79 técnicas** generadas por `backend/scripts/build_kb.py` desde el bundle STIX oficial (`github.com/mitre/cti` → `enterprise-attack.json`). Cada entrada guarda la descripción **oficial en inglés** + la URL en `attack.mitre.org` (verificable) y, en español, qué es y **cómo se detecta**. |
+| **Event IDs de Windows** | `backend/knowledge/event_ids.json` | **44 entradas** curadas a mano (Security, System, PowerShell, IIS/Proxy/Firewall): título, significado, **por qué importa** y técnicas asociadas. |
+
+| Pieza | Archivo | Qué hace |
+|---|---|---|
+| Motor de la KB | `backend/kb_store.py` | indexa los JSON en su propia colección Chroma (`soc_kb`, mismo cliente que `rag_store`), `search()` semántica con respaldo léxico, `lookup_event_ids()`, `build_reference()` |
+| Referencia | `backend/main.py` → `/ask` | `build_reference(pregunta, evidencia)` combina 3 vías: Event_IDs **observados en la evidencia** → su significado → técnicas; IDs **citados en la pregunta** («¿qué es el 1102?»); y búsqueda semántica sobre la consulta |
+| Respuesta | `backend/ai_service.py` | añade el bloque **«Referencia técnica»** al texto y entrega `reference` estructurada; al modelo remoto se le instruye para usarla **solo como explicación**, jamás como hallazgo |
+| UI | `AssistantChat.tsx` → `<ReferenceBlock>` | chips de Event ID («en tus registros» / «citado en tu consulta») + tarjetas de técnica con táctica, detección y enlace a `attack.mitre.org` |
+
+**Rigor analítico:** la KB es **material de marco**, separado de la evidencia en
+todo momento (etiqueta `SOURCE_NOTE` en la API, en el texto de la respuesta y en
+el prompt del modelo). Nunca afirma que una técnica haya ocurrido: eso solo lo
+deciden los registros importados.
+
+**Renumeraciones de MITRE:** el builder sigue las relaciones `revoked-by` del
+bundle (T1562 + T1562.001 → **T1685**, T1562.004 → **T1686**, T1070.001 →
+**T1685.005**) y conserva los IDs antiguos como `aliases`, así una búsqueda de
+«T1562.004» sigue resolviendo a la técnica vigente.
+
+```bash
+python backend/scripts/build_kb.py            # regenera mitre_attack.json (usa la caché)
+python backend/scripts/build_kb.py --force    # fuerza la re-descarga del bundle STIX (~49 MB)
+```
+
+La caché `backend/data/kb_cache/` (~49 MB) está en `.gitignore`; los dos JSON
+generados **sí** se versionan, así el proyecto funciona sin red.
+
+**Degradación elegante:** sin `chromadb`, `kb_store.search()` cae a búsqueda
+léxica sobre los propios JSON y la referencia sigue disponible
+(`status().available = false` con el motivo).
 
 ---
 
@@ -178,6 +229,18 @@ python test_rag.py ruta/archivo.xlsx
 
 Comprueba: motor disponible → indexación → 6 consultas en español sobre logs en
 inglés → filtros por criticidad y sospecha → degradación elegante.
+
+Prueba de la base de conocimiento (MITRE ATT&CK + glosario de Event IDs):
+
+```bash
+python test_kb.py                                   # coherencia + búsqueda + referencia
+```
+
+Comprueba: carga de los JSON → referencias cruzadas sin roturas → búsqueda
+semántica («fuerza bruta» → T1110, «ransomware» → T1486) → alias renumerados
+(T1562.004 → T1686) → referencia anclada a la evidencia (4625 → T1110) → IDs
+citados en la pregunta → bloque «Referencia técnica» en la respuesta →
+degradación sin Chroma.
 
 Verificación de tipos en el frontend:
 

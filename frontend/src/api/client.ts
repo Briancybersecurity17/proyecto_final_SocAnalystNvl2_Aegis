@@ -81,6 +81,54 @@ export interface AskEvidence {
   document: string
 }
 
+/** Entrada del glosario de Event IDs (base de conocimiento). */
+export interface KbEventEntry {
+  id: string
+  titulo: string
+  descripcion: string
+  por_que_importa: string
+  relacionados: string[]
+  fuente: string
+  /** 'evidencia' = observado en los registros; 'consulta' = citado en la pregunta. */
+  match: 'evidencia' | 'consulta'
+}
+
+/** Técnica MITRE ATT&CK (referencia del marco, nunca un hallazgo). */
+export interface KbTechnique {
+  id: string
+  name: string
+  tactic: string
+  tactic_es: string
+  url: string
+  descripcion_es: string
+  se_detecta: string
+  eventos: string[]
+  aliases: string[]
+  description_en: string
+  match: 'eventos' | 'consulta'
+  score?: number
+}
+
+/** Bloque «Referencia técnica» devuelto junto a la respuesta del asistente. */
+export interface KbReference {
+  available: boolean
+  note: string
+  event_ids: KbEventEntry[]
+  techniques: KbTechnique[]
+  observed_event_ids: string[]
+}
+
+/** Estado de la base de conocimiento (GET /api/kb/status). */
+export interface KbStatus {
+  available: boolean
+  reason?: string | null
+  techniques: number
+  event_ids: number
+  source: string
+  indexed: boolean
+  documents?: number
+}
+
 export interface AskResponse {
   analysis_id: string
   question: string
@@ -89,6 +137,8 @@ export interface AskResponse {
   /** Redacción de la respuesta (markdown sencillo, siempre en español). */
   answer: string
   evidence: AskEvidence[]
+  /** Referencia del marco (MITRE ATT&CK + Event IDs), separada de la evidencia. */
+  reference?: KbReference
   summary_line: string
   confidence: 'alta' | 'media' | 'baja' | 'ninguna'
   /** 'deterministic' = motor local; 'llm' = modelo remoto (con grounding validado). */
@@ -96,6 +146,7 @@ export interface AskResponse {
   model: string | null
   warnings: string[]
   rag: { available: boolean; reason?: string | null; model: string; total: number }
+  kb?: KbStatus
 }
 
 /**
@@ -137,6 +188,15 @@ export const getRagStatus = async (analysisId?: string) => {
     params: analysisId ? { analysis_id: analysisId } : {},
   })
   return response.data as RagStatusResponse
+}
+
+/**
+ * Estado de la base de conocimiento (MITRE ATT&CK + glosario de Event IDs).
+ * Devuelve siempre 200: `available: false` si faltan dependencias opcionales.
+ */
+export const getKbStatus = async () => {
+  const response = await API.get('/kb/status')
+  return response.data as KbStatus
 }
 
 export const listenAnalysisEvents = (analysisId: string, onStatus: (status: string) => void) => {

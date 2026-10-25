@@ -17,6 +17,9 @@ __pycache__/
 # ----- Índice RAG local (regenerable, se indexa al subir el Excel) -----
 backend/data/rag/
 
+# ----- Caché de la base de conocimiento (bundle STIX de MITRE, ~50 MB) -----
+backend/data/kb_cache/
+
 # ----- OS / editor files -----
 .DS_Store
 Thumbs.db

@@ -1,0 +1,399 @@
+[
+  {
+    "kind": "event_id",
+    "id": "4624",
+    "titulo": "Inicio de sesión exitoso",
+    "descripcion": "Se creó un token de inicio de sesión tras una autenticación correcta.",
+    "por_que_importa": "Base de todo análisis de acceso: revisar LogonType (2 local, 3 red, 4 batch, 5 servicio, 7 desbloqueo, 8 network cleartext, 9 nuevo credencial, 10 RDP, 11 CredSSP), la cuenta usada y si el origen es inusual para ella.",
+    "logon_types": "2 local · 3 red/SMB · 8 cleartext · 9 explícito · 10 RDP · 11 CredSSP",
+    "relacionados": ["T1078", "T1021", "T1133"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "4625",
+    "titulo": "Inicio de sesión fallido",
+    "descripcion": "La autenticación falló: contraseña incorrecta, cuenta inexistente, bloqueada, expirada o sin derechos de inicio de sesión.",
+    "por_que_importa": "Principal indicador de fuerza bruta o spraying. Contar ráfagas por cuenta y por Source_IP, mirar SubStatus (0xC000006A contraseña incorrecta, 0xC0000234 cuenta bloqueada, 0xC0000064 cuenta inexistente) y si escala a 4740.",
+    "relacionados": ["T1110", "T1110.001", "T1110.003"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "4634",
+    "titulo": "Cierre de sesión",
+    "descripcion": "Se cerró una sesión (logoff). No es un error: cierra la sesión creada por un 4624.",
+    "por_que_importa": "Contexto, no hallazgo por sí solo. Sirve para medir sesiones cortas y frecuentes (posible latencia de automatización) y para emparejar con los inicios de sesión correspondientes.",
+    "relacionados": ["T1078"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "4648",
+    "titulo": "Inicio de sesión con credenciales explícitas",
+    "descripcion": "Un proceso inició sesión con credenciales indicadas a mano (RunAs, herramientas de administración remota o scripts).",
+    "por_que_importa": "Puede indicar movimiento lateral o uso de una cuenta comprometida fuera de su flujo habitual; correlacionar con el host de destino y la cuenta usada.",
+    "relacionados": ["T1550", "T1021"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "4656",
+    "titulo": "Solicitud de acceso a un objeto",
+    "descripcion": "Se pidió un manejador (handle) sobre un objeto (archivo, registro, proceso) y el sistema resolvió la solicitud.",
+    "por_que_importa": "Acompaña al 4663: el par solicitud/uso permite ver qué proceso abrió qué recurso y con qué permisos.",
+    "relacionados": ["T1003", "T1083"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "4657",
+    "titulo": "Objeto de registro modificado",
+    "descripcion": "Se creó, modificó o eliminó una clave o valor de registro que estaba bajo auditoría.",
+    "por_que_importa": "Es la huella de cambios en el registro: ejecución automática (Run), firewall o claves de auditoría. Correlacionar con 4688 para ver qué proceso lo hizo.",
+    "relacionados": ["T1112", "T1547", "T1547.001"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "4663",
+    "titulo": "Intento de acceso a un objeto",
+    "descripcion": "Un proceso intentó acceder a un objeto (archivo, clave de registro, proceso). Indica la operación (Read, Write, Delete, Execute) y el tipo de objeto.",
+    "por_que_importa": "Clave para detectar enumeración de archivos y cifrado masivo (ransomware: ráfaga de Read+Write sobre cientos de rutas) y accesos a LSASS.",
+    "relacionados": ["T1083", "T1486", "T1003.001"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "4672",
+    "titulo": "Permisos especiales asignados a la sesión",
+    "descripcion": "Al iniciarse la sesión se le otorgaron privilegios especiales (SeDebugPrivilege, SeTakeOwnership, SeBackup, etc.).",
+    "por_que_importa": "Marca sesiones administrativas: 4672 en cuentas que no deberían ser administrativas indica elevación no habitual; correlacionar con el 4624 previo.",
+    "relacionados": ["T1134", "T1548.002", "T1078.003"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "4688",
+    "titulo": "Nuevo proceso creado",
+    "descripcion": "Se creó un proceso. Si está habilitada la creación avanzada de procesos, incluye la ruta del ejecutable y el proceso padre.",
+    "por_que_importa": "Eje de la investigación de ejecución: árbol padre→hijo revela Office lanzando PowerShell, cmd lanzado por un servicio o binarios en Temp/AppData.",
+    "relacionados": ["T1059", "T1059.001", "T1218", "T1105", "T1036"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "4698",
+    "titulo": "Tarea programada creada",
+    "descripcion": "Se creó una tarea programada en el equipo, con su contenido (acción e disparador).",
+    "por_que_importa": "Persistencia clásica: tareas que apuntan a Temp/AppData o que ejecutan scripts descargados merecen revisión; correlacionar con 4699/4702.",
+    "relacionados": ["T1053.005", "T1053"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "4699",
+    "titulo": "Tarea programada eliminada",
+    "descripcion": "Se eliminó una tarea programada existente.",
+    "por_que_importa": "Puede ser mantenimiento normal o borrado de rastros; útil para detectar limpieza tras una persistencia.",
+    "relacionados": ["T1070"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "4720",
+    "titulo": "Cuenta de usuario creada",
+    "descripcion": "Se creó una cuenta de usuario en el sistema.",
+    "por_que_importa": "Alta fuera del ciclo normal = persistencia o acceso residual. Revisar quién la creó, qué grupos se le añadieron (4728/4732) y si se activó (4722).",
+    "relacionados": ["T1136", "T1136.001", "T1136.002"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "4722",
+    "titulo": "Cuenta habilitada",
+    "descripcion": "Se habilitó una cuenta de usuario que estaba deshabilitada.",
+    "por_que_importa": "Rehabilitar una cuenta deshabilitada suele ser la puerta trasera tras un compromiso; contrastar con el proceso de altas de la organización.",
+    "relacionados": ["T1136", "T1098"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "4724",
+    "titulo": "Intento de restablecer contraseña",
+    "descripcion": "Alguien intentó restablecer la contraseña de una cuenta.",
+    "por_que_importa": "Si no está en el flujo de soporte, puede ser toma de control de la cuenta; revisar la cuenta objetivo y el operador.",
+    "relacionados": ["T1098", "T1110"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "4726",
+    "titulo": "Cuenta de usuario eliminada",
+    "descripcion": "Se eliminó una cuenta de usuario.",
+    "por_que_importa": "Fuera de bajas gestionadas, indica limpieza o sabotaje; también se usa para ocultar la cuenta creada previamente.",
+    "relacionados": ["T1098"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "4728",
+    "titulo": "Miembro añadido a un grupo global de seguridad",
+    "descripcion": "Se añadió una cuenta a un grupo global de seguridad (p. ej. Domain Admins).",
+    "por_que_importa": "Adición a grupos privilegiados = escalación de privilegios persistente. Ver quién la hizo y a qué grupo exacto.",
+    "relacionados": ["T1098", "T1136.002", "T1087.002"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "4732",
+    "titulo": "Miembro añadido a un grupo local de seguridad",
+    "descripcion": "Se añadió una cuenta a un grupo de seguridad local (p. ej. Administradores del equipo).",
+    "por_que_importa": "Mismo riesgo que 4728 pero a nivel de equipo; típico tras obtener acceso a una estación o servidor.",
+    "relacionados": ["T1098", "T1136.001", "T1069"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "4738",
+    "titulo": "Cuenta de usuario cambiada",
+    "descripcion": "Se modificaron atributos de una cuenta de usuario (nombre, descripción, contraseña, configuración de cuenta).",
+    "por_que_importa": "Cambios de configuración de cuenta (p. ej. desactivar MFA vía atributos) pueden indicar evasión o abuso.",
+    "relacionados": ["T1098"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "4740",
+    "titulo": "Cuenta bloqueada (lockout)",
+    "descripcion": "La cuenta fue bloqueada por superar el umbral de intentos fallidos de autenticación.",
+    "por_que_importa": "Confirmación de ataque de fuerza bruta en curso (o de usuario olvidado). Correlacionar con la ráfaga de 4625 y la IP origen.",
+    "relacionados": ["T1110", "T1110.001", "T1110.003"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "4768",
+    "titulo": "Solicitud de ticket Kerberos (TGT)",
+    "descripcion": "El cliente solicitó un ticket de acceso al controlador de dominio (AS-REQ).",
+    "por_que_importa": "Punto de partida de la autenticación Kerberos: ausencia de 4768 previo con 4769 posterior sugiere Pass the Ticket.",
+    "relacionados": ["T1558", "T1550.003", "T1078.002"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "4769",
+    "titulo": "Solicitud de ticket de servicio Kerberos",
+    "descripcion": "Se solicitó un ticket de servicio (TGS) a un servicio del dominio.",
+    "por_que_importa": "Kerberoasting se ve como TGS-REQ con cifrado RC4 (0x17) hacia servicios que la cuenta no usa normalmente.",
+    "relacionados": ["T1558.003", "T1550.003"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "4771",
+    "titulo": "Fallo de preautenticación Kerberos",
+    "descripcion": "El cliente Kerberos falló la preautenticación (contraseña incorrecta o ticket inválido).",
+    "por_que_importa": "Equivalente Kerberos del 4625: ráfagas desde una IP indican fuerza bruta contra cuentas de dominio.",
+    "relacionados": ["T1110"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "4776",
+    "titulo": "Validación de credenciales (NTLM)",
+    "descripcion": "El controlador de dominio validó credenciales NTLM proporcionadas por un equipo.",
+    "por_que_importa": "Muestra el uso de NTLM frente a Kerberos; combinado con 4624 revela autenticaciones legacy o pass-the-hash.",
+    "relacionados": ["T1550.002", "T1110"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "4799",
+    "titulo": "Grupo de seguridad local enumerado",
+    "descripcion": "Se consultó la membresía de un grupo de seguridad local.",
+    "por_que_importa": "Enumeración de cuentas (discovery) cuando procede de un host o usuario sin rol de administración.",
+    "relacionados": ["T1087", "T1069"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "4946",
+    "titulo": "Regla de firewall cambiada",
+    "descripcion": "Se añadió o modificó una regla del firewall de Windows.",
+    "por_que_importa": "Reglas nuevas que abren puertos hacia el exterior pueden preparar C2 o exfiltración; contrastar con el cambio aprobado.",
+    "relacionados": ["T1562.004", "T1686"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "4950",
+    "titulo": "Configuración del firewall cambiada",
+    "descripcion": "Se modificó la configuración general del firewall (perfil, comportamiento).",
+    "por_que_importa": "Cambios de perfil (p. ej. desactivar el firewall en dominio) suelen ser manuales y fuera de ventanas de mantenimiento.",
+    "relacionados": ["T1562.004", "T1686"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "5140",
+    "titulo": "Acceso a un objeto de red compartido",
+    "descripcion": "Se accedió a un recurso de red compartido (Share) del equipo, como IPC$ o un directorio compartido.",
+    "por_que_importa": "El acceso a Shares administrativos (ADMIN$, C$) entre hosts indica movimiento lateral; IPC$ masivo puede ser enumeración.",
+    "relacionados": ["T1021.002", "T1083", "T1074"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "5145",
+    "titulo": "Requisito detallado de acceso a un recurso de red",
+    "descripcion": "Detalle del acceso solicitado a una ruta dentro de un recurso compartido (archivo concreto dentro del Share).",
+    "por_que_importa": "Da la ruta exacta: permite ver qué archivos se tocaron (SYSVOL, backups, documentación sensible) en un movimiento lateral.",
+    "relacionados": ["T1021.002", "T1083", "T1486"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "5156",
+    "titulo": "Conexión de red permitida por el filtro de Windows",
+    "descripcion": "El filtrado de plataforma de Windows (WFP) permitió una conexión de red saliente o entrante.",
+    "por_que_importa": "Conexiones a destinos/puertos no habituales: barrido (muchos destinos distintos), C2 (destino único periódico) o exfiltración (volumen alto).",
+    "relacionados": ["T1046", "T1571", "T1686"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "1102",
+    "titulo": "Registro de seguridad borrado",
+    "descripcion": "Se reinició (borró) el registro de auditoría de seguridad del sistema.",
+    "por_que_importa": "Alerta de por sí: la limpieza de logs es indicador de intención de ocultar actividad. Ver quién lo generó y en qué host.",
+    "relacionados": ["T1070.001", "T1685.005"],
+    "fuente": "Microsoft Docs – Windows Security Auditing"
+  },
+  {
+    "kind": "event_id",
+    "id": "7036",
+    "titulo": "Servicio entró en estado de ejecución o detenido",
+    "descripcion": "Un servicio cambió de estado (en ejecución / detenido).",
+    "por_que_importa": "Rutinario en operación; alerta cuando servicios críticos se detienen fuera de mantenimiento o aparecen servicios desconocidos.",
+    "relacionados": ["T1543.003", "T1489", "T1569"],
+    "fuente": "Microsoft Docs – System log"
+  },
+  {
+    "kind": "event_id",
+    "id": "7040",
+    "titulo": "Tipo de inicio de servicio cambiado",
+    "descripcion": "Se cambió el tipo de inicio de un servicio (manual, automático, deshabilitado).",
+    "por_que_importa": "Deshabilitar seguridad o habilitar un servicio inusual es persistencia o sabotaje; contrastar con el inventario de servicios.",
+    "relacionados": ["T1543.003", "T1489"],
+    "fuente": "Microsoft Docs – System log"
+  },
+  {
+    "kind": "event_id",
+    "id": "7045",
+    "titulo": "Nuevo servicio instalado",
+    "descripcion": "Se instaló un nuevo servicio en el sistema, con su ruta de ejecución.",
+    "por_que_importa": "Instalación de servicios fuera de despliegues conocidos = persistencia típica; revisar la imagen (binario) y su ruta.",
+    "relacionados": ["T1543.003", "T1569.001"],
+    "fuente": "Microsoft Docs – System log"
+  },
+  {
+    "kind": "event_id",
+    "id": "7030",
+    "titulo": "Servicio marcado como interactivo",
+    "descripcion": "Un servicio se configuró como interactivo (puede mostrar UI en la sesión del usuario).",
+    "por_que_importa": "Configuración poco habitual y con riesgo de elevación; rara en servidores bien administrados.",
+    "relacionados": ["T1543.003"],
+    "fuente": "Microsoft Docs – System log"
+  },
+  {
+    "kind": "event_id",
+    "id": "4103",
+    "titulo": "Ejecución de módulo de PowerShell",
+    "descripcion": "Registro de pipeline de PowerShell (que ejecutó qué comando y desde dónde).",
+    "por_que_importa": "Contexto de los bloques 4104: identifica el script o módulo que generó el código observado.",
+    "relacionados": ["T1059.001"],
+    "fuente": "Microsoft Docs – Windows PowerShell log"
+  },
+  {
+    "kind": "event_id",
+    "id": "4104",
+    "titulo": "Bloque de script de PowerShell creado",
+    "descripcion": "PowerShell creó (o extendió) un bloque de script, con su contenido y número de bloque.",
+    "por_que_importa": "Permite ver el código ejecutado: ofuscación, descargas o codificación Base64 indican ejecución ofensiva.",
+    "relacionados": ["T1059.001", "T1027", "T1140"],
+    "fuente": "Microsoft Docs – Windows PowerShell log"
+  },
+  {
+    "kind": "event_id",
+    "id": "1116",
+    "titulo": "Malware detectado por Microsoft Defender",
+    "descripcion": "Defender identificó software malicioso u otro software no deseado en el equipo.",
+    "por_que_importa": "Detección real del antivirus: revisar la acción tomada (1117), el archivo y si la amenaza persiste.",
+    "relacionados": ["T1562.001", "T1685"],
+    "fuente": "Microsoft Docs – Windows Defender Operational log"
+  },
+  {
+    "kind": "event_id",
+    "id": "1117",
+    "titulo": "Acción tomada contra el malware",
+    "descripcion": "Defender aplicó una acción (cuarentena, eliminación, permisión) sobre la amenaza detectada.",
+    "por_que_importa": "Indica si la amenaza fue contenida o permitida; «permitida» repetida exige intervención.",
+    "relacionados": ["T1562.001", "T1685"],
+    "fuente": "Microsoft Docs – Windows Defender Operational log"
+  },
+  {
+    "kind": "event_id",
+    "id": "106",
+    "titulo": "Tarea registrada en el programador",
+    "descripcion": "Microsoft-Windows-TaskScheduler registró la creación de una tarea.",
+    "por_que_importa": "Se desdobla del 4698 en equipos con la tarea creada por el planificador; misma lectura: persistencia si la acción es inusual.",
+    "relacionados": ["T1053.005"],
+    "fuente": "Microsoft Docs – TaskScheduler/Operational log"
+  },
+  {
+    "kind": "event_id",
+    "id": "1149",
+    "titulo": "Autenticación de usuario en sesión RDP remota",
+    "descripcion": "El servicio de escritorio remoto autenticó a un usuario que se conectó de forma remota.",
+    "por_que_importa": "Cuantifica accesos RDP entrantes con la IP origen; desde segmentos no administrativos es movimiento lateral o acceso no autorizado.",
+    "relacionados": ["T1021.001", "T1133"],
+    "fuente": "Microsoft Docs – TerminalServices-RemoteConnectionManager"
+  },
+  {
+    "kind": "event_id",
+    "id": "HTTP_ACCESS",
+    "titulo": "Acceso HTTP/HTTPS (IIS o gateway web)",
+    "descripcion": "Registro de peticiones web recibidas por el servidor o pasadas por el gateway: método, ruta, estado y tamaño.",
+    "por_que_importa": "Estados 4xx/5xx repetidos, rutas de traversal y User-Agents extraños señalan exploración o explotación de la aplicación pública.",
+    "relacionados": ["T1190", "T1071.001", "T1041"],
+    "fuente": "Registro de la fuente indicada en Log_Source (IIS / proxy)"
+  },
+  {
+    "kind": "event_id",
+    "id": "PROXY_ACCESS",
+    "titulo": "Acceso a través del proxy corporativo",
+    "descripcion": "Petición HTTP/HTTPS registrada por el proxy de salida hacia un destino externo, con usuario, destino y tamaño.",
+    "por_que_importa": "Vista de tráfico saliente: dominios nuevos, subidas grandes o períodos regulares (beacon) indican C2 o exfiltración.",
+    "relacionados": ["T1071.001", "T1090", "T1567", "T1041"],
+    "fuente": "Registro de la fuente indicada en Log_Source (Proxy)"
+  },
+  {
+    "kind": "event_id",
+    "id": "FIREWALL",
+    "titulo": "Evento de firewall / filtrado de red",
+    "descripcion": "Regla de firewall aplicada sobre una conexión: origen, destino, puerto y acción (permitir/bloquear).",
+    "por_que_importa": "Muchos destinos desde un host = barrido; puertos inusuales o conexiones salientes repetidas = C2 o exfiltración.",
+    "relacionados": ["T1046", "T1571", "T1095"],
+    "fuente": "Registro de la fuente indicada en Log_Source (Firewall)"
+  },
+  {
+    "kind": "event_id",
+    "id": "SYSLOG",
+    "titulo": "Registro syslog",
+    "descripcion": "Mensaje syslog de un dispositivo o servicio (nivel de severidad y texto del evento).",
+    "por_que_importa": "Fuente heterogénea: leer siempre la severidad y el mensaje crudo antes de clasificar; la descripción manda sobre el formato.",
+    "relacionados": ["T1071"],
+    "fuente": "Registro de la fuente indicada en Log_Source"
+  }
+]

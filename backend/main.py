@@ -28,16 +28,18 @@ async def lifespan(_: FastAPI):
     sin red la primera vez), rag_store.warmup() permite reintentar después.
     """
     asyncio.create_task(asyncio.to_thread(rag_store.warmup))
+    asyncio.create_task(asyncio.to_thread(kb_store.warmup))
     yield
 
 # El servicio de IA se importa como paquete (uvicorn backend.main:app) o como
 # módulo suelto (test_backend.py añade /backend al sys.path).
 try:
     from backend.ai_service import generate_report_narrative, generate_data_insights, answer_question
-    from backend import rag_store
+    from backend import rag_store, kb_store
 except ImportError:  # pragma: no cover
     from ai_service import generate_report_narrative, generate_data_insights, answer_question
     import rag_store
+    import kb_store
 
 app = FastAPI(title="Comunidad Dojo – SOC Analyst API", lifespan=lifespan)
 
@@ -721,7 +723,10 @@ async def ask_question(analysis_id: str, payload: AskRequest):
         analysis_id, question, df, n_results=n_results,
         level=level, suspicious=bool(payload.suspicious),
     )
-    answer = await answer_question(question, hits, entry["summary"])
+    # Base de conocimiento: significado de los Event IDs observados y técnicas
+    # MITRE ATT&CK asociadas (referencia del marco, no un hallazgo sobre datos).
+    reference = await asyncio.to_thread(kb_store.build_reference, question, hits)
+    answer = await answer_question(question, hits, entry["summary"], reference=reference)
 
     return {
         "analysis_id": analysis_id,
@@ -729,8 +734,19 @@ async def ask_question(analysis_id: str, payload: AskRequest):
         "retrieved": len(hits),
         "filters": {"level": level or None, "suspicious": bool(payload.suspicious)},
         "rag": rag_store.get_stats(),
+        "kb": kb_store.status(),
         **answer,
     }
+
+
+@app.get("/api/kb/status")
+async def kb_status():
+    """Estado de la base de conocimiento (técnicas ATT&CK + Event IDs).
+
+    Responde siempre 200: si faltan dependencias opcionales devuelve
+    `available: false` con el motivo y la app sigue operativa.
+    """
+    return kb_store.status()
 
 
 @app.get("/api/rag/status")

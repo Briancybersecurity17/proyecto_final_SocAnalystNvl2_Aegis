@@ -603,6 +603,7 @@ def build_qa_context(
     question: str,
     hits: List[Dict[str, Any]],
     summary: Optional[Dict[str, Any]] = None,
+    reference: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Contexto que la IA (o el fallback) puede ver: solo eventos recuperados."""
     summary = summary or {}
@@ -630,7 +631,37 @@ def build_qa_context(
         "retrieved_total": len(hits),
         "level_counts": summary.get("level_counts") or {},
         "evidence": evidence,
+        # Base de conocimiento (MITRE ATT&CK + glosario de Event IDs): material
+        # de referencia del marco, etiquetado aparte para no confundirlo con
+        # una afirmación sobre los registros.
+        "reference": reference or {"available": False, "event_ids": [], "techniques": [], "note": ""},
     }
+
+
+def _reference_lines(reference: Optional[Dict[str, Any]]) -> List[str]:
+    """Bloque de referencia técnica (KB) para la respuesta en texto.
+
+    Se etiqueta explícitamente como material del marco: explica significados,
+    no afirma nada sobre los registros analizados.
+    """
+    if not reference or not reference.get("available"):
+        return []
+    events = reference.get("event_ids") or []
+    techs = reference.get("techniques") or []
+    if not events and not techs:
+        return []
+    lines = [
+        "**Referencia técnica** (MITRE ATT&CK y glosario de Event IDs de Windows — "
+        "contexto del marco, no un hallazgo de tus registros):",
+    ]
+    for item in events[:QA_MAX_EVIDENCE]:
+        lines.append(f"- `Event ID {item.get('id')}` — {item.get('titulo')}")
+    for item in techs[:QA_MAX_EVIDENCE]:
+        lines.append(
+            f"- `{item.get('id')} {item.get('name')}` ({item.get('tactic_es')}): "
+            f"{item.get('descripcion_es')}"
+        )
+    return lines
 
 
 def _qa_fallback(ctx: Dict[str, Any]) -> Dict[str, Any]:
@@ -638,17 +669,22 @@ def _qa_fallback(ctx: Dict[str, Any]) -> Dict[str, Any]:
     question = ctx["question"]
     evidence = ctx["evidence"]
     rows = ctx["dataset_rows"]
+    reference = ctx.get("reference") or {}
 
     if not evidence:
+        lines = [
+            f"No encontré registros que se parezcan semánticamente a "
+            f"«{question}» en los {rows} eventos indexados.",
+            "",
+            "Prueba a reformular la consulta, o filtra por criticidad / "
+            "eventos sospechosos desde la tabla de registros para revisarlos "
+            "directamente.",
+        ]
+        lines += _reference_lines(reference)
         return {
-            "answer": (
-                f"No encontré registros que se parezcan semánticamente a "
-                f"«{question}» en los {rows} eventos indexados.\n\n"
-                "Prueba a reformular la consulta, o filtra por criticidad / "
-                "eventos sospechosos desde la tabla de registros para revisarlos "
-                "directamente."
-            ),
+            "answer": "\n".join(lines),
             "evidence": [],
+            "reference": reference,
             "summary_line": "Sin coincidencias en el índice",
             "confidence": "ninguna",
             "engine": "deterministic",
@@ -733,6 +769,11 @@ def _qa_fallback(ctx: Dict[str, Any]) -> Dict[str, Any]:
             "no se ha generado ninguna cifra nueva."
         )
 
+    ref_lines = _reference_lines(reference)
+    if ref_lines:
+        lines.append("")
+        lines.extend(ref_lines)
+
     warnings: List[str] = []
     if weak:
         warnings.append("baja_confianza")
@@ -740,6 +781,7 @@ def _qa_fallback(ctx: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "answer": "\n".join(lines),
         "evidence": evidence,
+        "reference": reference,
         "summary_line": (
             f"{len(evidence)} eventos · {distribution or 'sin niveles'} · "
             f"mejor similitud {best:.2f}"
@@ -781,6 +823,21 @@ async def _remote_answer(ctx: Dict[str, Any]) -> Optional[str]:
     if not AI_API_URL or not ctx["evidence"]:
         return None
 
+    reference = ctx.get("reference") or {}
+    ref_note = ""
+    if reference.get("available"):
+        ref_note = (
+            "\n\nREFERENCIA TÉCNICA (MITRE ATT&CK y glosario de Event IDs): úsala SOLO "
+            "para explicar qué significa un Event ID o qué técnica representa. "
+            "Jamás la presentes como un hallazgo de los registros y no afirmes que "
+            "la técnica haya ocurrido salvo que los eventos lo demuestren.\n"
+            + json.dumps(
+                {"event_ids": reference.get("event_ids", []),
+                 "techniques": reference.get("techniques", [])},
+                ensure_ascii=False, default=str,
+            )
+        )
+
     payload: Dict[str, Any] = {
         "model": AI_MODEL,
         "temperature": 0.1,
@@ -795,6 +852,7 @@ async def _remote_answer(ctx: Dict[str, Any]) -> Optional[str]:
                     + ctx["question"]
                     + "\n\nEVENTOS RECUPERADOS:\n"
                     + json.dumps(ctx["evidence"], ensure_ascii=False, default=str)
+                    + ref_note
                 ),
             },
         ],
@@ -827,6 +885,7 @@ async def answer_question(
     question: str,
     hits: List[Dict[str, Any]],
     summary: Optional[Dict[str, Any]] = None,
+    reference: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Responde una consulta en lenguaje natural sobre los eventos indexados.
 
@@ -834,8 +893,11 @@ async def answer_question(
     determinista (100 % anclada a la evidencia recuperada) y, si hay modelo
     remoto disponible y su respuesta cita solo Log_ID reales, se usa esa
     redacción. Nunca se queda sin respuesta ni inventa datos.
+
+    `reference` es la base de conocimiento (Event IDs + técnicas ATT&CK) que se
+    muestra APARTE, etiquetada como material del marco, nunca como hallazgo.
     """
-    ctx = build_qa_context(question, hits, summary)
+    ctx = build_qa_context(question, hits, summary, reference=reference)
     fallback = _qa_fallback(ctx)
     if not ctx["evidence"]:
         return fallback

@@ -148,14 +148,25 @@ def expand_query(question: str) -> str:
 # Estado lazy
 # ---------------------------------------------------------------------------
 _collection = None
+_client = None
 _initialized = False
 _init_error: Optional[str] = None
 _lock = threading.Lock()
 
 
+def get_client():
+    """Cliente ChromaDB compartido (path persistente) o None si no está disponible.
+
+    Lo reutiliza `kb_store` para la base de conocimiento: una sola instancia de
+    cliente por proceso evita el aviso «a chroma instance already exists».
+    """
+    _get_collection()
+    return _client
+
+
 def _get_collection():
     """Inicialización lazy de ChromaDB. Retorna None si no está disponible."""
-    global _collection, _initialized, _init_error
+    global _collection, _client, _initialized, _init_error
     if _initialized:
         return _collection
     with _lock:
@@ -174,8 +185,8 @@ def _get_collection():
                 device="cpu",
                 normalize_embeddings=True,  # distancia coseno
             )
-            client = chromadb.PersistentClient(path=str(RAG_DATA_PATH))
-            _collection = client.get_or_create_collection(
+            _client = chromadb.PersistentClient(path=str(RAG_DATA_PATH))
+            _collection = _client.get_or_create_collection(
                 name=COLLECTION_NAME,
                 embedding_function=ef,
                 metadata={"hnsw:space": "cosine"},
@@ -189,10 +200,12 @@ def _get_collection():
             _init_error = f"dependencia no instalada: {exc}"
             logger.warning("RAG desactivado — %s", _init_error)
             _collection = None
+            _client = None
         except Exception as exc:  # noqa: BLE001 – nunca debe tumbar la app
             _init_error = str(exc)
             logger.warning("Error inicializando RAG store: %s", exc)
             _collection = None
+            _client = None
 
     return _collection
 

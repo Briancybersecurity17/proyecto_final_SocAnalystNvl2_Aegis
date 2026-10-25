@@ -1,7 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { useAnalysisStore } from '../store'
-import { askQuestion, getRagStatus, AskResponse, RagStatusResponse } from '../api/client'
+import {
+  askQuestion,
+  getRagStatus,
+  getKbStatus,
+  AskResponse,
+  RagStatusResponse,
+  KbStatus,
+} from '../api/client'
 import { DashboardSection } from './DashboardSection'
 
 const LEVEL_BADGE: Record<string, string> = {
@@ -21,6 +28,7 @@ const LEVEL_LABEL: Record<string, string> = {
 const SUGGESTIONS = [
   '¿Qué hosts concentran los eventos críticos?',
   '¿Hubo intentos de fuerza bruta?',
+  '¿Qué significa el Event ID 1102?',
   '¿Qué pasó en el controlador de dominio?',
   'Muéstrame los eventos sospechosos de nivel alto',
 ]
@@ -95,6 +103,95 @@ const AnswerBody: React.FC<{ text: string }> = ({ text }) => {
   )
 }
 
+/**
+ * Bloque «Referencia técnica»: lo que significan los Event IDs observados y a
+ * qué técnicas MITRE ATT&CK se asocian. Es MATERIAL DEL MARCO, separado de la
+ * evidencia, y así se etiqueta explícitamente (nunca es un hallazgo del archivo).
+ */
+const ReferenceBlock: React.FC<{ reference?: AskResponse['reference'] }> = ({ reference }) => {
+  if (!reference?.available) return null
+  const { event_ids: events, techniques } = reference
+  if (!events.length && !techniques.length) return null
+
+  return (
+    <div className="mt-3 rounded-lg border border-violet-200 bg-violet-50/60 p-3">
+      <div className="flex items-center gap-2 mb-2">
+        <span className="text-[11px] font-bold uppercase tracking-wide text-violet-700">
+          Referencia de marco
+        </span>
+        <span className="text-[10px] text-violet-500">MITRE ATT&amp;CK · Event IDs Windows</span>
+      </div>
+
+      {events.length > 0 && (
+        <div className="space-y-1.5 mb-2.5">
+          {events.map(item => (
+            <div key={item.id} className="text-[12px] leading-snug text-gray-700">
+              <span className="font-mono font-semibold text-violet-800">Event ID {item.id}</span>
+              <span className={`ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full ${
+                item.match === 'evidencia'
+                  ? 'bg-emerald-100 text-emerald-700'
+                  : 'bg-gray-200 text-gray-600'
+              }`}>
+                {item.match === 'evidencia' ? 'en tus registros' : 'citado en tu consulta'}
+              </span>
+              <div className="text-gray-600">{item.titulo}</div>
+              <div className="text-gray-500">{item.por_que_importa}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {techniques.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          {techniques.map(tech => (
+            <div key={tech.id} className="border border-violet-200 rounded-lg bg-white p-2.5">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <span className="font-mono text-xs font-bold text-violet-700">{tech.id}</span>
+                  <span className="ml-1.5 text-[12px] font-semibold text-gray-800">{tech.name}</span>
+                </div>
+                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-700 whitespace-nowrap">
+                  {tech.tactic_es}
+                </span>
+              </div>
+              {tech.aliases.length > 0 && (
+                <div className="text-[10px] text-gray-400 mt-0.5">
+                  antes: {tech.aliases.join(', ')}
+                </div>
+              )}
+              <p className="text-[11.5px] text-gray-600 mt-1">{tech.descripcion_es}</p>
+              <p className="text-[11px] text-gray-500 mt-1">
+                <span className="font-semibold text-gray-600">Detección:</span> {tech.se_detecta}
+              </p>
+              <div className="flex items-center justify-between mt-1.5">
+                <div className="flex flex-wrap gap-1">
+                  {tech.eventos.slice(0, 4).map(ev => (
+                    <span key={ev} className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">
+                      {ev}
+                    </span>
+                  ))}
+                </div>
+                <a
+                  href={tech.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[10.5px] text-indigo-600 hover:underline shrink-0 ml-2"
+                >
+                  attack.mitre.org ↗
+                </a>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <p className="text-[10.5px] text-violet-600/80 mt-2 border-t border-violet-200 pt-1.5">
+        {reference.note}
+      </p>
+    </div>
+  )
+}
+
 export const AssistantChat: React.FC = () => {
   const analysisId = useAnalysisStore(state => state.analysisId)
   const summary = useAnalysisStore(state => state.summary)
@@ -106,6 +203,7 @@ export const AssistantChat: React.FC = () => {
   const [level, setLevel] = useState('')
   const [suspicious, setSuspicious] = useState(false)
   const [rag, setRag] = useState<RagStatus | null>(null)
+  const [kb, setKb] = useState<KbStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const listRef = useRef<HTMLDivElement>(null)
@@ -134,6 +232,22 @@ export const AssistantChat: React.FC = () => {
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' })
   }, [messages, loading])
+
+  // Estado de la base de conocimiento (se consulta una vez al estar listo)
+  useEffect(() => {
+    if (!ready) return
+    let cancelled = false
+    getKbStatus()
+      .then(data => {
+        if (!cancelled) setKb(data)
+      })
+      .catch(() => {
+        if (!cancelled) setKb(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [ready])
 
   const send = useCallback(
     async (question: string) => {
@@ -174,11 +288,14 @@ export const AssistantChat: React.FC = () => {
         tone: 'bg-indigo-50 border-indigo-200 text-indigo-800',
         text: 'Indexando los registros en el índice semántico… la primera consulta puede tardar unos segundos.',
       }
+    const kbPart = kb
+      ? ` · base de conocimiento: ${kb.techniques} técnicas ATT&CK + ${kb.event_ids} Event IDs`
+      : ''
     return {
       tone: 'bg-emerald-50 border-emerald-200 text-emerald-800',
-      text: `Recuperación híbrida activa · ${rag.events} eventos indexados · ${rag.model}`,
+      text: `Recuperación híbrida activa · ${rag.events} eventos indexados · ${rag.model}${kbPart}`,
     }
-  }, [rag])
+  }, [rag, kb])
 
   if (!ready) {
     return (
@@ -310,6 +427,8 @@ export const AssistantChat: React.FC = () => {
                           ))}
                         </div>
                       )}
+
+                      <ReferenceBlock reference={message.response.reference} />
                     </div>
                   )}
                 </div>
