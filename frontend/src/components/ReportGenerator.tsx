@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
+import { motion } from 'framer-motion'
 import {
   useAnalysisStore,
   AnalysisSummary,
@@ -430,15 +431,21 @@ const ReportGenerator: React.FC = () => {
                 return <span className="text-sm text-red-600">Error generando el PDF</span>
               }
               return (
-                <button
+                <motion.button
                   onClick={() => {
                     const base = (summary.file_name ?? 'analisis').replace(/\.[^.]+$/, '')
                     FileSaver.saveAs(blob, `Informe_Seguridad_${base}.pdf`)
                   }}
-                  className="px-4 py-2 text-sm bg-primary text-white rounded hover:bg-primary/80 shadow"
+                  whileTap={{ scale: 0.97 }}
+                  initial={false}
+                  className="group relative overflow-hidden px-4 py-2 text-sm bg-primary text-white rounded shadow hover:bg-primary/80 disabled:opacity-50"
                 >
-                  ⬇ Descargar informe PDF
-                </button>
+                  <span className="relative z-10">⬇ Descargar informe PDF</span>
+                  <span
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-y-0 -left-full w-1/2 z-0 bg-gradient-to-r from-transparent via-white/40 to-transparent transition-transform duration-700 group-hover:translate-x-[300%]"
+                  />
+                </motion.button>
               )
             }}
           </BlobProvider>

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
+import { motion } from 'framer-motion'
 import { useAnalysisStore } from '../store'
 import { getRows, RowsResponse } from '../api/client'
 import { DashboardSection } from './DashboardSection'
@@ -138,7 +139,13 @@ export const SecurityAnalysis: React.FC = () => {
             </thead>
             <tbody>
               {data?.rows.map((row, idx) => (
-                <tr key={idx} className={`${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-blue-50`}>
+                <motion.tr
+                  key={`${data.page}:${idx}`}
+                  initial={{ opacity: 0, y: 5 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.2, delay: Math.min(idx, 12) * 0.035, ease: 'easeOut' }}
+                  className={`${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-blue-50`}
+                >
                   <td className="px-3 py-2 whitespace-nowrap">{String(row.Timestamp ?? '—')}</td>
                   <td className="px-3 py-2 whitespace-nowrap font-medium">{String(row.Hostname ?? '—')}</td>
                   <td className="px-3 py-2 whitespace-nowrap">{String(row.Event_ID ?? '—')}</td>
@@ -154,7 +161,7 @@ export const SecurityAnalysis: React.FC = () => {
                   <td className="px-3 py-2 text-xs text-gray-600 max-w-sm" title={row.risk_reason}>
                     {row.risk_reason}
                   </td>
-                </tr>
+                </motion.tr>
               ))}
               {loading && (
                 <tr>

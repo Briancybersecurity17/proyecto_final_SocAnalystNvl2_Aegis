@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { AnimatePresence, MotionConfig, motion } from 'framer-motion';
 import ServicePulse from './components/ServicePulse';
 import Dashboard from './components/Dashboard';
 import SecurityAnalysis from './components/SecurityAnalysis';
@@ -6,7 +7,9 @@ import RiskClassification from './components/RiskClassification';
 import UploadSection from './components/UploadSection';
 import ReportGenerator from './components/ReportGenerator';
 import AssistantChat from './components/AssistantChat';
+import TypingTitle from './components/TypingTitle';
 import { Sidebar } from './components/Sidebar';
+import { sectionIn } from './motion';
 
 type Section = 'upload' | 'dashboard' | 'security' | 'assistant' | 'risk' | 'report';
 
@@ -42,41 +45,53 @@ const App: React.FC = () => {
   const meta = SECTION_META[activeSection];
 
   return (
-    <div className="flex h-screen overflow-hidden bg-gray-100">
-      {/* Sidebar navigation */}
-      <Sidebar active={activeSection} setActive={setActiveSection} />
+    <MotionConfig reducedMotion="user">
+      <div className="flex h-screen overflow-hidden bg-gray-100">
+        {/* Sidebar navigation */}
+        <Sidebar active={activeSection} setActive={setActiveSection} />
 
-      {/* Main content area */}
-      <main className="flex-1 min-w-0 overflow-y-auto">
-        {/* Header */}
-        <header className="bg-primary text-white px-6 py-4 flex items-center justify-between shadow">
-          <div>
-            <h1 className="text-xl font-semibold">{meta.title}</h1>
-            <p className="text-sm text-blue-100">{meta.subtitle}</p>
-          </div>
-          <div className="flex items-center gap-4">
-            <span
-              className="hidden sm:inline-flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1 text-xs font-medium text-white"
-              title="Motor de análisis y asistente de redacción del informe"
-            >
-              <span className="h-2 w-2 rounded-full bg-emerald-300" />
-              IA integrada · análisis, informe y RAG
-            </span>
-            <ServicePulse />
-          </div>
-        </header>
+        {/* Main content area */}
+        <main className="flex-1 min-w-0 overflow-y-auto">
+          {/* Header */}
+          <header className="bg-primary text-white px-6 py-4 flex items-center justify-between shadow">
+            <div>
+              <TypingTitle text={meta.title} />
+              <p className="text-sm text-blue-100">{meta.subtitle}</p>
+            </div>
+            <div className="flex items-center gap-4">
+              <span
+                className="hidden sm:inline-flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1 text-xs font-medium text-white"
+                title="Motor de análisis y asistente de redacción del informe"
+              >
+                <span className="h-2 w-2 rounded-full bg-emerald-300" />
+                IA integrada · análisis, informe y RAG
+              </span>
+              <ServicePulse />
+            </div>
+          </header>
 
-        {/* Section content */}
-        <section className="p-6">
-          {activeSection === 'upload' && <UploadSection />}
-          {activeSection === 'dashboard' && <Dashboard />}
-          {activeSection === 'security' && <SecurityAnalysis />}
-          {activeSection === 'assistant' && <AssistantChat />}
-          {activeSection === 'risk' && <RiskClassification />}
-          {activeSection === 'report' && <ReportGenerator />}
-        </section>
-      </main>
-    </div>
+          {/* Section content — crossfade corto al cambiar de sección */}
+          <section className="p-6">
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.div
+                key={activeSection}
+                variants={sectionIn}
+                initial="hidden"
+                animate="show"
+                exit="exit"
+              >
+                {activeSection === 'upload' && <UploadSection />}
+                {activeSection === 'dashboard' && <Dashboard />}
+                {activeSection === 'security' && <SecurityAnalysis />}
+                {activeSection === 'assistant' && <AssistantChat />}
+                {activeSection === 'risk' && <RiskClassification />}
+                {activeSection === 'report' && <ReportGenerator />}
+              </motion.div>
+            </AnimatePresence>
+          </section>
+        </main>
+      </div>
+    </MotionConfig>
   );
 };
 

@@ -1,8 +1,13 @@
 import React, { useState } from 'react'
+import { motion } from 'framer-motion'
 import { useAnalysisStore, RiskLevelBlock } from '../store'
 import { DashboardSection } from './DashboardSection'
+import { stagger, cardIn } from '../motion'
 
 const LEVEL_ORDER = ['critico', 'alto', 'medio', 'bajo'] as const
+
+// Niveles que, si tienen eventos, reciben un pulso de brillo (una sola vez)
+const GLOW_LEVELS = ['critico', 'alto']
 
 const LEVEL_STYLES: Record<string, { border: string; bg: string; text: string; chip: string; bar: string }> = {
   critico: { border: 'border-red-600', bg: 'bg-red-50', text: 'text-red-700', chip: 'bg-red-600 text-white', bar: '#dc2626' },
@@ -53,14 +58,21 @@ const RiskClassification: React.FC = () => {
       </div>
 
       {/* Monitoring cards – one per criticality */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+      <motion.div
+        variants={stagger(0.07)}
+        initial="hidden"
+        animate="show"
+        className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4"
+      >
         {LEVEL_ORDER.map(lvl => {
           const b = block(lvl)
           const style = LEVEL_STYLES[lvl]
           const expanded = openLevel === lvl
+          const glow = b.count > 0 && GLOW_LEVELS.includes(lvl)
           return (
-            <div
+            <motion.div
               key={lvl}
+              variants={cardIn}
               className={`bg-white rounded shadow border-t-4 ${style.border} ${expanded ? 'ring-2 ring-primary' : ''}`}
             >
               <button
@@ -68,13 +80,31 @@ const RiskClassification: React.FC = () => {
                 onClick={() => setOpenLevel(expanded ? '' : lvl)}
               >
                 <div className="flex items-center justify-between">
-                  <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase ${style.chip}`}>{b.label}</span>
+                  <span className="relative inline-block">
+                    {/* Halo de brillo: una sola vez al entrar, solo si hay eventos */}
+                    {glow && (
+                      <motion.span
+                        aria-hidden="true"
+                        className="absolute inset-0 rounded"
+                        style={{ backgroundColor: style.bar, filter: 'blur(9px)' }}
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: [0, 0.75, 0] }}
+                        transition={{ duration: 1.2, delay: 0.35, times: [0, 0.35, 1] }}
+                      />
+                    )}
+                    <span className={`relative px-2 py-0.5 rounded text-xs font-bold uppercase ${style.chip}`}>
+                      {b.label}
+                    </span>
+                  </span>
                   <span className="text-2xl font-bold" style={{ color: undefined }}>{b.count}</span>
                 </div>
                 <div className="w-full bg-gray-200 rounded-full h-2 mt-3">
-                  <div
-                    className="h-2 rounded-full transition-all"
-                    style={{ width: `${Math.min(100, b.percentage)}%`, backgroundColor: style.bar }}
+                  <motion.div
+                    className="h-2 rounded-full"
+                    initial={{ width: 0 }}
+                    animate={{ width: `${Math.min(100, b.percentage)}%` }}
+                    transition={{ duration: 0.7, delay: 0.15, ease: 'easeOut' }}
+                    style={{ backgroundColor: style.bar }}
                   />
                 </div>
                 <p className="text-xs text-gray-500 mt-1">{b.percentage}% de los registros</p>
@@ -108,10 +138,10 @@ const RiskClassification: React.FC = () => {
                   )}
                 </div>
               )}
-            </div>
+            </motion.div>
           )
         })}
-      </div>
+      </motion.div>
 
       {/* Detailed justification table */}
       <DashboardSection title="Justificación por nivel">
@@ -130,14 +160,20 @@ const RiskClassification: React.FC = () => {
                 const b = block(lvl)
                 const style = LEVEL_STYLES[lvl]
                 return (
-                  <tr key={lvl} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                  <motion.tr
+                    key={lvl}
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.22, delay: 0.1 + idx * 0.05, ease: 'easeOut' }}
+                    className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}
+                  >
                     <td className="px-3 py-2">
                       <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase ${style.chip}`}>{b.label}</span>
                     </td>
                     <td className="px-3 py-2 font-semibold">{b.count}</td>
                     <td className="px-3 py-2">{b.percentage}%</td>
                     <td className="px-3 py-2 text-gray-700 max-w-2xl">{b.justification}</td>
-                  </tr>
+                  </motion.tr>
                 )
               })}
             </tbody>

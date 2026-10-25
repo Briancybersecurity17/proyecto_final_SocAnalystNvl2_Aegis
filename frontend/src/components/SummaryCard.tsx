@@ -1,13 +1,24 @@
 import React from 'react';
+import { motion } from 'framer-motion';
+import { cardIn, useCountUp } from '../motion';
 
 interface SummaryCardProps {
   label: string;
   value: React.ReactNode;
 }
 
+/** Cuenta hasta el valor cuando es numérico; si no, lo pinta tal cual. */
+const AnimatedValue: React.FC<{ value: number }> = ({ value }) => <>{useCountUp(value)}</>;
+
 export const SummaryCard: React.FC<SummaryCardProps> = ({ label, value }) => (
-  <div className="bg-white rounded shadow p-4 text-center">
+  <motion.div
+    variants={cardIn}
+    whileHover={{ y: -3, transition: { duration: 0.18 } }}
+    className="bg-white rounded shadow p-4 text-center transition-shadow duration-200 hover:shadow-md"
+  >
     <h3 className="text-lg font-medium mb-1">{label}</h3>
-    <p className="text-2xl font-bold">{value}</p>
-  </div>
+    <p className="text-2xl font-bold">
+      {typeof value === 'number' ? <AnimatedValue value={value} /> : value}
+    </p>
+  </motion.div>
 );

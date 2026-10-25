@@ -1,7 +1,9 @@
 import React from 'react'
+import { motion } from 'framer-motion'
 import { SummaryCard } from './SummaryCard'
 import { DashboardSection } from './DashboardSection'
 import { useAnalysisStore } from '../store'
+import { stagger, cardIn, useCountUp } from '../motion'
 import {
   Tooltip,
   Legend,
@@ -32,6 +34,9 @@ const LEVEL_LABELS: Record<string, string> = {
   medio: 'Medio',
   bajo: 'Bajo',
 }
+
+/** Contador animado para las cifras de las tarjetas de criticidad. */
+const Counter: React.FC<{ value: number }> = ({ value }) => <>{useCountUp(value)}</>
 
 const Dashboard: React.FC = () => {
   const summary = useAnalysisStore(state => state.summary)
@@ -75,23 +80,35 @@ const Dashboard: React.FC = () => {
   return (
     <section className="space-y-8">
       {/* Key metrics */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+      <motion.div
+        variants={stagger(0.06)}
+        initial="hidden"
+        animate="show"
+        className="grid grid-cols-2 lg:grid-cols-5 gap-4"
+      >
         <SummaryCard label="Registros totales" value={summary.rows} />
         <SummaryCard label="Hosts únicos" value={summary.unique_hosts ?? '—'} />
         <SummaryCard label="Nivel de riesgo" value={<span className="capitalize">{summary.risk}</span>} />
         <SummaryCard label="Eventos sospechosos" value={summary.suspicious_events ?? 0} />
         <SummaryCard label="Columnas" value={summary.columns?.length ?? 0} />
-      </div>
+      </motion.div>
 
       {/* Criticality breakdown */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <motion.div
+        variants={stagger(0.06)}
+        initial="hidden"
+        animate="show"
+        className="grid grid-cols-2 lg:grid-cols-4 gap-4"
+      >
         {LEVEL_ORDER.map(level => {
           const count = levelCounts[level] ?? 0
           const color = LEVEL_COLORS[level]
           return (
-            <div
+            <motion.div
               key={level}
-              className="bg-white rounded shadow p-4 border-l-4"
+              variants={cardIn}
+              whileHover={{ y: -3, transition: { duration: 0.18 } }}
+              className="bg-white rounded shadow p-4 border-l-4 transition-shadow duration-200 hover:shadow-md"
               style={{ borderLeftColor: color }}
             >
               <div className="flex items-center justify-between">
@@ -101,14 +118,16 @@ const Dashboard: React.FC = () => {
                   style={{ backgroundColor: color }}
                 />
               </div>
-              <p className="text-3xl font-bold mt-1" style={{ color }}>{count}</p>
+              <p className="text-3xl font-bold mt-1" style={{ color }}>
+                <Counter value={count} />
+              </p>
               <p className="text-xs text-gray-500 mt-1">
                 {summary.rows ? ((count / summary.rows) * 100).toFixed(1) : 0}% del total
               </p>
-            </div>
+            </motion.div>
           )
         })}
-      </div>
+      </motion.div>
 
       {/* AI observations over the imported data */}
       {summary.ai_insights && summary.ai_insights.length > 0 && (
