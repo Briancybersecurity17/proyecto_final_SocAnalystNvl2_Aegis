@@ -1,6 +1,5 @@
 import React from 'react';
-
-type Section = 'dashboard' | 'security' | 'assistant' | 'risk' | 'upload' | 'report';
+import type { Section } from '../store';
 
 interface SidebarProps {
   active: Section;

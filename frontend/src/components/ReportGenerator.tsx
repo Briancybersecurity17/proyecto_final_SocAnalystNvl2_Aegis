@@ -6,6 +6,7 @@ import {
   ReportNarrative,
 } from '../store'
 import { generateReport } from '../api/client'
+import { EmptyState } from './EmptyState'
 import {
   BlobProvider,
   Document,
@@ -384,10 +385,7 @@ const ReportGenerator: React.FC = () => {
 
   if (!summary || !analysisId || status !== 'done') {
     return (
-      <div className="p-8 text-center text-gray-500 bg-white rounded-lg shadow">
-        <p className="text-lg font-medium mb-2">Sin datos todavía</p>
-        <p>Sube un archivo Excel en la sección <strong>Carga de archivos</strong> para generar el informe técnico.</p>
-      </div>
+      <EmptyState hint="Sube un archivo Excel y espera a que termine el análisis para generar el informe técnico." />
     )
   }
 
@@ -401,7 +399,6 @@ const ReportGenerator: React.FC = () => {
       {/* Toolbar */}
       <div className="bg-white rounded-lg shadow p-4 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-gray-800">Informe técnico</h2>
           <p className="text-sm text-gray-500">
             Documento estructurado: resumen, metodología, hallazgos con evidencias,
             criticidad, explicación técnica y plan de acción.

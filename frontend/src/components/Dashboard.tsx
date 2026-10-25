@@ -2,6 +2,7 @@ import React from 'react'
 import { motion } from 'framer-motion'
 import { SummaryCard } from './SummaryCard'
 import { DashboardSection } from './DashboardSection'
+import { EmptyState } from './EmptyState'
 import { useAnalysisStore } from '../store'
 import { stagger, cardIn, useCountUp } from '../motion'
 import {
@@ -43,10 +44,7 @@ const Dashboard: React.FC = () => {
 
   if (!summary) {
     return (
-      <div className="p-8 text-center text-gray-500 bg-white rounded shadow">
-        <p className="text-lg font-medium mb-2">Sin datos todavía</p>
-        <p>Sube un archivo Excel en la sección <strong>Carga de archivos</strong> para ver las estadísticas.</p>
-      </div>
+      <EmptyState hint="Sube un archivo Excel para ver las estadísticas y los gráficos por criticidad." />
     )
   }
 

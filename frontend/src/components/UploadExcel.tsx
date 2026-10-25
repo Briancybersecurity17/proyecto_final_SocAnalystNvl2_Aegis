@@ -5,6 +5,8 @@ import { useAnalysisStore } from '../store'
 const UploadExcel: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [progressMsg, setProgressMsg] = useState('')
+  const [fileName, setFileName] = useState<string | null>(null)
+  const [dragging, setDragging] = useState(false)
 
   const status = useAnalysisStore(state => state.status)
   const summary = useAnalysisStore(state => state.summary)
@@ -17,11 +19,15 @@ const UploadExcel: React.FC = () => {
 
   const busy = status === 'uploading' || status === 'processing'
 
-  const handleUpload = async (e: React.ChangeEvent) => {
-    const files = (e.target as HTMLInputElement).files
-    if (!files || files.length === 0) return
-    const file = files[0]
+  /** Ruta única de importación: la usan el input y el arrastre. */
+  const handleFile = async (file: File | undefined | null) => {
+    if (!file || busy) return
+    if (!file.name.toLowerCase().endsWith('.xlsx')) {
+      setError('Solo se admiten archivos .xlsx')
+      return
+    }
     reset() // limpia análisis/errores de una carga anterior
+    setFileName(file.name)
     setStatus('uploading')
     setProgressMsg(`Subiendo «${file.name}»…`)
     try {
@@ -53,20 +59,62 @@ const UploadExcel: React.FC = () => {
     }
   }
 
+  const handleUpload = (e: React.ChangeEvent) => {
+    const files = (e.target as HTMLInputElement).files
+    if (!files || files.length === 0) return
+    void handleFile(files[0])
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setDragging(false)
+    void handleFile(e.dataTransfer?.files?.[0])
+  }
+
   return (
-    <div className="border rounded p-5 bg-white shadow-sm">
+    <div
+      onDragOver={e => {
+        e.preventDefault()
+        if (!busy) setDragging(true)
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={handleDrop}
+      className={`rounded border-2 bg-white shadow-sm p-5 transition-colors ${
+        dragging ? 'border-primary bg-primary/5' : 'border-gray-200'
+      }`}
+    >
       <p className="text-sm text-gray-500 mb-3">
         Formato admitido: <strong>.xlsx</strong>. Se leen todas las hojas del libro.
       </p>
 
-      <input
-        type="file"
-        accept=".xlsx"
-        ref={fileInputRef}
-        onChange={handleUpload}
-        disabled={busy}
-        className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-primary file:text-white hover:file:bg-primary/80 disabled:opacity-60"
-      />
+      <div className="flex flex-wrap items-center gap-3">
+        {/* Botón propio: el input nativo queda oculto (sr-only) pero sigue
+            siendo el elemento real que recibe el archivo — enfocable con
+            teclado y con foco visible. */}
+        <label
+          className={`inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-medium text-white transition-colors cursor-pointer focus-within:ring-2 focus-within:ring-primary focus-within:ring-offset-2 ${
+            busy ? 'bg-primary/60 cursor-wait' : 'bg-primary hover:bg-primary/90'
+          }`}
+        >
+          <input
+            type="file"
+            accept=".xlsx"
+            ref={fileInputRef}
+            onChange={handleUpload}
+            disabled={busy}
+            className="sr-only"
+          />
+          {busy ? 'Importando…' : 'Seleccionar archivo'}
+        </label>
+        <span className="text-sm text-gray-600">
+          {fileName ? (
+            <span className="font-medium text-gray-800">{fileName}</span>
+          ) : (
+            'Ningún archivo seleccionado'
+          )}
+        </span>
+        <span className="text-sm text-gray-400">o arrastrá el archivo aquí</span>
+      </div>
 
       {/* Estado del proceso */}
       {busy && (

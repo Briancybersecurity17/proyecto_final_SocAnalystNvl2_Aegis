@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { AnimatePresence, MotionConfig, motion } from 'framer-motion';
+import { useUiStore, Section } from './store';
 import Dashboard from './components/Dashboard';
 import SecurityAnalysis from './components/SecurityAnalysis';
 import RiskClassification from './components/RiskClassification';
@@ -8,9 +9,8 @@ import ReportGenerator from './components/ReportGenerator';
 import AssistantChat from './components/AssistantChat';
 import TypingTitle from './components/TypingTitle';
 import { Sidebar } from './components/Sidebar';
+import BackendStatus from './components/BackendStatus';
 import { sectionIn } from './motion';
-
-type Section = 'upload' | 'dashboard' | 'security' | 'assistant' | 'risk' | 'report';
 
 const SECTION_META: Record<Section, { title: string; subtitle: string }> = {
   dashboard: {
@@ -40,7 +40,8 @@ const SECTION_META: Record<Section, { title: string; subtitle: string }> = {
 };
 
 const App: React.FC = () => {
-  const [activeSection, setActiveSection] = useState<Section>('dashboard');
+  const activeSection = useUiStore(state => state.section);
+  const setActiveSection = useUiStore(state => state.setSection);
   const meta = SECTION_META[activeSection];
 
   return (
@@ -57,6 +58,7 @@ const App: React.FC = () => {
               <TypingTitle text={meta.title} />
               <p className="text-sm text-blue-100">{meta.subtitle}</p>
             </div>
+            <BackendStatus />
           </header>
 
           {/* Section content — crossfade corto al cambiar de sección */}

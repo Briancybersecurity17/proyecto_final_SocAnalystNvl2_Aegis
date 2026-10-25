@@ -119,3 +119,23 @@ export const useAnalysisStore = create<AnalysisStore>()(
     reset: () => set({ analysisId: null, status: 'idle', summary: null, error: null }),
   }))
 )
+
+/** Secciones de la aplicación (navegación). */
+export type Section = 'upload' | 'dashboard' | 'security' | 'assistant' | 'risk' | 'report'
+
+interface UiStore {
+  section: Section
+  setSection: (section: Section) => void
+}
+
+/**
+ * Navegación global: vive en el store para que cualquier componente (p. ej.
+ * los estados vacíos con botón «Ir a Carga de archivos») pueda cambiar de
+ * sección sin pasar callbacks por todo el árbol.
+ */
+export const useUiStore = create<UiStore>()(
+  devtools((set) => ({
+    section: 'dashboard',
+    setSection: (section) => set({ section }),
+  }))
+)

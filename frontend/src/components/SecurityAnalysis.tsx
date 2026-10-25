@@ -3,6 +3,7 @@ import { motion } from 'framer-motion'
 import { useAnalysisStore } from '../store'
 import { getRows, RowsResponse } from '../api/client'
 import { DashboardSection } from './DashboardSection'
+import { EmptyState } from './EmptyState'
 import {
   BarChart,
   Bar,
@@ -50,10 +51,7 @@ export const SecurityAnalysis: React.FC = () => {
 
   if (!summary) {
     return (
-      <div className="p-8 text-center text-gray-500 bg-white rounded shadow">
-        <p className="text-lg font-medium mb-2">Sin datos todavía</p>
-        <p>Sube un archivo Excel en la sección <strong>Carga de archivos</strong> para ver el análisis de seguridad.</p>
-      </div>
+      <EmptyState hint="Sube un archivo Excel para ver los eventos sospechosos y su correlación." />
     )
   }
 

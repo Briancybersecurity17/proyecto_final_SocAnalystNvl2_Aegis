@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { motion } from 'framer-motion'
 import { useAnalysisStore, RiskLevelBlock } from '../store'
 import { DashboardSection } from './DashboardSection'
+import { EmptyState } from './EmptyState'
 import { stagger, cardIn } from '../motion'
 
 const LEVEL_ORDER = ['critico', 'alto', 'medio', 'bajo'] as const
@@ -16,16 +17,36 @@ const LEVEL_STYLES: Record<string, { border: string; bg: string; text: string; c
   bajo:    { border: 'border-emerald-500', bg: 'bg-emerald-50', text: 'text-emerald-700', chip: 'bg-emerald-500 text-white', bar: '#10b981' },
 }
 
+/**
+ * Lectura ejecutiva de un nivel: lenguaje llano para quien no quiere
+ * tecnicismos. Solo usa cifras reales del análisis (recuentos y %) más la
+ * semántica del nivel; los detalles técnicos (Event IDs, hosts) se quedan
+ * en la justificación del acordeón, así nada se repite.
+ */
+const executiveNote = (lvl: string, b: RiskLevelBlock, total: number): string => {
+  if (b.count === 0) {
+    return `Sin registros en este nivel: nada de esta categoría entre los ${total} registros analizados.`
+  }
+  const head = `${b.count} registros (${b.percentage}% del total)`
+  switch (lvl) {
+    case 'critico':
+      return `${head}: exigen atención inmediata; son la prioridad máxima del análisis.`
+    case 'alto':
+      return `${head}: pocos en volumen, pero marcados como prioridad de revisión.`
+    case 'medio':
+      return `${head}: actividad a vigilar; por sí sola no indica un incidente.`
+    default:
+      return `${head}: actividad habitual de la infraestructura; no requiere acción.`
+  }
+}
+
 const RiskClassification: React.FC = () => {
   const summary = useAnalysisStore(state => state.summary)
   const [openLevel, setOpenLevel] = useState<string>('alto')
 
   if (!summary) {
     return (
-      <div className="p-8 text-center text-gray-500 bg-white rounded shadow">
-        <p className="text-lg font-medium mb-2">Sin datos todavía</p>
-        <p>Sube un archivo Excel en la sección <strong>Carga de archivos</strong> para ver la clasificación de riesgos.</p>
-      </div>
+      <EmptyState hint="Sube un archivo Excel para ver la clasificación de riesgos por criticidad." />
     )
   }
 
@@ -113,7 +134,7 @@ const RiskClassification: React.FC = () => {
 
               {expanded && (
                 <div className={`px-4 pb-4 ${style.bg} border-t`}>
-                  <h4 className="text-xs font-semibold uppercase text-gray-600 mt-3 mb-1">Justificación</h4>
+                  <h4 className="text-xs font-semibold uppercase text-gray-600 mt-3 mb-1">Justificación técnica</h4>
                   <p className="text-sm text-gray-700 leading-relaxed">{b.justification}</p>
 
                   {b.examples.length > 0 && (
@@ -143,8 +164,8 @@ const RiskClassification: React.FC = () => {
         })}
       </motion.div>
 
-      {/* Detailed justification table */}
-      <DashboardSection title="Justificación por nivel">
+      {/* Resumen ejecutivo: mismo dato que el acordeón, en lenguaje llano */}
+      <DashboardSection title="Resumen ejecutivo por nivel">
         <div className="overflow-auto">
           <table className="min-w-full text-sm border border-gray-200">
             <thead className="bg-gray-100">
@@ -152,7 +173,7 @@ const RiskClassification: React.FC = () => {
                 <th className="px-3 py-2 text-left">Nivel</th>
                 <th className="px-3 py-2 text-left">Registros</th>
                 <th className="px-3 py-2 text-left">% </th>
-                <th className="px-3 py-2 text-left">Justificación</th>
+                <th className="px-3 py-2 text-left">Qué significa</th>
               </tr>
             </thead>
             <tbody>
@@ -172,7 +193,7 @@ const RiskClassification: React.FC = () => {
                     </td>
                     <td className="px-3 py-2 font-semibold">{b.count}</td>
                     <td className="px-3 py-2">{b.percentage}%</td>
-                    <td className="px-3 py-2 text-gray-700 max-w-2xl">{b.justification}</td>
+                    <td className="px-3 py-2 text-gray-700 max-w-2xl">{executiveNote(lvl, b, summary.rows)}</td>
                   </motion.tr>
                 )
               })}

@@ -54,11 +54,12 @@ proyecto_final_bootcamp_ComunidadDojo_SocAnalystNvl2/
    ├─ index.html
    ├─ vite.config.ts          # proxy /api → 127.0.0.1:8500
    └─ src/
-      ├─ App.tsx              # layout + cabecera por sección
-      ├─ store/index.ts       # Zustand (tipado)
+      ├─ App.tsx              # layout + cabecera por sección + estado del backend
+      ├─ store/index.ts       # Zustand (tipado: análisis + navegación)
       ├─ api/client.ts        # axios + SSE
       └─ components/
          ├─ Sidebar.tsx
+         ├─ BackendStatus.tsx / EmptyState.tsx   # cabecera y estados vacíos con atajo
          ├─ UploadSection.tsx / UploadExcel.tsx / DataTable.tsx
          ├─ Dashboard.tsx
          ├─ SecurityAnalysis.tsx

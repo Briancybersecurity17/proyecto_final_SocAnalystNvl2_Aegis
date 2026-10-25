@@ -10,6 +10,7 @@ import {
   KbStatus,
 } from '../api/client'
 import { DashboardSection } from './DashboardSection'
+import { EmptyState } from './EmptyState'
 
 const LEVEL_BADGE: Record<string, string> = {
   critico: 'bg-red-600 text-white',
@@ -299,13 +300,7 @@ export const AssistantChat: React.FC = () => {
 
   if (!ready) {
     return (
-      <div className="p-8 text-center text-gray-500 bg-white rounded shadow">
-        <p className="text-lg font-medium mb-2">Sin datos todavía</p>
-        <p>
-          Sube un archivo Excel en la sección <strong>Carga de archivos</strong> para preguntarle al
-          asistente sobre los registros.
-        </p>
-      </div>
+      <EmptyState hint="Sube un archivo Excel para preguntarle al asistente sobre sus registros." />
     )
   }
 
