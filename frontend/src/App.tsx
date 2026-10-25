@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { AnimatePresence, MotionConfig, motion } from 'framer-motion';
-import ServicePulse from './components/ServicePulse';
 import Dashboard from './components/Dashboard';
 import SecurityAnalysis from './components/SecurityAnalysis';
 import RiskClassification from './components/RiskClassification';
@@ -57,16 +56,6 @@ const App: React.FC = () => {
             <div>
               <TypingTitle text={meta.title} />
               <p className="text-sm text-blue-100">{meta.subtitle}</p>
-            </div>
-            <div className="flex items-center gap-4">
-              <span
-                className="hidden sm:inline-flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1 text-xs font-medium text-white"
-                title="Motor de análisis y asistente de redacción del informe"
-              >
-                <span className="h-2 w-2 rounded-full bg-emerald-300" />
-                IA integrada · análisis, informe y RAG
-              </span>
-              <ServicePulse />
             </div>
           </header>
 

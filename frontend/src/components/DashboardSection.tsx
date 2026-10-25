@@ -1,7 +1,8 @@
 import React from 'react';
 
 interface DashboardSectionProps {
-  title: string;
+  /** Título opcional: algunos paneles ya lo dicen la cabecera de página. */
+  title?: string;
   children: React.ReactNode;
   className?: string;
 }
@@ -14,7 +15,7 @@ interface DashboardSectionProps {
  */
 export const DashboardSection: React.FC<DashboardSectionProps> = ({ title, children, className }) => (
   <div className={`bg-white rounded shadow p-4 transition-shadow duration-200 hover:shadow-md ${className ?? ''}`}>
-    <h3 className="text-xl font-semibold mb-4">{title}</h3>
+    {title && <h3 className="text-xl font-semibold mb-4">{title}</h3>}
     {children}
   </div>
 );

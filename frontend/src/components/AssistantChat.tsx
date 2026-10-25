@@ -315,7 +315,7 @@ export const AssistantChat: React.FC = () => {
         <div className={`border rounded-lg px-4 py-2.5 text-sm ${ragNote.tone}`}>{ragNote.text}</div>
       )}
 
-      <DashboardSection title="Consulta en lenguaje natural sobre los registros">
+      <DashboardSection>
         {/* Sugerencias */}
         {messages.length === 0 && (
           <div className="mb-4">

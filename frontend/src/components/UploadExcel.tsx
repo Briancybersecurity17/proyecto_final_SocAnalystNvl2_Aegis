@@ -55,7 +55,6 @@ const UploadExcel: React.FC = () => {
 
   return (
     <div className="border rounded p-5 bg-white shadow-sm">
-      <h2 className="text-lg font-semibold mb-1">Seleccionar archivo Excel</h2>
       <p className="text-sm text-gray-500 mb-3">
         Formato admitido: <strong>.xlsx</strong>. Se leen todas las hojas del libro.
       </p>

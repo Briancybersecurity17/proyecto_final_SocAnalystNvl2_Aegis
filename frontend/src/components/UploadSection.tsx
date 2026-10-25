@@ -1,22 +1,30 @@
 import React from 'react';
 import UploadExcel from './UploadExcel';
-import ServicePulse from './ServicePulse';
 import DataTable from './DataTable';
+import { useAnalysisStore } from '../store';
 
 /**
- * Sección de ingesta de archivo Excel.
- * Incluye el componente UploadExcel, el visualizador ServicePulse y la
- * tabla de registros importados (visualización del Excel).
+ * Sección de ingesta de archivo Excel: selector de archivo + visualización
+ * de los registros importados. El título de página lo pinta la cabecera.
  */
 const UploadSection: React.FC = () => {
+  const status = useAnalysisStore(state => state.status);
+  const idle = status === 'idle';
+
   return (
-    <section className="space-y-6 p-4">
-      <h2 className="text-2xl font-semibold">Ingesta de archivo Excel</h2>
+    <section className="space-y-6">
       <UploadExcel />
-      <div className="flex items-center space-x-2">
-        <ServicePulse />
-        <span className="text-sm text-gray-600">Servicio activo</span>
-      </div>
+
+      {/* Estado vacío: misma pieza que el resto de secciones */}
+      {idle && (
+        <div className="p-8 text-center text-gray-500 bg-white rounded shadow">
+          <p className="text-lg font-medium mb-2">Sin datos todavía</p>
+          <p>
+            Seleccioná un archivo <strong>.xlsx</strong> para importarlo y ver aquí sus registros.
+          </p>
+        </div>
+      )}
+
       <DataTable />
     </section>
   );

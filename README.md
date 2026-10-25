@@ -65,7 +65,7 @@ proyecto_final_bootcamp_ComunidadDojo_SocAnalystNvl2/
          ├─ RiskClassification.tsx
          ├─ ReportGenerator.tsx
          ├─ AssistantChat.tsx / ReferenceBlock (tarjetas ATT&CK + Event IDs)
-         └─ ServicePulse.tsx / SummaryCard.tsx / DashboardSection.tsx
+         └─ SummaryCard.tsx / DashboardSection.tsx
 ```
 
 ---
