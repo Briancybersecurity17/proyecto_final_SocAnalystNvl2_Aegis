@@ -78,3 +78,18 @@ def test_detect_facets_trae_valores_con_conteo(df):
     campo = next(f for f in detect_facets(df) if f.name == "Hostname")
     assert campo.distinct == 3
     assert {"value": "DC-01", "count": 2} in campo.values   # sin depender del desempate
+
+def test_detect_facets_descarta_columna_solo_vacia():
+    datos = pd.DataFrame({
+        "Hostname": ["DC-01", "WS-018", "WEB-01"],
+        "Comentario": ["", "   ", float("nan")],   # solo NaN/espacios: nada que filtrar
+        "_level": ["alto", "bajo", "medio"],
+        "_suspicious": [True, False, True],
+    })
+    nombres = [f.name for f in detect_facets(datos)]
+    assert "Comentario" not in nombres
+    assert "Hostname" in nombres   # el resto de reglas sigue pasando
+
+def test_faceta_sobre_columna_inexistente_se_ignora(df):
+    out = apply_filters(df, FilterParams(facets={"Inexistente": ["x"]}))
+    assert len(out) == 5   # la faceta se descarta en silencio, sin restringir (spec §8)

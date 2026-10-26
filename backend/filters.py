@@ -52,11 +52,15 @@ def apply_filters(df: pd.DataFrame, p: FilterParams) -> pd.DataFrame:
 
     # 4. Result con la misma guardia que /rows:813-815, para que un archivo
     #    sin columna Result se filtre en silencio en vez de reventar.
-    #    `_result_label` es una función de `main` y se importa aquí dentro
-    #    porque `main` importará `filters`: a nivel de módulo el import
-    #    circular rompería el arranque.
+    #    `_result_label` es una función de `main` y se importa aquí dentro,
+    #    con el mismo patrón dual paquete/suelto que kb_store:36-39, porque
+    #    `main` importará `filters` a nivel de módulo (Tarea 4) y un import
+    #    aquí arriba crearía el import circular main ↔ filters.
     if p.result.strip() and "Result" in df.columns:
-        from main import _result_label
+        try:  # paquete (uvicorn backend.main:app) o módulo suelto (pytest)
+            from backend.main import _result_label
+        except ImportError:  # pragma: no cover
+            from main import _result_label
 
         wanted = p.result.strip().lower()
         df = df[df["Result"].map(_result_label).str.lower() == wanted]
@@ -78,6 +82,10 @@ def apply_filters(df: pd.DataFrame, p: FilterParams) -> pd.DataFrame:
     #    aplica sobre el resultado de la anterior). Igualdad exacta
     #    insensible a mayúsculas; una faceta sin valores no restringe.
     for col, values in p.facets.items():
+        # URL vieja o dataset que no coincide: la faceta se ignora en
+        # silencio, nunca debe tumbar el request con un 500 (spec §8).
+        if col not in df.columns:
+            continue
         if not values:
             continue
         wanted_values = {str(v).lower() for v in values}
@@ -150,6 +158,11 @@ def detect_facets(df: pd.DataFrame, top_n: int = 12) -> list[FacetField]:
         # No es texto libre: si el valor medio supera los 40 caracteres la
         # lista de valores no aporta nada (p. ej. Event_Description).
         if serie.astype(str).str.len().mean() > 40:
+            continue
+        # Al menos un valor no vacío (spec §4.4): una columna de solo NaN
+        # o espacios no tiene nada que ofrecer en el panel. También cubre
+        # el DataFrame vacío (la media de arriba es NaN y no filtra nada).
+        if not serie.dropna().astype(str).str.strip().ne("").any():
             continue
         campos.append(_facet_field(serie, name, name, top_n))
 
