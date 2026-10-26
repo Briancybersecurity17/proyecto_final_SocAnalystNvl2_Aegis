@@ -7,6 +7,13 @@ import { stagger, cardIn } from '../motion'
 
 const LEVEL_ORDER = ['critico', 'alto', 'medio', 'bajo'] as const
 
+const LEVEL_LABELS: Record<string, string> = {
+  critico: 'Crítico',
+  alto: 'Alto',
+  medio: 'Medio',
+  bajo: 'Bajo',
+}
+
 // Niveles que, si tienen eventos, reciben un pulso de brillo (una sola vez)
 const GLOW_LEVELS = ['critico', 'alto']
 
@@ -51,6 +58,7 @@ const RiskClassification: React.FC = () => {
   }
 
   const riskLevels = summary.risk_levels ?? {}
+  const severityMapping = summary.severity_mapping ?? []
 
   const block = (lvl: string): RiskLevelBlock =>
     riskLevels[lvl] ?? {
@@ -201,6 +209,51 @@ const RiskClassification: React.FC = () => {
           </table>
         </div>
       </DashboardSection>
+
+      {/* Trazabilidad: cómo se tradujo cada valor original del campo Severity */}
+      {severityMapping.length > 0 && (
+        <DashboardSection title="Correspondencia de severidad original → nivel de riesgo">
+          <p className="text-sm text-gray-600 mb-3">
+            El campo <code className="bg-gray-100 px-1 rounded">Severity</code> del archivo se
+            conserva sin modificar. Esta es la traducción aplicada en el dashboard, los gráficos
+            y el informe; los valores fuera del catálogo se clasifican por palabras clave
+            (p.&nbsp;ej. <em>warn</em>, <em>critical</em>, <em>high</em>) y, sin evidencia, como
+            Bajo.
+          </p>
+          <div className="overflow-auto">
+            <table className="min-w-full text-sm border border-gray-200">
+              <thead className="bg-gray-100">
+                <tr>
+                  <th className="px-3 py-2 text-left">Valor original (Severity)</th>
+                  <th className="px-3 py-2 text-left">Nivel de riesgo</th>
+                  <th className="px-3 py-2 text-right">Registros</th>
+                  <th className="px-3 py-2 text-right">% del total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {severityMapping.map((m, idx) => (
+                  <motion.tr
+                    key={m.raw}
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.22, delay: 0.1 + idx * 0.05, ease: 'easeOut' }}
+                    className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}
+                  >
+                    <td className="px-3 py-2 font-medium">{m.raw}</td>
+                    <td className="px-3 py-2">
+                      <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase ${LEVEL_STYLES[m.level]?.chip ?? 'bg-gray-200'}`}>
+                        {LEVEL_LABELS[m.level] ?? m.level}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-right font-semibold">{m.count}</td>
+                    <td className="px-3 py-2 text-right">{m.percentage}%</td>
+                  </motion.tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </DashboardSection>
+      )}
     </section>
   )
 }

@@ -66,12 +66,22 @@ export interface ReportNarrative {
   generated_at: string
 }
 
+/** Un valor original del campo Severity y el nivel de riesgo al que se traduce. */
+export interface SeverityMappingEntry {
+  raw: string
+  level: string
+  count: number
+  percentage: number
+}
+
 export interface AnalysisSummary {
   rows: number
   columns: string[]
   risk: string
   risk_justification: string
   severity_counts: Record<string, number>
+  /** Traducción auditable de cada valor original de Severity a nuestro nivel. */
+  severity_mapping?: SeverityMappingEntry[]
   level_counts: Record<string, number>
   risk_levels: Record<string, RiskLevelBlock>
   unique_hosts: number | null

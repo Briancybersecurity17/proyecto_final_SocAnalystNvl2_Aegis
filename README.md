@@ -27,6 +27,11 @@ sospechosos, clasifica el riesgo en cuatro niveles con justificación, y genera 
 - **IA integrada** que apoya el análisis de datos **y** la redacción del informe (`backend/ai_service.py`).
 - **Rigor analítico**: cada hallazgo cita sus evidencias (`Log_ID`, `Timestamp`, `Host`, `Event_ID`, `Source_IP`);
   la IA solo recibe datos ya calculados y nunca agrega cifras propias.
+- **Mapeo de severidad fiel a la fuente**: el campo `Severity` original se conserva sin alterar y se
+  traduce a la escala de cuatro niveles según la política de la organización (`Warning → Crítico`,
+  `High → Alto`, `Medium → Medio`, `Informational/Low → Bajo`), con respaldo por palabras clave para
+  otros datasets. La correspondencia queda a la vista en *Clasificación de riesgos*
+  (campo `severity_mapping`, calculado en `backend/main.py`).
 - Renderizado seguro: los textos del backend se insertan con `textContent` (`frontend/src/utils/dom.ts`).
 
 ---

@@ -5,7 +5,7 @@ import re
 from contextlib import asynccontextmanager
 from datetime import date, datetime
 from io import BytesIO
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import pandas as pd
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException, Query
@@ -79,17 +79,35 @@ EXPECTED_COLUMNS = [
 # ---------------------------------------------------------------------------
 # Risk classification (severity from the source file -> our 4 levels)
 # ---------------------------------------------------------------------------
+# Mapeo de valores originales del campo Severity (del Excel / fuente) →
+# nuestros 4 niveles de riesgo. El orden refleja la política de la
+# organización: warning se trata como crítico (no como medio).
 SEVERITY_TO_LEVEL: Dict[str, str] = {
     "critical": "critico",
+    "critico": "critico",
     "high": "alto",
+    "alto": "alto",
     "medium": "medio",
-    "warning": "medio",
+    "medio": "medio",
+    "warning": "critico",
     "low": "bajo",
+    "bajo": "bajo",
     "informational": "bajo",
+    "informative": "bajo",
     "info": "bajo",
 }
 LEVEL_ORDER = ["critico", "alto", "medio", "bajo"]
 LEVEL_LABELS = {"critico": "Crítico", "alto": "Alto", "medio": "Medio", "bajo": "Bajo"}
+
+# Palabras clave para mapear valores desconocidos (otros datasets) de forma
+# robusta, sin depender de coincidencia exacta. Se revisan de más grave a más
+# leve; el primero que gana se aplica. Default: "bajo" (sin evidencia de riesgo).
+SEVERITY_KEYWORDS: List[Tuple[str, Tuple[str, ...]]] = [
+    ("critico", ("critical", "crit", "warn", "err", "severe", "fatal", "emergency", "alert")),
+    ("alto", ("high", "major", "elevated")),
+    ("medio", ("medium", "moderate", "average")),
+    ("bajo", ("low", "inform", "info", "trivial", "minor")),
+]
 
 # Windows Security event IDs – explanation grounded in the dataset's own
 # Event_Description column (no invented findings).
@@ -154,8 +172,27 @@ def _records(df: pd.DataFrame) -> List[Dict[str, Any]]:
 
 
 def normalize_level(severity: Any) -> str:
-    """Map a raw severity value to one of our four risk levels."""
-    return SEVERITY_TO_LEVEL.get(str(severity).strip().lower(), "bajo")
+    """Map a raw severity value to one of our four risk levels.
+
+    Coincidencia exacta primero (catálogo conocido), luego coincidencia parcial
+    (contiene) para ser robustos con otros datasets, y por defecto "bajo"
+    (sin evidencia de riesgo destacada).
+    """
+    raw = str(severity).strip().lower()
+    if not raw or raw in ("nan", "none", "null", ""):
+        return "bajo"
+
+    # 1. Coincidencia exacta (catálogo conocido)
+    exact = SEVERITY_TO_LEVEL.get(raw)
+    if exact:
+        return exact
+
+    # 2. Coincidencia parcial por palabras clave (otros datasets)
+    for level, keywords in SEVERITY_KEYWORDS:
+        if any(k in raw for k in keywords):
+            return level
+
+    return "bajo"
 
 
 def row_reason(row: pd.Series) -> str:
@@ -379,6 +416,21 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
     severity_counts = _counts(raw_severity) if "Severity" in df.columns else {}
     level_counts = {lvl: int((df["_level"] == lvl).sum()) for lvl in LEVEL_ORDER}
 
+    # Correspondencia auditable: cada valor original del campo Severity y el
+    # nivel de riesgo al que se traduce (misma función normalize_level que
+    # alimenta todos los gráficos y el informe).
+    severity_mapping: List[Dict[str, Any]] = []
+    if "Severity" in df.columns and total:
+        severity_mapping = [
+            {
+                "raw": str(value),
+                "level": normalize_level(value),
+                "count": int(count),
+                "percentage": _pct(int(count), total),
+            }
+            for value, count in raw_severity.value_counts(dropna=True).items()
+        ]
+
     # --- timestamps --------------------------------------------------------
     events_per_day: Dict[str, int] = {}
     events_per_day_by_level: Dict[str, Dict[str, int]] = {}
@@ -512,6 +564,7 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
         "risk": risk,
         "risk_justification": risk_justification,
         "severity_counts": severity_counts,
+        "severity_mapping": severity_mapping,
         "level_counts": level_counts,
         "risk_levels": risk_levels,
         "unique_hosts": unique_hosts,
