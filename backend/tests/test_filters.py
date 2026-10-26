@@ -1,6 +1,9 @@
+from types import SimpleNamespace
+
 import pandas as pd
 import pytest
-from filters import FilterParams, apply_filters, detect_facets
+from starlette.datastructures import QueryParams
+from filters import FilterParams, apply_filters, detect_facets, parse_filters
 
 @pytest.fixture
 def df() -> pd.DataFrame:
@@ -93,3 +96,38 @@ def test_detect_facets_descarta_columna_solo_vacia():
 def test_faceta_sobre_columna_inexistente_se_ignora(df):
     out = apply_filters(df, FilterParams(facets={"Inexistente": ["x"]}))
     assert len(out) == 5   # la faceta se descarta en silencio, sin restringir (spec §8)
+
+
+def _peticion(query: str) -> SimpleNamespace:
+    """Stub mínimo de Request: a parse_filters solo le llega query_params."""
+    return SimpleNamespace(query_params=QueryParams(query))
+
+
+@pytest.fixture
+def df_con_columna_page() -> pd.DataFrame:
+    """Excel con una columna llamada literalmente «page» (el caso de R17)."""
+    return pd.DataFrame({
+        "page": ["1", "2", "1", "2", "1"],
+        "Hostname": ["DC-01", "WS-018", "DC-01", "WS-018", "WEB-01"],
+    })
+
+
+def test_parametros_de_paginacion_no_son_faceta(df_con_columna_page):
+    # R17: /rows manda page/page_size en CADA petición (la UI los envía
+    # siempre). Con `reserved`, esos nombres se ignoran por completo: aunque
+    # el Excel tenga una columna «page», la tabla no se filtra en silencio.
+    stub = _peticion("page=2&page_size=50&Hostname=DC-01")
+    params = parse_filters(stub, df_con_columna_page, reserved={"page", "page_size"})
+    assert "page" not in params.facets and "page_size" not in params.facets
+    assert params.facets == {"Hostname": ["DC-01"]}   # las facetas reales siguen
+    # parse_filters no consume ni altera la query: la paginación sigue
+    # leyéndose igual desde request.query_params en el endpoint.
+    assert stub.query_params.get("page") == "2"
+
+
+def test_sin_reserved_la_paginacion_sigue_puediendo_ser_faceta(df_con_columna_page):
+    # La otra mitad de R17: /summary y /facets NO reservan nada, así que un
+    # parámetro «page» sigue comportándose como la faceta que es allí.
+    params = parse_filters(_peticion("page=2"), df_con_columna_page)
+    assert params.facets == {"page": ["2"]}
+

@@ -36,6 +36,14 @@ class FilterParams:
 # aunque el archivo tenga una columna con ese nombre (R11).
 _CANONICOS = frozenset({"from", "to", "level", "suspicious", "result", "q"})
 
+# Valores canónicos de los booleanos de la URL: cubren todo lo que el antiguo
+# `bool = Query` de FastAPI aceptaba (yes/no/on/off/1/0…), para que una URL
+# vieja siga filtrando igual. Cualquier otro valor no vacío es 400: un
+# booleano ilegible que se interpretara como falso enseñaría TODAS las filas
+# con el filtro «puesto», y un engaño silencioso es peor que un error (R18).
+_BOOLEANO_VERDADERO = frozenset({"true", "1", "yes", "on"})
+_BOOLEANO_FALSO = frozenset({"false", "0", "no", "off", ""})
+
 
 def _parse_ventana(valor: str, nombre: str) -> datetime | None:
     """Fecha de la query → datetime; vacía → None; ilegible → ValueError.
@@ -55,7 +63,11 @@ def _parse_ventana(valor: str, nombre: str) -> datetime | None:
     return momento   # pd.Timestamp, subclase de datetime: compara bien con la columna Timestamp
 
 
-def parse_filters(request: Request, df: pd.DataFrame) -> FilterParams:
+def parse_filters(
+    request: Request,
+    df: pd.DataFrame,
+    reserved: set[str] | None = None,
+) -> FilterParams:
     """Traduce los parámetros de la query a `FilterParams` (spec §4.4).
 
     Separa los canónicos (ventana, nivel, sospechosos, result, q) del resto,
@@ -63,9 +75,14 @@ def parse_filters(request: Request, df: pd.DataFrame) -> FilterParams:
     columna del archivo y no empieza por «_»: así una URL vieja o un
     parámetro de más no cambian el resultado ni revientan la petición.
 
+    `reserved` es un conjunto de nombres que se ignoran por completo (ni
+    canónicos ni facetas): lo usa `/rows` con page/page_size, que viajan
+    SIEMPRE en la URL de la tabla, para que un Excel con una columna
+    «page» no quede filtrado en silencio (R17).
+
     Lanza `ValueError` con mensaje legible cuando el filtro no tiene
-    sentido (nivel fuera de catálogo, ventana invertida o fechas
-    ingparseables); el endpoint lo convierte en un 400.
+    sentido (nivel fuera de catálogo, booleano ilegible, ventana invertida
+    o fechas imparseables); el endpoint lo convierte en un 400.
     """
     query = request.query_params
     params = FilterParams()
@@ -103,17 +120,36 @@ def parse_filters(request: Request, df: pd.DataFrame) -> FilterParams:
             )
         params.level = nivel
 
-    # 3. Solo sospechosos: la query llega como true/1 en cualquier
-    #    combinación de mayúsculas (?suspicious=True lo envía el toggle).
-    params.suspicious = str(query.get("suspicious", "")).strip().lower() in ("true", "1")
+    # 3. Solo sospechosos: la query llega como true/false en muchas formas
+    #    (el antiguo `bool = Query` de FastAPI aceptaba yes/no/on/off/1/0… y
+    #    la UI puede enviar cualquiera de esas). Cualquier forma canónica se
+    #    traduce a su booleano; un valor ilegible levanta ValueError → 400
+    #    (R18): interpretarlo como falso enseñaría todas las filas con el
+    #    filtro «puesto», y un engaño silencioso es peor que un error.
+    bruto = str(query.get("suspicious", ""))
+    crudo = bruto.strip().lower()
+    if crudo in _BOOLEANO_VERDADERO:
+        params.suspicious = True
+    elif crudo in _BOOLEANO_FALSO:
+        params.suspicious = False
+    else:
+        raise ValueError(
+            f"El parámetro «suspicious» no es un booleano válido: {bruto!r}; "
+            "use true/false, 1/0, yes/no u on/off"
+        )
     params.result = str(query.get("result", ""))
     params.q = str(query.get("q", ""))
 
     # 4. Facetas: `multi_items` conserva los parámetros repetidos
     #    (?Hostname=DC-01&Hostname=WEB-01 → OR dentro del mismo campo).
     for nombre, valor in query.multi_items():
-        # Los canónicos ya se consumieron arriba y los derivados (_level…)
-        # no son columnas del archivo: se ignoran (R11).
+        # Los canónicos ya se consumieron arriba, los derivados (_level…)
+        # no son columnas del archivo y los nombres reservados (paginación)
+        # nunca son faceta (R17): /rows manda page/page_size en cada
+        # petición, así que con un Excel que tuviera una columna «page» la
+        # tabla se filtraría en silencio por page="1" en cada recarga.
+        if reserved and nombre in reserved:
+            continue
         if nombre in _CANONICOS or nombre.startswith("_"):
             continue
         if nombre in df.columns:

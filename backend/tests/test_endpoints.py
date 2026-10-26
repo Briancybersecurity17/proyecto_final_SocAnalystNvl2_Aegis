@@ -42,6 +42,38 @@ def test_q_no_busca_en_columnas_derivadas(client, analysis_id):
     assert res["total"] == 0      # "critico" solo aparece en _level, no en los datos
 
 
+def test_suspicious_on_se_comporta_como_true(client, analysis_id):
+    # R18: el toggle «solo sospechosos» puede llegar como on/yes/1 (el antiguo
+    # bool de FastAPI los aceptaba todos). «on» debe filtrar igual que «true»;
+    # enseñar TODAS las filas creyendo el filtro puesto es un engaño peor que
+    # un error.
+    on = client.get(f"/api/analysis/{analysis_id}/summary",
+                    params={"suspicious": "on"}).json()
+    true = client.get(f"/api/analysis/{analysis_id}/summary",
+                      params={"suspicious": "true"}).json()
+    assert on["filtered_total"] == true["filtered_total"] == 6
+    # y en la tabla, donde el engaño sería visible para el analista
+    filas = client.get(f"/api/analysis/{analysis_id}/rows",
+                       params={"page_size": 200, "suspicious": "on"}).json()
+    assert filas["total"] == 6
+    # la forma canónica falsa («off») no restringe nada: sigue viéndose todo
+    off = client.get(f"/api/analysis/{analysis_id}/summary",
+                     params={"suspicious": "off"}).json()
+    assert off["filtered_total"] == 12
+
+
+def test_suspicious_basura_devuelve_400(client, analysis_id):
+    # R18: un booleano ilegible es error del cliente (antes el motor de Query
+    # respondía 422; ahora el motor de filtros responde 400 con el motivo) —
+    # nunca un 200 silencioso que ignora el filtro.
+    res = client.get(f"/api/analysis/{analysis_id}/rows",
+                     params={"page_size": 200, "suspicious": "quizas"})
+    assert res.status_code == 400
+    resumen = client.get(f"/api/analysis/{analysis_id}/summary",
+                         params={"suspicious": "quizas"})
+    assert resumen.status_code == 400
+
+
 def test_summary_sin_filtros_es_identico_al_global(client, analysis_id):
     res = client.get(f"/api/analysis/{analysis_id}/summary").json()
     assert res["total"] == 12 and res["filtered_total"] == 12 and res["rows"] == 12

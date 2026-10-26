@@ -835,6 +835,8 @@ async def get_rows(
     `/summary` y `/facets`: lo traduce `parse_filters` y lo aplica
     `apply_filters`, de modo que la tabla enseña exactamente las mismas
     filas que los KPI del panel. Solo la paginación es exclusiva de aquí.
+    Un valor de filtro inválido (nivel fuera de catálogo, booleano o fecha
+    ilegibles) responde 400 con el motivo, igual que en `/summary`.
     """
     if analysis_id not in analysis_store:
         raise HTTPException(status_code=404, detail="Analysis not found")
@@ -843,11 +845,14 @@ async def get_rows(
         raise HTTPException(status_code=409, detail="El análisis aún no está listo")
 
     try:
-        params = parse_filters(request, df)
+        # page/page_size viajan SIEMPRE en la URL de la tabla (la UI los
+        # envía en cada petición): sin reservarlos, un Excel con una columna
+        # «page» se filtraría en silencio por page="1" en cada recarga (R17).
+        params = parse_filters(request, df, reserved={"page", "page_size"})
     except ValueError as exc:
-        # Filtro imposible (nivel fuera de catálogo, ventana invertida o
-        # fecha ilegible): 400 con el motivo, igual que en /summary, en vez
-        # del silencio anterior que devolvía todas las filas (R16).
+        # Filtro imposible (nivel fuera de catálogo, booleano o fecha
+        # ilegibles, ventana invertida): 400 con el motivo, igual que en
+        # /summary, en vez del silencio anterior (R16/R18).
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # El DataFrame del store ya viene enriquecido desde la ingesta (_level,
@@ -900,8 +905,8 @@ async def get_scoped_summary(analysis_id: str, request: Request):
     try:
         params = parse_filters(request, df)
     except ValueError as exc:
-        # Filtro imposible (nivel fuera de catálogo, ventana invertida o
-        # fecha ilegible): 400 con el motivo, nunca un 500 (R10).
+        # Filtro imposible (nivel fuera de catálogo, booleano ilegible,
+        # ventana invertida o fecha ilegible): 400 con el motivo, nunca un 500 (R10).
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     work = apply_filters(df, params)
