@@ -112,6 +112,12 @@ export interface AnalysisState {
   status: 'idle' | 'uploading' | 'processing' | 'done' | 'error'
   summary: AnalysisSummary | null
   error: string | null
+  /**
+   * Aviso no crítico para el analista (p. ej. «análisis restaurado tras
+   * recargar» o «el backend se reinició»). No es un error: no bloquea nada
+   * y se muestra en una banda global desechable.
+   */
+  notice: string | null
 }
 
 export type AnalysisStore = AnalysisState & {
@@ -119,6 +125,7 @@ export type AnalysisStore = AnalysisState & {
   setStatus: (status: AnalysisState['status']) => void
   setSummary: (summary: AnalysisSummary) => void
   setError: (msg: string) => void
+  setNotice: (msg: string | null) => void
   reset: () => void
 }
 
@@ -128,11 +135,13 @@ export const useAnalysisStore = create<AnalysisStore>()(
     status: 'idle',
     summary: null,
     error: null,
+    notice: null,
     setAnalysisId: (id) => set({ analysisId: id }),
     setStatus: (status) => set({ status }),
     setSummary: (summary) => set({ summary, status: 'done' }),
     setError: (msg) => set({ error: msg, status: 'error' }),
-    reset: () => set({ analysisId: null, status: 'idle', summary: null, error: null }),
+    setNotice: (msg) => set({ notice: msg }),
+    reset: () => set({ analysisId: null, status: 'idle', summary: null, error: null, notice: null }),
   }))
 )
 

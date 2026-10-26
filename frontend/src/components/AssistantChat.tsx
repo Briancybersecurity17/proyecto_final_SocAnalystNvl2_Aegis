@@ -222,23 +222,31 @@ export const AssistantChat: React.FC = () => {
     return base
   }, [summary])
 
-  // Estado del índice semántico (se actualiza mientras termina la indexación)
+  // Estado del índice semántico (se actualiza mientras termina la indexación).
+  // El sondeo se detiene en cuanto el índice queda listo: mantenerlo cada 3 s
+  // para siempre solo generaba tráfico repetido contra el backend.
   useEffect(() => {
     if (!ready || !analysisId) return
     let cancelled = false
+    let timer: number | null = null
     const load = async () => {
       try {
         const data = await getRagStatus(analysisId)
-        if (!cancelled) setRag(data)
+        if (cancelled) return
+        setRag(data)
+        if (data.available && data.total > 0 && timer !== null) {
+          window.clearInterval(timer)
+          timer = null
+        }
       } catch {
         if (!cancelled) setRag(null)
       }
     }
-    load()
-    const timer = window.setInterval(load, 3000)
+    void load()
+    timer = window.setInterval(() => void load(), 3000)
     return () => {
       cancelled = true
-      window.clearInterval(timer)
+      if (timer !== null) window.clearInterval(timer)
     }
   }, [ready, analysisId])
 

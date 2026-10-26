@@ -11,6 +11,9 @@ export const uploadExcel = async (file: File) => {
   form.append('file', file)
   const response = await API.post('/analyze', form, {
     headers: { 'Content-Type': 'multipart/form-data' },
+    // El backend recibe y abre el libro antes de responder: con Excel grandes
+    // los 30 s por defecto se quedaban cortos y la subida fallaba sin motivo.
+    timeout: 120000,
   })
   return response.data // { analysis_id, status }
 }
@@ -207,6 +210,10 @@ export const askQuestion = async (
 /**
  * Estado del índice semántico local (motor + eventos indexados).
  * Devuelve siempre 200: `available: false` si el motor no está instalado.
+ *
+ * Se cachea en módulo unos segundos: la cabecera y el asistente lo sondean
+ * periódicamente y, sin esta caché, cada consulta llegaba al backend (el
+ * log de uvicorn se llenaba de `GET /api/rag/status` repetidos).
  */
 export interface RagStatusResponse {
   available: boolean
@@ -218,10 +225,17 @@ export interface RagStatusResponse {
   suspicious?: number
 }
 
+const RAG_TTL_MS = 8000
+let ragCache: { key: string; at: number; data: RagStatusResponse } | null = null
+
 export const getRagStatus = async (analysisId?: string) => {
+  const key = analysisId ?? ''
+  const cached = ragCache
+  if (cached && cached.key === key && Date.now() - cached.at < RAG_TTL_MS) return cached.data
   const response = await API.get('/rag/status', {
     params: analysisId ? { analysis_id: analysisId } : {},
   })
+  ragCache = { key, at: Date.now(), data: response.data as RagStatusResponse }
   return response.data as RagStatusResponse
 }
 
@@ -234,7 +248,18 @@ export const getKbStatus = async () => {
   return response.data as KbStatus
 }
 
+/**
+ * Sigue el progreso de un análisis.
+ *
+ * Transporte principal: SSE (`/events`). Si el stream muere (reinicio del
+ * backend, corte de red, proxy), en lugar de dejar la UI clavada en
+ * «Analizando…» se pasa a consultar `GET /analysis/{id}` cada 1,5 s hasta
+ * que el análisis termine o falle. El consumidor recibe el mismo flujo de
+ * estados en ambos casos y su `stop()` corta lo que esté activo.
+ */
 export const listenAnalysisEvents = (analysisId: string, onStatus: (status: string) => void) => {
+  let closed = false
+  let pollTimer: number | null = null
   const eventSource = new EventSource(`${API.defaults.baseURL}/analysis/${analysisId}/events`)
 
   const handle = (e: MessageEvent) => {
@@ -250,6 +275,35 @@ export const listenAnalysisEvents = (analysisId: string, onStatus: (status: stri
     }
   }
 
+  /** Respaldo: una consulta directa al análisis (mismo estado que el SSE). */
+  const poll = async () => {
+    if (closed) return
+    try {
+      const data = await getAnalysis(analysisId)
+      if (closed || !data?.status) return
+      onStatus(data.status)
+      // 'done' y 'error' cierran la escucha desde el consumidor; aquí no se
+      // reprograma para no seguir consultando tras terminar.
+      if (data.status === 'done' || data.status === 'error') return
+    } catch (err) {
+      const status = (err as { response?: { status?: number } })?.response?.status
+      if (status === 404) {
+        // El backend volvió sin ese análisis (se reinició): no tiene sentido
+        // seguir preguntando; se libera la UI para que se vuelva a subir.
+        onStatus('error')
+        return
+      }
+      // red caída: se reintenta en el siguiente tick, hasta que vuelva y
+      // responda (done, error o 404)
+    }
+    if (!closed) pollTimer = window.setTimeout(() => void poll(), 1500)
+  }
+
+  const startPolling = () => {
+    if (closed || pollTimer !== null) return
+    pollTimer = window.setTimeout(() => void poll(), 800)
+  }
+
   // sse-starlette emits a *named* event ("status").
   // Named events never reach onmessage – they require addEventListener.
   eventSource.addEventListener('status', handle)
@@ -257,10 +311,20 @@ export const listenAnalysisEvents = (analysisId: string, onStatus: (status: stri
   eventSource.onmessage = handle
 
   eventSource.onerror = () => {
-    eventSource.close()
+    // CONNECTING = el navegador ya está reintentando solo; solo se asume
+    // corte definitivo cuando el stream queda CLOSED.
+    if (eventSource.readyState === EventSource.CLOSED) {
+      eventSource.close()
+      startPolling()
+    }
   }
 
   return () => {
+    closed = true
+    if (pollTimer !== null) {
+      window.clearTimeout(pollTimer)
+      pollTimer = null
+    }
     eventSource.removeEventListener('status', handle)
     eventSource.close()
   }

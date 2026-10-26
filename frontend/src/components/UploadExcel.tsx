@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { uploadExcel, getAnalysis, listenAnalysisEvents } from '../api/client'
 import { useAnalysisStore } from '../store'
 
@@ -8,10 +8,13 @@ const UploadExcel: React.FC = () => {
   const [fileName, setFileName] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   const [waitMsg, setWaitMsg] = useState('')
+  // Análisis que ya tiene escucha activa (evita dos listeners del mismo id).
+  const watchingRef = useRef<string | null>(null)
 
   const status = useAnalysisStore(state => state.status)
   const summary = useAnalysisStore(state => state.summary)
   const error = useAnalysisStore(state => state.error)
+  const analysisId = useAnalysisStore(state => state.analysisId)
   const setAnalysisId = useAnalysisStore(state => state.setAnalysisId)
   const setStatus = useAnalysisStore(state => state.setStatus)
   const setSummary = useAnalysisStore(state => state.setSummary)
@@ -19,6 +22,60 @@ const UploadExcel: React.FC = () => {
   const reset = useAnalysisStore(state => state.reset)
 
   const busy = status === 'uploading' || status === 'processing'
+
+  /**
+   * Sigue el progreso de un análisis en el backend (SSE con respaldo de
+   * sondeo si el stream se cae) y actualiza la tienda al terminar o fallar.
+   * Sirve tanto tras subir un archivo como para retomar uno ya en curso.
+   */
+  const watch = (analysis_id: string, runningMsg: string) => {
+    if (watchingRef.current === analysis_id) return
+    watchingRef.current = analysis_id
+    setProgressMsg(runningMsg)
+    const stop = listenAnalysisEvents(analysis_id, (state) => {
+      // Solo los estados conocidos cambian la UI; cualquier otro mensaje
+      // (p. ej. un estado nuevo del backend) no debe romper el flujo.
+      if (state === 'pending' || state === 'processing' || state === 'done') {
+        // "done" sigue en proceso hasta descargar el resumen
+        setStatus('processing')
+      } else if (state === 'error') {
+        setStatus('error')
+      }
+
+      if (state === 'done') {
+        watchingRef.current = null
+        stop()
+        getAnalysis(analysis_id)
+          .then((data) => {
+            if (!data?.summary || typeof data.summary.rows !== 'number') {
+              setError('La API terminó el análisis pero no devolvió un resumen válido')
+              return
+            }
+            setSummary(data.summary)
+            setProgressMsg('Análisis completado')
+          })
+          .catch(() => {
+            setError('El análisis terminó, pero no se pudieron recuperar sus resultados desde la API')
+          })
+      }
+      if (state === 'error') {
+        watchingRef.current = null
+        stop()
+        setError('No se pudo procesar el archivo')
+      }
+    })
+  }
+
+  // Retoma el seguimiento de un análisis que sigue en proceso sin volver a
+  // subir nada: es lo que ocurre al restaurar la referencia guardada tras
+  // recargar la pestaña (o si el SSE se cortó y el respaldo por sondeo
+  // terminó en otro estado).
+  useEffect(() => {
+    if (status !== 'processing' || !analysisId || summary) return
+    if (watchingRef.current === analysisId) return
+    watch(analysisId, 'Retomando el seguimiento del análisis…')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, analysisId, summary])
 
   /** Ruta única de importación: la usan el input y el arrastre. */
   const handleFile = async (file: File | undefined | null) => {
@@ -28,10 +85,10 @@ const UploadExcel: React.FC = () => {
       return
     }
     setWaitMsg('')
-    // Se limpia el análisis anterior ANTES de validar: con un archivo no
-    // válido, el resto de la app no debe seguir mostrando los datos del
-    // anterior como si siguieran vigentes.
+    // Se limpia el análisis ANTES de validar: con un archivo no válido, el
+    // resto de la app no debe seguir mostrando los datos del anterior.
     reset()
+    watchingRef.current = null
     setFileName(null) // el nombre del archivo anterior ya no corresponde
     if (!file.name.toLowerCase().endsWith('.xlsx')) {
       setError('Solo se admiten archivos .xlsx')
@@ -44,41 +101,16 @@ const UploadExcel: React.FC = () => {
       const { analysis_id } = await uploadExcel(file)
       setAnalysisId(analysis_id)
       setStatus('processing')
-      setProgressMsg('Analizando registros con el motor de IA…')
-      // Escucha los eventos SSE de progreso
-      const stopListening = listenAnalysisEvents(analysis_id, (state) => {
-        // Solo los estados conocidos cambian la UI; cualquier otro mensaje
-        // (p. ej. un estado nuevo del backend) no debe romper el flujo.
-        if (state === 'pending' || state === 'processing' || state === 'done') {
-          // "done" sigue en proceso hasta descargar el resumen
-          setStatus('processing')
-        } else if (state === 'error') {
-          setStatus('error')
-        }
-
-        if (state === 'done') {
-          stopListening()
-          getAnalysis(analysis_id)
-            .then((data) => {
-              if (!data?.summary || typeof data.summary.rows !== 'number') {
-                setError('La API terminó el análisis pero no devolvió un resumen válido')
-                return
-              }
-              setSummary(data.summary)
-              setProgressMsg('Análisis completado')
-            })
-            .catch(() => {
-              setError('El análisis terminó, pero no se pudieron recuperar sus resultados desde la API')
-            })
-        }
-        if (state === 'error') {
-          stopListening()
-          setError('No se pudo procesar el archivo')
-        }
-      })
+      watch(analysis_id, 'Analizando registros con el motor de IA…')
     } catch (err: any) {
       console.error(err)
-      setError(err?.response?.data?.detail || 'Error al subir el archivo')
+      const detail = err?.response?.data?.detail
+      setError(
+        detail ||
+          (err?.code === 'ECONNABORTED'
+            ? 'La subida tardó demasiado: revisá el archivo e inténtalo de nuevo'
+            : 'No se pudo contactar con el backend en el puerto 8500. Comprobá que el servicio esté activo.'),
+      )
     } finally {
       // permite volver a elegir el mismo archivo
       if (fileInputRef.current) fileInputRef.current.value = ''

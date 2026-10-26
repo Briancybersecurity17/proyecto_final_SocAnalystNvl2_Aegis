@@ -1,6 +1,8 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { AnimatePresence, MotionConfig, motion } from 'framer-motion';
-import { useUiStore, Section } from './store';
+import { useAnalysisStore, useUiStore, Section } from './store';
+import { loadAnalysisRef, saveAnalysisRef } from './persist';
+import { restoreAnalysis } from './restore';
 import Dashboard from './components/Dashboard';
 import SecurityAnalysis from './components/SecurityAnalysis';
 import RiskClassification from './components/RiskClassification';
@@ -39,10 +41,40 @@ const SECTION_META: Record<Section, { title: string; subtitle: string }> = {
   },
 };
 
+// La restauración corre una sola vez aunque React monte dos veces el árbol
+// (StrictMode): duplicarla produciría dos peticiones y dos avisos.
+let restoreStarted = false;
+
 const App: React.FC = () => {
   const activeSection = useUiStore(state => state.section);
   const setActiveSection = useUiStore(state => state.setSection);
   const meta = SECTION_META[activeSection];
+
+  const status = useAnalysisStore(state => state.status);
+  const analysisId = useAnalysisStore(state => state.analysisId);
+  const summary = useAnalysisStore(state => state.summary);
+  const notice = useAnalysisStore(state => state.notice);
+  const setNotice = useAnalysisStore(state => state.setNotice);
+
+  // Al abrir la pestaña (F5 o reciclage de memoria del navegador) se mira si
+  // quedó un análisis guardado y se le pregunta al backend si sigue ahí.
+  useEffect(() => {
+    if (restoreStarted) return;
+    restoreStarted = true;
+    if (loadAnalysisRef()) void restoreAnalysis();
+  }, []);
+
+  // Mientras hay análisis activo se recuerda cuál es y qué sección se usaba.
+  useEffect(() => {
+    if (status === 'done' && analysisId) saveAnalysisRef(analysisId, activeSection);
+  }, [status, analysisId, activeSection]);
+
+  // Los avisos de éxito se solan solos; los de problema esperan al analista.
+  useEffect(() => {
+    if (!notice || !notice.startsWith('Análisis restaurado')) return;
+    const timer = window.setTimeout(() => setNotice(null), 10000);
+    return () => window.clearTimeout(timer);
+  }, [notice, setNotice]);
 
   return (
     <MotionConfig reducedMotion="user">
@@ -60,6 +92,43 @@ const App: React.FC = () => {
             </div>
             <BackendStatus />
           </header>
+
+          {/* Banda de avisos: restauración de análisis, backend caído, etc. */}
+          <AnimatePresence>
+            {notice && (
+              <motion.div
+                key="notice"
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                className="overflow-hidden"
+              >
+                <div
+                  role="status"
+                  className="mx-6 mt-4 flex flex-wrap items-center justify-between gap-3 rounded border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900"
+                >
+                  <p className="flex-1 min-w-0">{notice}</p>
+                  <div className="flex items-center gap-2">
+                    {!summary && loadAnalysisRef() && (
+                      <button
+                        onClick={() => void restoreAnalysis()}
+                        className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-primary"
+                      >
+                        Restaurar
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setNotice(null)}
+                      aria-label="Descartar aviso"
+                      className="rounded px-2 py-1 text-blue-700 hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-primary"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           {/* Section content — crossfade corto al cambiar de sección */}
           <section className="p-6">

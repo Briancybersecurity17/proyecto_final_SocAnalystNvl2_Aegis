@@ -150,7 +150,13 @@ const Dashboard: React.FC = () => {
 
   // Granularidad efectiva: hora si el backend la aporta con varios tramos;
   // si no, día (y si solo hay un día, se avisa en vez de fingir una tendencia)
-  const hourly = hourlyData.length > 1
+  const HOURLY_MAX_POINTS = 400
+  // Archivos que abarcan cientos de días generan miles de tramos horarios: el
+  // eje deja de ser legible y el gráfico se resiente. Se cae a la serie
+  // DIARIA, que es la misma información agregada por día (dato real del
+  // archivo, calculado por el backend; no se descarta ni se inventa nada).
+  const hourlyTooLong = hourlyData.length > HOURLY_MAX_POINTS
+  const hourly = hourlyData.length > 1 && !hourlyTooLong
   const timeData = hourly ? hourlyData : dailyData
   const totalByLabel = new Map(timeData.map(p => [p.label, p.total]))
 
@@ -457,6 +463,14 @@ const Dashboard: React.FC = () => {
                 ? 'Agrupación por hora a partir de los timestamps reales del archivo; los tramos sin actividad no aparecen.'
                 : 'Agrupación por día a partir de los timestamps reales del archivo.'}
             </p>
+
+            {hourlyTooLong && (
+              <p className="mb-3 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+                El archivo abarca {fmtCount(hourlyData.length)} tramos con actividad por hora: para
+                que el eje siga siendo legible y el gráfico no pinte miles de puntos, se muestra la
+                serie diaria, con los mismos registros del archivo.
+              </p>
+            )}
 
             {!hourly && timeData.length === 1 && (
               <p className="mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
