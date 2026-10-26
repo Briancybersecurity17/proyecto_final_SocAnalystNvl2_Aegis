@@ -36,19 +36,21 @@ export const LEVEL_LABELS: Record<string, string> = {
   bajo: 'Bajo',
 }
 
-/** Trazo de los ejes: gris medio, legible sobre blanco. */
-export const AXIS = '#64748b'
+/** Trazo de los ejes: gris azulado legible sobre el fondo del HUD. */
+export const AXIS = '#8494b8'
 
-/** Rejilla: gris muy tenue para que no compita con las series. */
-export const GRID = '#e2e8f0'
+/** Rejilla: cian muy tenue para que no compita con las series. */
+export const GRID = 'rgba(31,200,255,0.12)'
 
-/** Tooltip común: tarjeta blanca con borde suave y sombra discreta. */
+/** Tooltip común: tarjeta oscura con borde cian y brillo suave. */
 export const TOOLTIP_STYLE: CSSProperties = {
-  border: '1px solid #cbd5e1',
-  borderRadius: 8,
-  background: '#fff',
-  boxShadow: '0 8px 24px rgba(15,23,42,.12)',
+  border: '1px solid rgba(31,200,255,0.55)',
+  borderRadius: 2,
+  background: '#0a0518',
+  color: '#dce6f5',
+  boxShadow: '0 0 16px rgba(31,200,255,0.35)',
   fontSize: 12,
+  fontFamily: "'JetBrains Mono', 'Courier New', monospace",
 }
 
 /** Formato de eje/tick con separador de miles según locale del navegador. */
@@ -102,16 +104,16 @@ export const CHART_STAGGER = 110
  * en lugar del rectángulo gris sólido que Recharts dibuja por defecto.
  */
 export const BAR_CURSOR: SVGProps<SVGElement> = {
-  fill: 'rgba(30,64,175,0.07)',
-  stroke: 'rgba(30,64,175,0.35)',
+  fill: 'rgba(31,200,255,0.08)',
+  stroke: 'rgba(31,200,255,0.45)',
   strokeDasharray: '4 4',
 }
 
-/** Cursor de áreas y líneas: vertical punteada en el azul primario. */
+/** Cursor de áreas y líneas: vertical punteada en el cian del HUD. */
 export const LINE_CURSOR: SVGProps<SVGElement> = {
-  stroke: '#1e40af',
+  stroke: '#1fc8ff',
   strokeDasharray: '4 4',
-  strokeOpacity: 0.55,
+  strokeOpacity: 0.6,
 }
 
 /**
