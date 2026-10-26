@@ -308,7 +308,7 @@ export const SecurityAnalysis: React.FC = () => {
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap">
                     <span className={`px-2 py-0.5 rounded text-xs font-semibold ${LEVEL_BADGE[row.risk_level] ?? 'bg-gray-200'}`}>
-                      {row.risk_level}
+                      {LEVEL_LABELS[row.risk_level] ?? row.risk_level}
                     </span>
                   </td>
                   <td className="px-3 py-2 text-xs text-gray-600 max-w-sm" title={row.risk_reason}>

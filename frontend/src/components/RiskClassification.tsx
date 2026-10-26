@@ -77,7 +77,7 @@ const RiskClassification: React.FC = () => {
         <div className="flex flex-wrap items-center gap-3 mb-2">
           <h2 className="text-xl font-semibold">Clasificación global</h2>
           <span className={`px-3 py-1 rounded-full text-sm font-bold uppercase ${LEVEL_STYLES[summary.risk]?.chip ?? 'bg-gray-200'}`}>
-            {summary.risk}
+            {LEVEL_LABELS[summary.risk] ?? summary.risk}
           </span>
         </div>
         <p className="text-gray-700 leading-relaxed">{summary.risk_justification}</p>

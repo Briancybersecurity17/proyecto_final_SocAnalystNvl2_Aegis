@@ -250,7 +250,10 @@ const Dashboard: React.FC = () => {
         <SummaryCard label="Eventos sospechosos" value={suspicious} />
         <SummaryCard label="Sospechosos del total" value={`${pct(suspicious, rows)}%`} />
         <SummaryCard label="Hosts únicos" value={summary.unique_hosts ?? '—'} />
-        <SummaryCard label="Riesgo global" value={<span className="capitalize">{summary.risk || '—'}</span>} />
+        <SummaryCard
+          label="Riesgo global"
+          value={<span>{LEVEL_LABELS[summary.risk] ?? summary.risk ?? '—'}</span>}
+        />
       </motion.div>
 
       {/* Desglose por nivel */}

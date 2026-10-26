@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { getRows, RowsResponse } from '../api/client'
 import { useAnalysisStore } from '../store'
+import { LEVEL_LABELS } from '../charts'
 import { DashboardSection } from './DashboardSection'
 
 const LEVELS = [
@@ -174,7 +175,7 @@ const DataTable: React.FC = () => {
                     className={`px-2 py-0.5 rounded text-xs font-semibold ${LEVEL_BADGE[row.risk_level] ?? 'bg-gray-200'}`}
                     title={row.risk_reason}
                   >
-                    {row.risk_level}
+                    {LEVEL_LABELS[row.risk_level] ?? row.risk_level}
                   </span>
                 </td>
               </tr>
