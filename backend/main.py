@@ -196,11 +196,16 @@ def normalize_level(severity: Any) -> str:
 
 
 def row_reason(row: pd.Series) -> str:
-    """Grounded justification for a single record (severity + keywords + event id)."""
+    """Grounded justification for a single record (severity + result + keywords + event id)."""
     reasons: List[str] = []
     severity = str(row.get("Severity", "")).strip()
-    if severity:
+    if severity and severity.lower() != "nan":
         reasons.append(f"severidad «{severity}»")
+    # Result: éxito/fallo de la operación o código HTTP de respuesta.
+    raw_result = row.get("Result", "")
+    result_txt = "" if pd.isna(raw_result) else str(raw_result).strip()
+    if result_txt:
+        reasons.append(f"resultado «{result_txt}»")
     desc = str(row.get("Event_Description", "") or "")
     desc_low = desc.lower()
     for keyword, text in KEYWORD_REASONS.items():
@@ -414,6 +419,9 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
     raw_severity = df["Severity"] if "Severity" in df.columns else pd.Series([""] * total)
     df["_level"] = raw_severity.map(normalize_level) if "Severity" in df.columns else "bajo"
     severity_counts = _counts(raw_severity) if "Severity" in df.columns else {}
+    # Resultado de la operación por registro: Success/Failure/Allowed o
+    # código HTTP (200/404/500) según el origen del log.
+    result_counts = _counts(df["Result"]) if "Result" in df.columns else {}
     level_counts = {lvl: int((df["_level"] == lvl).sum()) for lvl in LEVEL_ORDER}
 
     # Correspondencia auditable: cada valor original del campo Severity y el
@@ -565,6 +573,7 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
         "risk_justification": risk_justification,
         "severity_counts": severity_counts,
         "severity_mapping": severity_mapping,
+        "result_counts": result_counts,
         "level_counts": level_counts,
         "risk_levels": risk_levels,
         "unique_hosts": unique_hosts,
@@ -691,11 +700,12 @@ async def get_rows(
     q: str = Query("", max_length=200),
     level: str = Query("", description="critico|alto|medio|bajo"),
     suspicious: bool = Query(False),
+    result: str = Query("", description="valor exacto del campo Result (Success, Failure, Allowed, 200…)"),
 ):
     """Paginated view of the imported records (visualisation of the Excel).
 
-    Supports a free-text search (q), a risk-level filter and a
-    "suspicious only" toggle – everything is computed server-side.
+    Supports a free-text search (q), a risk-level filter, a "suspicious only"
+    toggle and an exact Result filter – everything is computed server-side.
     """
     if analysis_id not in analysis_store:
         raise HTTPException(status_code=404, detail="Analysis not found")
@@ -717,6 +727,9 @@ async def get_rows(
         work = work[work["_level"] == level]
     if suspicious:
         work = work[work["_suspicious"]]
+    if result.strip() and "Result" in work.columns:
+        wanted = result.strip().lower()
+        work = work[work["Result"].astype(str).str.strip().str.lower() == wanted]
     if q.strip():
         needle = q.strip().lower()
         mask = work.apply(

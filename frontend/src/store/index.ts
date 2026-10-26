@@ -80,6 +80,8 @@ export interface AnalysisSummary {
   risk: string
   risk_justification: string
   severity_counts: Record<string, number>
+  /** Éxito/fallo o código HTTP por registro (campo Result del archivo). */
+  result_counts?: Record<string, number>
   /** Traducción auditable de cada valor original de Severity a nuestro nivel. */
   severity_mapping?: SeverityMappingEntry[]
   level_counts: Record<string, number>

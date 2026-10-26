@@ -41,6 +41,7 @@ const LONG_COLUMNS = new Set(['Event_Description', 'Process_CommandLine'])
 const DataTable: React.FC = () => {
   const analysisId = useAnalysisStore(state => state.analysisId)
   const status = useAnalysisStore(state => state.status)
+  const summary = useAnalysisStore(state => state.summary)
 
   const [data, setData] = useState<RowsResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -48,6 +49,7 @@ const DataTable: React.FC = () => {
   const [page, setPage] = useState(1)
   const [q, setQ] = useState('')
   const [level, setLevel] = useState('')
+  const [result, setResult] = useState('')
   const [suspicious, setSuspicious] = useState(false)
 
   const fetchRows = useCallback(async () => {
@@ -55,14 +57,14 @@ const DataTable: React.FC = () => {
     setLoading(true)
     setError('')
     try {
-      const res = await getRows(analysisId, { page, pageSize: 25, q, level, suspicious })
+      const res = await getRows(analysisId, { page, pageSize: 25, q, level, suspicious, result })
       setData(res)
     } catch (err) {
       setError('No se pudieron cargar los registros')
     } finally {
       setLoading(false)
     }
-  }, [analysisId, status, page, q, level, suspicious])
+  }, [analysisId, status, page, q, level, suspicious, result])
 
   useEffect(() => {
     fetchRows()
@@ -71,7 +73,7 @@ const DataTable: React.FC = () => {
   // Reset to page 1 when filters change
   useEffect(() => {
     setPage(1)
-  }, [q, level, suspicious])
+  }, [q, level, suspicious, result])
 
   if (!analysisId || status !== 'done') {
     return null
@@ -79,6 +81,11 @@ const DataTable: React.FC = () => {
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.page_size)) : 1
   const visibleColumns = orderColumns(data?.columns ?? [])
+  // Valores reales del campo Result en el archivo, con su recuento.
+  // Se ordenan por frecuencia: en JS las claves numéricas ("200", "404")
+  // saldrían antes que las de texto si respetamos el orden del objeto.
+  const resultOptions = Object.entries(summary?.result_counts ?? {})
+    .sort((a, b) => b[1] - a[1])
 
   return (
     <DashboardSection title="Registros importados (visualización del Excel)">
@@ -104,6 +111,23 @@ const DataTable: React.FC = () => {
             </button>
           ))}
         </div>
+        {resultOptions.length > 0 && (
+          <label className="flex items-center gap-2 text-sm text-gray-700">
+            Resultado
+            <select
+              value={result}
+              onChange={e => setResult(e.target.value)}
+              className="border border-gray-300 rounded px-2 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary"
+            >
+              <option value="">Todos</option>
+              {resultOptions.map(([value, count]) => (
+                <option key={value} value={value}>
+                  {value} ({count})
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
           <input
             type="checkbox"

@@ -121,6 +121,8 @@ def build_context(summary: Dict[str, Any]) -> Dict[str, Any]:
         "risk_label": LEVEL_LABELS.get(risk, risk),
         "risk_justification": summary.get("risk_justification", ""),
         "level_counts": summary.get("level_counts") or {},
+        # Éxito/fallo o código HTTP por registro (campo Result del archivo)
+        "result_counts": summary.get("result_counts") or {},
         "risk_levels": risk_levels,
         "non_numeric_event_ids": summary.get("non_numeric_event_ids") or [],
         "suspicious_events": int(summary.get("suspicious_events", 0)),
@@ -530,6 +532,29 @@ def _local_insights(ctx: Dict[str, Any]) -> List[str]:
             f"({_pct(ctx['suspicious_events'], total)}) por severidad elevada, palabras clave "
             f"de fallo de autenticación y Event ID relevantes.{extra}"
         )
+
+    # Campo Result: éxito/fallo de la operación o código HTTP de respuesta.
+    results = ctx.get("result_counts") or {}
+    if results:
+        top = sorted(results.items(), key=lambda kv: -kv[1])[:4]
+        parts = " · ".join(
+            f"{count} «{value}» ({_pct(count, total)})" for value, count in top
+        )
+        http_errors = {
+            value: count for value, count in results.items()
+            if value.isdigit() and 400 <= int(value) < 600
+        }
+        extra = ""
+        if http_errors:
+            errs = ", ".join(
+                f"{value} ×{count}"
+                for value, count in sorted(http_errors.items(), key=lambda kv: -kv[1])
+            )
+            extra = (
+                f"; los códigos HTTP de error ({errs}) suman "
+                f"{sum(http_errors.values())} respuestas fallidas del servidor"
+            )
+        insights.append(f"Distribución de Result: {parts}{extra}.")
 
     if ctx["top_hosts"]:
         host, count = next(iter(ctx["top_hosts"].items()))
