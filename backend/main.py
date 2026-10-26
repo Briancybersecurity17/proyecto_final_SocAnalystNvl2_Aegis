@@ -926,6 +926,24 @@ async def get_scoped_summary(analysis_id: str, request: Request):
     resumen["total"] = int(len(df))
     resumen["filtered_total"] = int(len(work))
     resumen["rows"] = int(len(work))
+
+    # R14 (spec §4.3 «mismo AnalysisSummary»): estas cuatro claves las añade
+    # process_analysis al resumen global y son datos del ARCHIVO/análisis
+    # (nombre, hojas, columnas que faltan, fecha de generación): se copian
+    # tal cual para que NO cambien mientras el usuario mueve los filtros.
+    # El store las garantiza: el endpoint ya exige el DataFrame, que
+    # process_analysis guarda en el mismo bloque síncrono que el resumen.
+    global_summary = analysis_store[analysis_id]["summary"]
+    for clave in ("sheet_names", "missing_columns", "file_name", "generated_at"):
+        resumen[clave] = global_summary[clave]
+
+    # ai_insights en cambio se recalcula SOBRE el resumen acotado, con la
+    # misma llamada y en el mismo orden que process_analysis: las
+    # observaciones tienen que describir las cifras que la UI está mostrando.
+    # build_context es solo .get() y _local_insights devuelve su lista de
+    # «sin registros» con rows=0, así que nunca lanza (R14 exige 200 aunque
+    # no haya coincidencias).
+    resumen["ai_insights"] = generate_data_insights(resumen)
     return resumen
 
 

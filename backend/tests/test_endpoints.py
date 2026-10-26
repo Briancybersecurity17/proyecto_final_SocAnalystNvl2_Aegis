@@ -132,3 +132,46 @@ def test_facets_sospechosos_ignora_su_propio_filtro(client, analysis_id):
     assert res["filtered_total"] == 6
     assert campo["distinct"] == 2
     assert conteos == {"True": 6, "False": 6}
+
+
+def test_summary_con_filtros_mantiene_metadatos_del_analisis(client, analysis_id):
+    # spec §4.3 «mismo AnalysisSummary» + R14: file_name, sheet_names,
+    # missing_columns y generated_at son datos del ARCHIVO, no de la
+    # selección: deben seguir presentes e iguales con filtros activos.
+    # ai_insights se recalcula sobre el resumen acotado pero también va.
+    res = client.get(f"/api/analysis/{analysis_id}/summary",
+                     params={"level": "critico"}).json()
+    assert res["rows"] == 2                       # el filtro está activo de verdad
+    assert res["file_name"] == "dataset_sintetico.xlsx"
+    assert isinstance(res["generated_at"], str) and res["generated_at"]
+    assert isinstance(res["sheet_names"], list) and res["sheet_names"]
+    assert res["missing_columns"] == []           # el dataset sintético es completo
+    assert isinstance(res["ai_insights"], list)
+
+
+def test_facets_result_ignora_su_propio_filtro(client, analysis_id):
+    # Mismo hueco que las facetas derivadas, para una faceta original: con
+    # ?result=Failure activo, la faceta Result debe seguir ofreciendo
+    # Success y Failure (spec §4.4) con los conteos del dataset completo.
+    res = client.get(f"/api/analysis/{analysis_id}/facets",
+                     params={"result": "Failure"}).json()
+    campo = next(f for f in res["fields"] if f["name"] == "Result")
+    conteos = {v["value"]: v["count"] for v in campo["values"]}
+    assert res["filtered_total"] == 6
+    assert campo["distinct"] == 2
+    assert conteos == {"Success": 6, "Failure": 6}
+
+
+def test_facets_criticidad_conserva_otros_filtros_activos(client, analysis_id):
+    # Invariante del salto: saltar el filtro PROPIO no apaga los demás.
+    # level=critico&Hostname=DC-01 → la faceta Criticidad se cuenta solo
+    # sobre las filas DC-01 (bajo 3, critico 1) porque el filtro de
+    # Hostname sigue aplicando, mientras el de nivel se salta.
+    res = client.get(f"/api/analysis/{analysis_id}/facets",
+                     params={"level": "critico", "Hostname": "DC-01"}).json()
+    campo = next(f for f in res["fields"] if f["name"] == "_level")
+    conteos = {v["value"]: v["count"] for v in campo["values"]}
+    # DC-01 = Log_IDs 1, 4, 7, 9 → niveles bajo, critico, bajo, bajo.
+    assert res["filtered_total"] == 1             # DC-01 ∩ critico = Log_ID 4
+    assert campo["distinct"] == 2
+    assert conteos == {"bajo": 3, "critico": 1}

@@ -137,18 +137,21 @@ def apply_filters(
     aplica, para que el panel de facetas recunte cada campo ignorando la
     selección de ese mismo campo (spec §4.4, «para que el panel permita
     cambiar de valor»): `_level` salta el canónico `level`, `_suspicious`
-    salta el canónico `suspicious` y cualquier otro nombre salta la entrada
-    homónima de `p.facets`. Así, con `?User=jsmith` activo la faceta User
-    sigue ofreciendo el resto de usuarios y con `?level=critico` la faceta
-    Criticidad sigue ofreciendo los cuatro niveles.
+    salta el canónico `suspicious`, `Result` salta el canónico `result` y
+    cualquier otro nombre salta la entrada homónima de `p.facets`. Así,
+    con `?User=jsmith` activo la faceta User sigue ofreciendo el resto de
+    usuarios y con `?level=critico` la faceta Criticidad sigue ofreciendo
+    los cuatro niveles. El resto de filtros (ventana, q, otras facetas)
+    sigue aplicando: saltar solo apaga el filtro «propio» del campo.
     """
     def saltar(campo: str) -> bool:
         """¿Se omite el filtro «propio» de `campo` en esta pasada?
 
-        Único sitio donde se resuelve el mapeo nombre-de-campo → filtro:
-        las facetas derivadas llegan como parámetros canónicos (no como
-        entradas de `p.facets`), así que el salto tiene que alcanzarlas
-        también allí donde se aplican.
+        El filtro de una faceta no siempre vive en `p.facets`: los
+        canónicos `level`, `suspicious` y `result` son el filtro «propio»
+        de `_level`, `_suspicious` y `Result`. Cada punto de aplicación
+        pregunta solo por el nombre de su campo, y esta función es el
+        único sitio donde se consulta `skip_fields`.
         """
         return bool(skip_fields) and campo in skip_fields
 
@@ -172,11 +175,14 @@ def apply_filters(
 
     # 4. Result con la misma guardia que /rows:813-815, para que un archivo
     #    sin columna Result se filtre en silencio en vez de reventar.
+    #    Su faceta homónima tiene el canónico `result` como filtro propio
+    #    (ver saltar): con ?result=Failure activo la faceta sigue ofreciendo
+    #    Success y Failure, para poder cambiar de valor desde el panel.
     #    `_result_label` es una función de `main` y se importa aquí dentro,
     #    con el mismo patrón dual paquete/suelto que kb_store:36-39, porque
     #    `main` importa `filters` a nivel de módulo (Tarea 4) y un import
     #    aquí arriba crearía el import circular main ↔ filters.
-    if p.result.strip() and "Result" in df.columns:
+    if not saltar("Result") and p.result.strip() and "Result" in df.columns:
         try:  # paquete (uvicorn backend.main:app) o módulo suelto (pytest)
             from backend.main import _result_label
         except ImportError:  # pragma: no cover
