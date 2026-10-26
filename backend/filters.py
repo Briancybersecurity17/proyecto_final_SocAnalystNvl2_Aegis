@@ -122,12 +122,21 @@ def parse_filters(request: Request, df: pd.DataFrame) -> FilterParams:
     return params
 
 
-def apply_filters(df: pd.DataFrame, p: FilterParams) -> pd.DataFrame:
+def apply_filters(
+    df: pd.DataFrame,
+    p: FilterParams,
+    skip_fields: set[str] | None = None,
+) -> pd.DataFrame:
     """Devuelve `df` con los filtros activos combinados con AND.
 
     Cada filtro replica la regla de `/rows` (main.py:809-826) para que la
     tabla, el resumen y el panel de facetas enseñen las mismas filas: si las
     reglas divergieran, los KPI no cuadrarían con lo que ve el analista.
+
+    `skip_fields` contiene facetas que NO se aplican: el panel de facetas
+    lo usa para recuentar cada campo ignorando la selección de ese mismo
+    campo (estilo Splunk), de modo que con User=jsmith activo la faceta
+    User siga ofreciendo el resto de usuarios para poder cambiar de valor.
     """
     # 1. Ventana inclusiva sobre Timestamp. Con filtro activo las filas NaT
     #    caen fuera (comparar NaT da False); sin filtro no se tocan.
@@ -176,6 +185,11 @@ def apply_filters(df: pd.DataFrame, p: FilterParams) -> pd.DataFrame:
     #    aplica sobre el resultado de la anterior). Igualdad exacta
     #    insensible a mayúsculas; una faceta sin valores no restringe.
     for col, values in p.facets.items():
+        # El panel de facetas recuenta este campo sin su propia selección
+        # (skip_fields): contar User=jsmith dentro de la faceta User solo
+        # enseñaría el valor ya elegido y el analista no podría cambiar.
+        if skip_fields and col in skip_fields:
+            continue
         # URL vieja o dataset que no coincide: la faceta se ignora en
         # silencio, nunca debe tumbar el request con un 500 (spec §8).
         if col not in df.columns:

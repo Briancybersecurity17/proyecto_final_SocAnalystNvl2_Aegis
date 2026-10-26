@@ -59,10 +59,23 @@ except ImportError:  # pragma: no cover
 # endpoints que muestran filas (/rows, /summary, /facets) comparten las
 # mismas reglas de filtrado desde un único módulo, sea cual sea la forma en
 # que se cargue `main` (uvicorn backend.main:app en prod, `main` en tests).
+# `_facet_field` se reutiliza para que los conteos del panel de facetas
+# sigan exactamente las mismas reglas (conteo, orden, distinct) que la
+# detección, en lugar de duplicarlas aquí y que diverjan con el tiempo.
 try:
-    from backend.filters import parse_filters, apply_filters
+    from backend.filters import (
+        parse_filters,
+        apply_filters,
+        detect_facets,
+        _facet_field,
+    )
 except ImportError:  # pragma: no cover
-    from filters import parse_filters, apply_filters
+    from filters import (
+        parse_filters,
+        apply_filters,
+        detect_facets,
+        _facet_field,
+    )
 
 app = FastAPI(title="Comunidad Dojo – SOC Analyst API", lifespan=lifespan)
 
@@ -914,6 +927,45 @@ async def get_scoped_summary(analysis_id: str, request: Request):
     resumen["filtered_total"] = int(len(work))
     resumen["rows"] = int(len(work))
     return resumen
+
+
+@app.get("/api/analysis/{analysis_id}/facets")
+async def get_facets(analysis_id: str, request: Request):
+    """Campos del panel de facetas con sus valores y conteos acotados (spec §4.4).
+
+    La detección se hace sobre el dataset completo para que la lista de
+    campos sea estable: un campo no debe desaparecer del panel solo porque
+    el filtro actual lo haya dejado vacío. Los conteos van sobre las filas
+    filtradas con los mismos filtros que /summary, y cada campo se recuenta
+    ignorando la selección de ese mismo campo (estilo Splunk): así con un
+    valor activo el panel sigue ofreciendo los demás para poder cambiar.
+    """
+    if analysis_id not in analysis_store:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    df: pd.DataFrame | None = analysis_store[analysis_id].get("dataframe")
+    if df is None:
+        raise HTTPException(status_code=409, detail="El análisis aún no está listo")
+
+    try:
+        params = parse_filters(request, df)
+    except ValueError as exc:
+        # Mismos 400 que /summary: una query inválida es inválida para
+        # cualquier endpoint, nunca un 500 (R10).
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    filtrado = apply_filters(df, params)
+    campos = []
+    # top_n=12 por campo: acorta la respuesta sin perder los valores que
+    # el panel enseña de todos modos (spec §4.4).
+    for campo in detect_facets(df, top_n=12):
+        parcial = apply_filters(df, params, skip_fields={campo.name})
+        campos.append(_facet_field(parcial[campo.name], campo.name, campo.label, 12))
+
+    return {
+        "total": int(len(df)),
+        "filtered_total": int(len(filtrado)),
+        "fields": campos,
+    }
 
 
 @app.post("/api/analysis/{analysis_id}/report")

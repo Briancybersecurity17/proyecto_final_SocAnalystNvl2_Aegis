@@ -72,3 +72,20 @@ def test_summary_archivo_minimo_sin_timestamp_ni_severity(client, analysis_id_mi
     res = client.get(f"/api/analysis/{analysis_id_minimo}/summary",
                      params={"from": "2026-01-01"}).json()
     assert res["rows"] == 2 and res["level_counts"]["bajo"] == 2
+
+
+def test_facets_detecta_campos_del_archivo(client, analysis_id):
+    res = client.get(f"/api/analysis/{analysis_id}/facets").json()
+    nombres = [f["name"] for f in res["fields"]]
+    assert {"Hostname", "User", "Result"} <= set(nombres)
+    assert "Timestamp" not in nombres and "Log_ID" not in nombres
+
+def test_facets_conteos_acotados_por_el_filtro(client, analysis_id):
+    res = client.get(f"/api/analysis/{analysis_id}/facets", params={"User": "jsmith"}).json()
+    campo = next(f for f in res["fields"] if f["name"] == "Hostname")
+    assert res["filtered_total"] == 4
+    assert [v["value"] for v in campo["values"]] == ["DC-01", "WS-018"]
+
+def test_facets_no_ofrece_event_description(client, analysis_id):
+    res = client.get(f"/api/analysis/{analysis_id}/facets").json()
+    assert "Event_Description" not in [f["name"] for f in res["fields"]]
