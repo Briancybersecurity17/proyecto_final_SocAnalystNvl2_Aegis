@@ -105,6 +105,10 @@ export interface AnalysisSummary {
   generated_at?: string
   non_numeric_event_ids?: string[]
   ai_insights?: string[]
+  /** Solo en /summary acotado (motor de filtros): registros del dataset completo. */
+  total?: number
+  /** Solo en /summary acotado: registros que pasan los filtros (igual que `rows`). */
+  filtered_total?: number
 }
 
 export interface AnalysisState {

@@ -78,6 +78,91 @@ export const getRows = async (
   return response.data as RowsResponse
 }
 
+/** Filtros del motor de consulta; viajan como query string en /summary y /facets. */
+export type FilterParams = {
+  from?: string | null
+  to?: string | null
+  level?: string
+  suspicious?: boolean
+  result?: string
+  q?: string
+  /** Facetas por campo: se repiten como claves ('Hostname=DC-01&Hostname=WS-018'). */
+  facets?: Record<string, string[]>
+}
+
+/**
+ * Resumen del análisis acotado a los filtros: el mismo `AnalysisSummary` de
+ * siempre más `total` (registros del dataset) y `filtered_total` (los que
+ * pasan el filtro, igual que `rows`).
+ */
+export type ScopedSummary = AnalysisSummary & { total?: number; filtered_total?: number }
+
+export type FacetValue = { value: string; count: number }
+
+export type FacetField = { name: string; label: string; distinct: number; values: FacetValue[] }
+
+/**
+ * Construye el query string de los filtros para /summary y /facets.
+ *
+ * CRÍTICO: las facetas deben serializarse repitiendo el nombre literal del
+ * campo (`Hostname=DC-01&Hostname=WS-018`), que es como las lee el backend
+ * (`request.query_params.getlist("Hostname")`). El `params` de axios con
+ * arreglos serializa como `Hostname[]=DC-01&...` y el backend LO IGNORARÍA
+ * en silencio (el filtro no aplicaría). Por eso se arma un URLSearchParams
+ * con `append` por cada valor y se pasa tal cual como `params` de axios:
+ * axios lo serializa con `toString()`, dejando las claves repetidas intactas.
+ *
+ * Además no se envían parámetros vacíos: `?from=` o `?level=` con valor
+ * vacío producirían un 400 del backend por fecha/nivel ilegible.
+ */
+const buildFilterParams = (f: FilterParams): URLSearchParams => {
+  const params = new URLSearchParams()
+  if (f.from) params.append('from', f.from)
+  if (f.to) params.append('to', f.to)
+  if (f.level) params.append('level', f.level)
+  if (f.suspicious) params.append('suspicious', 'true')
+  if (f.result) params.append('result', f.result)
+  if (f.q) params.append('q', f.q)
+  if (f.facets) {
+    for (const [field, values] of Object.entries(f.facets)) {
+      for (const value of values) params.append(field, value)
+    }
+  }
+  return params
+}
+
+/**
+ * Resumen del análisis acotado a los filtros (GET /analysis/{id}/summary).
+ * Sin filtros el hook correspondiente ni siquiera lo llama (cero peticiones).
+ */
+export const getScopedSummary = async (
+  analysisId: string,
+  f: FilterParams,
+  signal?: AbortSignal,
+): Promise<ScopedSummary> => {
+  const response = await API.get<ScopedSummary>(`/analysis/${analysisId}/summary`, {
+    params: buildFilterParams(f),
+    signal,
+  })
+  return response.data
+}
+
+/**
+ * Campos detectados en el archivo con sus valores y conteos acotados
+ * (GET /analysis/{id}/facets). Ignora el filtro del propio campo al contar.
+ */
+export const getFacets = async (
+  analysisId: string,
+  f: FilterParams,
+  signal?: AbortSignal,
+): Promise<{ total: number; filtered_total: number; fields: FacetField[] }> => {
+  const response = await API.get<{ total: number; filtered_total: number; fields: FacetField[] }>(
+    `/analysis/${analysisId}/facets`,
+    { params: buildFilterParams(f), signal },
+  )
+  return response.data
+}
+
 /**
  * Pide al backend que redacte el informe técnico con la IA.
  * El backend envía al modelo SOLO datos calculados de los registros
