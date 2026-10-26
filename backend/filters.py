@@ -84,3 +84,79 @@ def apply_filters(df: pd.DataFrame, p: FilterParams) -> pd.DataFrame:
         df = df[df[col].astype(str).str.lower().isin(wanted_values)]
 
     return df
+
+
+@dataclass
+class FacetField:
+    """Campo filtrable detectado en el archivo, listo para el panel de facetas.
+
+    `label` es lo que ve el analista: las columnas del archivo muestran su
+    propio nombre, pero los conceptos derivados llevan nombre de dashboard
+    («Criticidad»), no el interno (`_level`).
+    """
+    name: str
+    label: str
+    distinct: int
+    values: list[dict]        # [{"value": str, "count": int}, ...] hasta `top_n`, ordenados por conteo
+
+
+def _facet_field(serie: pd.Series, name: str, label: str, top_n: int) -> FacetField:
+    """Campo de faceta con sus valores más frecuentes y su cardinalidad real.
+
+    `distinct` cuenta todos los valores (para que la UI diga «+ N valores
+    más») mientras `values` se acota a `top_n`: enviar todos los valores de
+    una columna de miles de filas encarecería la respuesta sin aportar nada.
+    """
+    conteos = serie.value_counts().head(top_n)
+    return FacetField(
+        name=name,
+        label=label,
+        distinct=int(serie.nunique()),
+        values=[{"value": str(v), "count": int(c)} for v, c in conteos.items()],
+    )
+
+
+def detect_facets(df: pd.DataFrame, top_n: int = 12) -> list[FacetField]:
+    """Columnas categóricas del archivo aptas para el panel de facetas (spec §4.4).
+
+    La detección se hace sobre el dataset completo (no sobre el filtrado):
+    así la lista de campos es estable y un campo no desaparece del panel solo
+    porque el filtro actual lo dejó vacío. Los umbrales de cardinalidad y
+    longitud existen para que identificadores y textos libres
+    (p. ej. Event_Description) no se ofrezcan como facetas con miles de
+    valores inútiles.
+    """
+    campos: list[FacetField] = []
+    limite = max(30, int(len(df) * 0.05))   # 5% de las filas, con suelo de 30
+
+    for col in df.columns:
+        name = str(col)
+        # Las derivadas (_level, _reason, _suspicious) y los campos de
+        # posición del registro no son facetas del archivo; Timestamp y
+        # Log_ID se descartan por nombre aunque pasen el resto de reglas.
+        if name.startswith("_") or name in ("Timestamp", "Log_ID"):
+            continue
+        serie = df[col]
+        # Un número con demasiados valores distintos es una medida o un
+        # identificador (montos, puertos, duraciones), no una categoría:
+        # por encima de 30 no se ofrece como faceta aunque quepa en el 5%
+        # de las filas.
+        if pd.api.types.is_numeric_dtype(serie) and serie.nunique() > 30:
+            continue
+        # Cardinalidad baja: por encima del límite cada fila tendría casi su
+        # propio valor y el panel no serviría para filtrar.
+        if serie.nunique() > limite:
+            continue
+        # No es texto libre: si el valor medio supera los 40 caracteres la
+        # lista de valores no aporta nada (p. ej. Event_Description).
+        if serie.astype(str).str.len().mean() > 40:
+            continue
+        campos.append(_facet_field(serie, name, name, top_n))
+
+    # _level y _suspicious son conceptos del dashboard, no del archivo:
+    # van siempre, al final, con su etiqueta en español.
+    for name, label in (("_level", "Criticidad"), ("_suspicious", "Solo sospechosos")):
+        if name in df.columns:
+            campos.append(_facet_field(df[name], name, label, top_n))
+
+    return campos

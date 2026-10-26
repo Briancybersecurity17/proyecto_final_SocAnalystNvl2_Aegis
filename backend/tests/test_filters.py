@@ -1,6 +1,6 @@
 import pandas as pd
 import pytest
-from filters import FilterParams, apply_filters
+from filters import FilterParams, apply_filters, detect_facets
 
 @pytest.fixture
 def df() -> pd.DataFrame:
@@ -60,3 +60,21 @@ def test_dos_facetas_se_combinan_con_and(df):
 def test_valores_de_una_misma_faceta_se_combinan_con_or(df):
     out = apply_filters(df, FilterParams(facets={"Hostname": ["DC-01", "WEB-01"]}))
     assert sorted(out["Log_ID"]) == [1, 3, 5]
+
+def test_detect_facets_incluye_columnas_categoricas(df):
+    nombres = [f.name for f in detect_facets(df)]
+    assert {"Hostname", "User", "Result"} <= set(nombres)
+    assert "Timestamp" not in nombres and "Log_ID" not in nombres
+
+def test_detect_facets_descarta_texto_largo_y_log_id(df):
+    nombres = [f.name for f in detect_facets(df)]
+    assert "Event_Description" not in nombres   # >40 chars de media
+
+def test_detect_facets_incluye_criticidad_derivada(df):
+    nombres = [f.name for f in detect_facets(df)]
+    assert "_level" in nombres and "_suspicious" in nombres
+
+def test_detect_facets_trae_valores_con_conteo(df):
+    campo = next(f for f in detect_facets(df) if f.name == "Hostname")
+    assert campo.distinct == 3
+    assert {"value": "DC-01", "count": 2} in campo.values   # sin depender del desempate
