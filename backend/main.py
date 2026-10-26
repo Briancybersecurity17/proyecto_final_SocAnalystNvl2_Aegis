@@ -421,7 +421,10 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
     total = len(df)
 
     # --- basic stats -------------------------------------------------------
-    columns = list(df.columns)
+    # Solo las columnas originales del archivo: si llega un frame ya
+    # enriquecido (ingesta), las derivadas (_level, _reason, _suspicious)
+    # no son «campos» del Excel y no deben filtrarse en el resumen.
+    columns = [c for c in df.columns if not str(c).startswith("_")]
     unique_hosts = int(df["Hostname"].nunique()) if "Hostname" in df.columns else None
 
     # Event_IDs that are not numeric → records coming from another log source
@@ -688,6 +691,26 @@ async def process_analysis(analysis_id: str, file_bytes: bytes, file_name: str =
             raise ValueError("El archivo Excel no contiene hojas.")
         # Analyse the whole workbook
         df = pd.concat(sheets.values(), ignore_index=True)
+        # Enriquecimiento ÚNICO en ingesta: las columnas derivadas (_level,
+        # _reason, _suspicious) y el Timestamp tipado se calculan una sola vez
+        # aquí y se guardan en el store. /rows, el informe y el índice RAG las
+        # consumen a partir de ahí sin recalcular nada por petición.
+        if "Timestamp" in df.columns:
+            df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
+        if "Severity" in df.columns:
+            df["_level"] = df["Severity"].map(normalize_level)
+        else:
+            # Un Excel sin Severity no aporta evidencia de riesgo: todo «bajo»
+            # (mismo criterio que aplica /rows).
+            df["_level"] = "bajo"
+        if len(df):
+            df["_reason"] = df.apply(row_reason, axis=1)
+            df["_suspicious"] = df.apply(_is_suspicious, axis=1)
+        else:
+            # apply sobre 0 filas devolvería un DataFrame, no una Serie: se
+            # crean Series vacías tipadas (mismo criterio que /rows).
+            df["_reason"] = pd.Series([], dtype=str)
+            df["_suspicious"] = pd.Series([], dtype=bool)
         missing = [c for c in EXPECTED_COLUMNS if c not in df.columns]
         summary = call_ai_service(df)
         summary["sheet_names"] = list(sheets.keys())
