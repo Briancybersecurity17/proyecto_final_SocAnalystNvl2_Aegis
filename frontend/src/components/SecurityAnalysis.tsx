@@ -282,6 +282,7 @@ export const SecurityAnalysis: React.FC = () => {
                 <th className="px-3 py-2 text-left">Event ID</th>
                 <th className="px-3 py-2 text-left">IP origen</th>
                 <th className="px-3 py-2 text-left">Descripción</th>
+                <th className="px-3 py-2 text-left">Resultado</th>
                 <th className="px-3 py-2 text-left">Nivel</th>
                 <th className="px-3 py-2 text-left">Justificación</th>
               </tr>
@@ -303,6 +304,9 @@ export const SecurityAnalysis: React.FC = () => {
                     {String(row.Event_Description ?? '—')}
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap">
+                    {String(row.Result ?? '—')}
+                  </td>
+                  <td className="px-3 py-2 whitespace-nowrap">
                     <span className={`px-2 py-0.5 rounded text-xs font-semibold ${LEVEL_BADGE[row.risk_level] ?? 'bg-gray-200'}`}>
                       {row.risk_level}
                     </span>
@@ -314,12 +318,12 @@ export const SecurityAnalysis: React.FC = () => {
               ))}
               {loading && (
                 <tr>
-                  <td colSpan={7} className="px-3 py-6 text-center text-gray-500">Cargando…</td>
+                  <td colSpan={8} className="px-3 py-6 text-center text-gray-500">Cargando…</td>
                 </tr>
               )}
               {data && !loading && data.rows.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-3 py-6 text-center text-gray-500">
+                  <td colSpan={8} className="px-3 py-6 text-center text-gray-500">
                     No se encontraron eventos sospechosos
                   </td>
                 </tr>

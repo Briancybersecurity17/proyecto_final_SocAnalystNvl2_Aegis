@@ -18,7 +18,25 @@ const LEVEL_BADGE: Record<string, string> = {
   bajo: 'bg-emerald-500 text-white',
 }
 
-const MAX_COLS = 8
+// Orden de lectura para el analista: primero qué pasó (descripción) y si tuvo
+// éxito o fallo (Result), después el resto de campos. Las columnas que no
+// estén en esta lista (otros datasets) se muestran al final en su orden
+// original: no se descarta ninguna.
+const COLUMN_PRIORITY = [
+  'Log_ID', 'Timestamp', 'Hostname', 'Event_ID', 'Event_Description', 'Result',
+  'User', 'Source_IP', 'Destination', 'Log_Source', 'Process_CommandLine', 'Severity',
+]
+
+const orderColumns = (cols: string[]): string[] => {
+  const rank = (c: string) => {
+    const i = COLUMN_PRIORITY.indexOf(c)
+    return i === -1 ? COLUMN_PRIORITY.length : i
+  }
+  return [...cols].sort((a, b) => rank(a) - rank(b) || cols.indexOf(a) - cols.indexOf(b))
+}
+
+// Columnas de texto largo: necesitan más ancho para leer el contexto de un vistazo
+const LONG_COLUMNS = new Set(['Event_Description', 'Process_CommandLine'])
 
 const DataTable: React.FC = () => {
   const analysisId = useAnalysisStore(state => state.analysisId)
@@ -60,7 +78,7 @@ const DataTable: React.FC = () => {
   }
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.page_size)) : 1
-  const visibleColumns = (data?.columns ?? []).slice(0, MAX_COLS)
+  const visibleColumns = orderColumns(data?.columns ?? [])
 
   return (
     <DashboardSection title="Registros importados (visualización del Excel)">
@@ -117,7 +135,13 @@ const DataTable: React.FC = () => {
             {data?.rows.map((row, idx) => (
               <tr key={idx} className={`${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-blue-50`}>
                 {visibleColumns.map(col => (
-                  <td key={col} className="px-3 py-2 whitespace-nowrap max-w-56 truncate" title={String(row[col] ?? '')}>
+                  <td
+                    key={col}
+                    className={`px-3 py-2 whitespace-nowrap truncate ${
+                      LONG_COLUMNS.has(col) ? 'max-w-sm' : 'max-w-56'
+                    }`}
+                    title={String(row[col] ?? '')}
+                  >
                     {String(row[col] ?? '—')}
                   </td>
                 ))}
@@ -146,6 +170,8 @@ const DataTable: React.FC = () => {
       <div className="flex items-center justify-between mt-3 text-sm text-gray-600">
         <span>
           {data ? `${data.total} de ${data.total_rows} registros` : ''}
+          {visibleColumns.length > 0 &&
+            ` · ${visibleColumns.length} columnas (desplazá la tabla en horizontal para verlas todas)`}
         </span>
         <div className="flex items-center gap-2">
           <button

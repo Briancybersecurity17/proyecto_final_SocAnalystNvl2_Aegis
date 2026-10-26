@@ -14,7 +14,7 @@ sospechosos, clasifica el riesgo en cuatro niveles con justificación, y genera 
 
 | # | Funcionalidad | Dónde |
 |---|---|---|
-| 01 | **Carga de archivos**: importa `.xlsx` (todas las hojas) **y visualiza sus filas** con paginación, búsqueda y filtros | `UploadSection` + `DataTable` |
+| 01 | **Carga de archivos**: importa `.xlsx` (todas las hojas) **y visualiza sus filas y todas sus columnas** (`Event_Description`, `Result`, `Process_CommandLine`, `Severity`…) con paginación, búsqueda y filtros | `UploadSection` + `DataTable` |
 | 02 | **Análisis de seguridad**: identifica eventos sospechosos y **correlaciona IP ↔ hosts ↔ tiempo** | `SecurityAnalysis` + `backend/main.py` |
 | 03 | **Dashboard**: KPIs y **gráficos interactivos por criticidad** (distribución, eventos/día, top hosts) | `Dashboard` |
 | 04 | **Clasificación de riesgos**: Crítico / Alto / Medio / Bajo **con justificación y ejemplos** | `RiskClassification` |
