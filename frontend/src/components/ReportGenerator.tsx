@@ -396,85 +396,91 @@ const ReportGenerator: React.FC = () => {
 
   const aiBadge =
     report?.source === 'llm'
-      ? { text: `IA remota · ${report.model}`, cls: 'bg-emerald-100 text-emerald-800 border-emerald-300' }
-      : { text: `IA local grounded · ${report?.model ?? ''}`, cls: 'bg-blue-100 text-blue-800 border-blue-300' }
+      ? { text: `IA remota · ${report.model}`, color: '#10b981' }
+      : { text: `IA local grounded · ${report?.model ?? ''}`, color: '#1fc8ff' }
 
   return (
     <section className="space-y-6">
       {/* Toolbar */}
-      <div className="bg-white rounded-lg shadow p-4 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <p className="text-sm text-gray-500">
+      <div className="panel">
+        <div className="panel-body flex flex-wrap items-center justify-between gap-3">
+          <p className="min-w-0 max-w-xl font-mono text-[12.5px] leading-relaxed text-[var(--text-dim)]">
             Documento estructurado: resumen, metodología, hallazgos con evidencias,
             criticidad, explicación técnica y plan de acción.
           </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className={`text-xs px-3 py-1 rounded-full border ${aiBadge.cls}`}>
-            {loading ? 'Redactando con IA…' : aiBadge.text}
-          </span>
-          <button
-            onClick={fetchReport}
-            disabled={loading}
-            className="px-4 py-2 text-sm border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-50"
-          >
-            {loading ? 'Generando…' : 'Regenerar'}
-          </button>
-          <BlobProvider document={report ? <ReportDoc summary={summary} report={report} analysisId={analysisId} /> : <Document><Page size="A4" /></Document>}>
-            {({ blob, loading: pdfLoading, error: pdfError }) => {
-              if (!report) {
-                // Sin informe no hay PDF que descargar: se avisa en lugar de
-                // dejar el botón en «Preparando…» indefinidamente.
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className="chip whitespace-normal normal-case"
+              style={{ color: aiBadge.color, background: `${aiBadge.color}1a` }}
+            >
+              {loading ? 'Redactando con IA…' : aiBadge.text}
+            </span>
+            <button
+              onClick={fetchReport}
+              disabled={loading}
+              className="btn-hud disabled:opacity-50"
+            >
+              {loading ? 'Generando…' : 'Regenerar'}
+            </button>
+            <BlobProvider document={report ? <ReportDoc summary={summary} report={report} analysisId={analysisId} /> : <Document><Page size="A4" /></Document>}>
+              {({ blob, loading: pdfLoading, error: pdfError }) => {
+                if (!report) {
+                  // Sin informe no hay PDF que descargar: se avisa en lugar de
+                  // dejar el botón en «Preparando…» indefinidamente.
+                  return (
+                    <button
+                      disabled
+                      className="btn-hud"
+                      title="Genera el informe para poder descargarlo"
+                    >
+                      Descargar informe PDF
+                    </button>
+                  )
+                }
+                if (pdfLoading) {
+                  return <button disabled className="btn-hud">Preparando PDF…</button>
+                }
+                if (pdfError || !blob) {
+                  return <span className="font-mono text-[13px] text-[#f87171]">Error generando el PDF</span>
+                }
                 return (
-                  <button disabled className="px-4 py-2 text-sm bg-gray-300 text-white rounded" title="Genera el informe para poder descargarlo">
-                    Descargar informe PDF
-                  </button>
+                  <motion.button
+                    onClick={() => {
+                      const base = (summary.file_name ?? 'analisis').replace(/\.[^.]+$/, '')
+                      FileSaver.saveAs(blob, `Informe_Seguridad_${base}.pdf`)
+                    }}
+                    whileTap={{ scale: 0.97 }}
+                    initial={false}
+                    className="btn-hud btn-primary-hud"
+                  >
+                    ⬇ Descargar informe PDF
+                  </motion.button>
                 )
-              }
-              if (pdfLoading) {
-                return (
-                  <button disabled className="px-4 py-2 text-sm bg-gray-300 text-white rounded">
-                    Preparando PDF…
-                  </button>
-                )
-              }
-              if (pdfError || !blob) {
-                return <span className="text-sm text-red-600">Error generando el PDF</span>
-              }
-              return (
-                <motion.button
-                  onClick={() => {
-                    const base = (summary.file_name ?? 'analisis').replace(/\.[^.]+$/, '')
-                    FileSaver.saveAs(blob, `Informe_Seguridad_${base}.pdf`)
-                  }}
-                  whileTap={{ scale: 0.97 }}
-                  initial={false}
-                  className="group relative overflow-hidden px-4 py-2 text-sm bg-primary text-white rounded shadow hover:bg-primary/80 disabled:opacity-50"
-                >
-                  <span className="relative z-10">⬇ Descargar informe PDF</span>
-                  <span
-                    aria-hidden="true"
-                    className="pointer-events-none absolute inset-y-0 -left-full w-1/2 z-0 bg-gradient-to-r from-transparent via-white/40 to-transparent transition-transform duration-700 group-hover:translate-x-[300%]"
-                  />
-                </motion.button>
-              )
-            }}
-          </BlobProvider>
+              }}
+            </BlobProvider>
+          </div>
         </div>
       </div>
 
-      {error && <p className="text-red-600 text-sm">{error}</p>}
+      {error && <p className="font-mono text-[13px] text-[#f87171]">{error}</p>}
 
       {loading && !report && (
-        <div className="bg-white rounded-lg shadow p-10 text-center text-gray-500">
-          <div className="animate-pulse text-4xl mb-3">🤖</div>
-          <p className="font-medium">El asistente de IA está redactando el informe…</p>
-          <p className="text-sm mt-1">Usa únicamente los datos calculados de tus registros.</p>
+        <div className="panel">
+          <div className="panel-body p-10 text-center">
+            <div className="mb-3 animate-pulse text-4xl">🤖</div>
+            <p className="font-display text-base font-bold uppercase tracking-[0.14em] text-hud-line">
+              El asistente de IA está redactando el informe…
+            </p>
+            <p className="mt-1 font-mono text-[13px] text-[var(--text-dim)]">
+              Usa únicamente los datos calculados de tus registros.
+            </p>
+          </div>
         </div>
       )}
 
       {report && (
-        <article className="bg-white rounded-lg shadow p-6 md:p-10 max-w-4xl mx-auto border-t-4 border-primary">
+        <div className="panel mx-auto max-w-4xl">
+        <article className="m-2 border-t-4 border-primary bg-white p-6 shadow-[0_18px_40px_-16px_rgba(0,0,0,0.9)] md:p-10">
           {/* Portada */}
           <header className="border-b pb-6 mb-6">
             <p className="text-xs uppercase tracking-widest text-primary font-semibold">Comunidad Dojo · SOC Analyst Nivel 2</p>
@@ -655,6 +661,7 @@ const ReportGenerator: React.FC = () => {
             fila desde «Carga de archivos».
           </footer>
         </article>
+        </div>
       )}
     </section>
   )

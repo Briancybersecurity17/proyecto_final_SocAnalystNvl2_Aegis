@@ -18,11 +18,22 @@ const LEVEL_LABELS: Record<string, string> = {
 // Niveles que, si tienen eventos, reciben un pulso de brillo (una sola vez)
 const GLOW_LEVELS = ['critico', 'alto']
 
-const LEVEL_STYLES: Record<string, { border: string; bg: string; text: string; chip: string; bar: string }> = {
-  critico: { border: 'border-red-600', bg: 'bg-red-50', text: 'text-red-700', chip: 'bg-red-600 text-white', bar: '#dc2626' },
-  alto:    { border: 'border-orange-500', bg: 'bg-orange-50', text: 'text-orange-700', chip: 'bg-orange-500 text-white', bar: '#f97316' },
-  medio:   { border: 'border-yellow-400', bg: 'bg-yellow-50', text: 'text-yellow-800', chip: 'bg-yellow-400 text-yellow-900', bar: '#facc15' },
-  bajo:    { border: 'border-emerald-500', bg: 'bg-emerald-50', text: 'text-emerald-700', chip: 'bg-emerald-500 text-white', bar: '#10b981' },
+// Colores fijos por política del proyecto (rojo/naranja/amarillo/verde)
+const LEVEL_STYLES: Record<string, { color: string; bar: string }> = {
+  critico: { color: '#dc2626', bar: '#dc2626' },
+  alto:    { color: '#f97316', bar: '#f97316' },
+  medio:   { color: '#facc15', bar: '#facc15' },
+  bajo:    { color: '#10b981', bar: '#10b981' },
+}
+
+/** Chip de criticidad: borde = color del texto (convención HUD). */
+const LevelChip: React.FC<{ level: string; label?: string }> = ({ level, label }) => {
+  const color = LEVEL_STYLES[level]?.color ?? 'var(--text-dim)'
+  return (
+    <span className="chip" style={{ color, background: `${color}1a` }}>
+      {label ?? LEVEL_LABELS[level] ?? level}
+    </span>
+  )
 }
 
 /**
@@ -71,18 +82,25 @@ const RiskClassification: React.FC = () => {
       examples: [],
     }
 
+  const globalColor = LEVEL_STYLES[summary.risk]?.color ?? '#1fc8ff'
+
   return (
     <section className="space-y-8">
       {/* Global verdict */}
-      <div className="bg-white rounded shadow p-5 border-l-4 border-primary">
-        <div className="flex flex-wrap items-center gap-3 mb-2">
-          <h2 className="text-xl font-semibold">Clasificación global</h2>
-          <span className={`px-3 py-1 rounded-full text-sm font-bold uppercase ${LEVEL_STYLES[summary.risk]?.chip ?? 'bg-gray-200'}`}>
-            {LEVEL_LABELS[summary.risk] ?? summary.risk}
-          </span>
+      <div
+        className="border-l-4 bg-inset/85 p-5 shadow-[0_0_16px_rgba(31,200,255,0.14)] [clip-path:var(--chamfer-sm)]"
+        style={{ borderLeftColor: globalColor }}
+      >
+        <div className="mb-2 flex flex-wrap items-center gap-3">
+          <h2 className="font-display text-lg font-bold uppercase tracking-[0.14em] text-hud-line">
+            Clasificación global
+          </h2>
+          <LevelChip level={summary.risk} />
         </div>
-        <p className="text-gray-700 leading-relaxed">{summary.risk_justification}</p>
-        <p className="text-xs text-gray-500 mt-2">
+        <p className="font-mono text-[13.5px] leading-relaxed text-[var(--text)]">
+          {summary.risk_justification}
+        </p>
+        <p className="hud-label mt-2">
           Total analizado: {summary.rows} registros · {summary.unique_hosts ?? '—'} hosts
         </p>
       </div>
@@ -92,7 +110,7 @@ const RiskClassification: React.FC = () => {
         variants={stagger(0.07)}
         initial="hidden"
         animate="show"
-        className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4"
+        className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4"
       >
         {LEVEL_ORDER.map(lvl => {
           const b = block(lvl)
@@ -103,64 +121,80 @@ const RiskClassification: React.FC = () => {
             <motion.div
               key={lvl}
               variants={cardIn}
-              className={`bg-white rounded shadow border-t-4 ${style.border} ${expanded ? 'ring-2 ring-primary' : ''}`}
+              className="border border-hud-soft bg-inset/80 shadow-[0_0_12px_rgba(31,200,255,0.12)] transition-shadow [clip-path:var(--chamfer-sm)]"
+              style={expanded ? { borderColor: `${style.color}99`, boxShadow: `0 0 18px ${style.color}40` } : undefined}
             >
               <button
-                className="w-full text-left p-4"
+                className="w-full p-4 text-left"
                 onClick={() => setOpenLevel(expanded ? '' : lvl)}
+                aria-expanded={expanded}
               >
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <span className="relative inline-block">
                     {/* Halo de brillo: una sola vez al entrar, solo si hay eventos */}
                     {glow && (
                       <motion.span
                         aria-hidden="true"
-                        className="absolute inset-0 rounded"
+                        className="absolute inset-0"
                         style={{ backgroundColor: style.bar, filter: 'blur(9px)' }}
                         initial={{ opacity: 0 }}
                         animate={{ opacity: [0, 0.75, 0] }}
                         transition={{ duration: 1.2, delay: 0.35, times: [0, 0.35, 1] }}
                       />
                     )}
-                    <span className={`relative px-2 py-0.5 rounded text-xs font-bold uppercase ${style.chip}`}>
-                      {b.label}
+                    <span className="relative">
+                      <LevelChip level={lvl} label={b.label} />
                     </span>
                   </span>
-                  <span className="text-2xl font-bold" style={{ color: undefined }}>{fmtCount(b.count)}</span>
+                  <span className="font-display text-2xl font-bold" style={{ color: style.color }}>
+                    {fmtCount(b.count)}
+                  </span>
                 </div>
-                <div className="w-full bg-gray-200 rounded-full h-2 mt-3">
+                <div className="mt-3 h-2 w-full bg-[var(--bg-void)]">
                   <motion.div
-                    className="h-2 rounded-full"
+                    className="h-2"
                     initial={{ width: 0 }}
                     animate={{ width: `${Math.min(100, b.percentage)}%` }}
                     transition={{ duration: 0.7, delay: 0.15, ease: 'easeOut' }}
-                    style={{ backgroundColor: style.bar }}
+                    style={{ backgroundColor: style.bar, boxShadow: `0 0 8px ${style.bar}` }}
                   />
                 </div>
-                <p className="text-xs text-gray-500 mt-1">{fmtPct(b.percentage)}% de los registros</p>
-                <p className="text-xs text-gray-400 mt-2">{expanded ? '▲ Clic para contraer' : '▼ Clic para ver justificación'}</p>
+                <p className="mt-1 font-mono text-[12px] text-[var(--text-dim)]">
+                  {fmtPct(b.percentage)}% de los registros
+                </p>
+                <p className="hud-label mt-2">
+                  {expanded ? '▲ Clic para contraer' : '▼ Clic para ver justificación'}
+                </p>
               </button>
 
               {expanded && (
-                <div className={`px-4 pb-4 ${style.bg} border-t`}>
-                  <h4 className="text-xs font-semibold uppercase text-gray-600 mt-3 mb-1">Justificación técnica</h4>
-                  <p className="text-sm text-gray-700 leading-relaxed">{b.justification}</p>
+                <div
+                  className="border-t px-4 pb-4"
+                  style={{ borderColor: `${style.color}44`, background: `${style.color}0f` }}
+                >
+                  <h4 className="hud-label mt-3 mb-1">Justificación técnica</h4>
+                  <p className="font-mono text-[12.5px] leading-relaxed text-[var(--text)]">
+                    {b.justification}
+                  </p>
 
                   {b.examples.length > 0 && (
                     <>
-                      <h4 className="text-xs font-semibold uppercase text-gray-600 mt-4 mb-1">
+                      <h4 className="hud-label mt-4 mb-1">
                         Registros de ejemplo ({b.examples.length})
                       </h4>
                       <ul className="space-y-2">
                         {b.examples.map((ex, idx) => (
-                          <li key={idx} className="text-xs bg-white rounded border p-2">
-                            <div className="font-medium">
+                          <li
+                            key={idx}
+                            className="border border-hud-soft bg-[var(--bg-void)] p-2 font-mono text-[12px]"
+                          >
+                            <div className="font-semibold text-hud-fg">
                               {String(ex.Hostname ?? '—')} · Event {String(ex.Event_ID ?? '—')}
                             </div>
-                            <div className="text-gray-600 truncate" title={String(ex.Event_Description ?? '')}>
+                            <div className="truncate text-[var(--text-dim)]" title={String(ex.Event_Description ?? '')}>
                               {String(ex.Event_Description ?? '—')}
                             </div>
-                            <div className="text-gray-500 mt-1 italic">{String(ex._reason ?? '')}</div>
+                            <div className="mt-1 italic text-[var(--text-dim)]">{String(ex._reason ?? '')}</div>
                           </li>
                         ))}
                       </ul>
@@ -175,35 +209,35 @@ const RiskClassification: React.FC = () => {
 
       {/* Resumen ejecutivo: mismo dato que el acordeón, en lenguaje llano */}
       <DashboardSection title="Resumen ejecutivo por nivel">
-        <div className="overflow-auto">
-          <table className="min-w-full text-sm border border-gray-200">
+        <div className="overflow-auto border border-hud-soft">
+          <table className="hud-table min-w-full">
             <caption className="sr-only">Resumen por nivel de riesgo: registros y porcentaje del total</caption>
-            <thead className="bg-gray-100">
+            <thead>
               <tr>
-                <th scope="col" className="px-3 py-2 text-left">Nivel</th>
-                <th scope="col" className="px-3 py-2 text-left">Registros</th>
-                <th scope="col" className="px-3 py-2 text-left">%</th>
-                <th scope="col" className="px-3 py-2 text-left">Qué significa</th>
+                <th scope="col">Nivel</th>
+                <th scope="col">Registros</th>
+                <th scope="col">%</th>
+                <th scope="col">Qué significa</th>
               </tr>
             </thead>
             <tbody>
               {LEVEL_ORDER.map((lvl, idx) => {
                 const b = block(lvl)
-                const style = LEVEL_STYLES[lvl]
                 return (
                   <motion.tr
                     key={lvl}
                     initial={{ opacity: 0, y: 6 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.22, delay: 0.1 + idx * 0.05, ease: 'easeOut' }}
-                    className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}
                   >
-                    <td className="px-3 py-2">
-                      <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase ${style.chip}`}>{b.label}</span>
+                    <td className="whitespace-nowrap">
+                      <LevelChip level={lvl} label={b.label} />
                     </td>
-                    <td className="px-3 py-2 font-semibold">{fmtCount(b.count)}</td>
-                    <td className="px-3 py-2">{fmtPct(b.percentage)}%</td>
-                    <td className="px-3 py-2 text-gray-700 max-w-2xl">{executiveNote(lvl, b, summary.rows)}</td>
+                    <td className="font-semibold text-[var(--text-bright)]">{fmtCount(b.count)}</td>
+                    <td>{fmtPct(b.percentage)}%</td>
+                    <td className="max-w-2xl text-[var(--text-dim)]">
+                      {executiveNote(lvl, b, summary.rows)}
+                    </td>
                   </motion.tr>
                 )
               })}
@@ -215,22 +249,22 @@ const RiskClassification: React.FC = () => {
       {/* Trazabilidad: cómo se tradujo cada valor original del campo Severity */}
       {severityMapping.length > 0 && (
         <DashboardSection title="Correspondencia de severidad original → nivel de riesgo">
-          <p className="text-sm text-gray-600 mb-3">
-            El campo <code className="bg-gray-100 px-1 rounded">Severity</code> del archivo se
+          <p className="mb-3 font-mono text-[12.5px] leading-relaxed text-[var(--text-dim)]">
+            El campo <code className="border border-hud-soft bg-[var(--bg-void)] px-1">Severity</code> del archivo se
             conserva sin modificar. Esta es la traducción aplicada en el dashboard, los gráficos
             y el informe; los valores fuera del catálogo se clasifican por palabras clave
             (p.&nbsp;ej. <em>warn</em>, <em>critical</em>, <em>high</em>) y, sin evidencia, como
             Bajo.
           </p>
-          <div className="overflow-auto">
-            <table className="min-w-full text-sm border border-gray-200">
+          <div className="overflow-auto border border-hud-soft">
+            <table className="hud-table min-w-full">
               <caption className="sr-only">Correspondencia entre el valor original de Severity y el nivel de riesgo</caption>
-              <thead className="bg-gray-100">
+              <thead>
                 <tr>
-                  <th scope="col" className="px-3 py-2 text-left">Valor original (Severity)</th>
-                  <th scope="col" className="px-3 py-2 text-left">Nivel de riesgo</th>
-                  <th scope="col" className="px-3 py-2 text-right">Registros</th>
-                  <th scope="col" className="px-3 py-2 text-right">% del total</th>
+                  <th scope="col">Valor original (Severity)</th>
+                  <th scope="col">Nivel de riesgo</th>
+                  <th scope="col">Registros</th>
+                  <th scope="col">% del total</th>
                 </tr>
               </thead>
               <tbody>
@@ -240,16 +274,13 @@ const RiskClassification: React.FC = () => {
                     initial={{ opacity: 0, y: 6 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.22, delay: 0.1 + idx * 0.05, ease: 'easeOut' }}
-                    className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}
                   >
-                    <td className="px-3 py-2 font-medium">{m.raw}</td>
-                    <td className="px-3 py-2">
-                      <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase ${LEVEL_STYLES[m.level]?.chip ?? 'bg-gray-200'}`}>
-                        {LEVEL_LABELS[m.level] ?? m.level}
-                      </span>
+                    <td className="whitespace-nowrap font-semibold text-hud-fg">{m.raw}</td>
+                    <td className="whitespace-nowrap">
+                      <LevelChip level={m.level} />
                     </td>
-                    <td className="px-3 py-2 text-right font-semibold">{fmtCount(m.count)}</td>
-                    <td className="px-3 py-2 text-right">{fmtPct(m.percentage)}%</td>
+                    <td className="text-right font-semibold">{fmtCount(m.count)}</td>
+                    <td className="text-right">{fmtPct(m.percentage)}%</td>
                   </motion.tr>
                 ))}
               </tbody>

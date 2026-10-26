@@ -14,8 +14,12 @@ interface DashboardSectionProps {
  * hover. El lift de 2–3 px vive en las tarjetas de métricas (SummaryCard).
  */
 export const DashboardSection: React.FC<DashboardSectionProps> = ({ title, children, className }) => (
-  <div className={`bg-white rounded shadow p-4 transition-shadow duration-200 hover:shadow-md ${className ?? ''}`}>
-    {title && <h3 className="text-xl font-semibold mb-4">{title}</h3>}
-    {children}
+  <div className={`panel transition-shadow duration-200 hover:shadow-[0_0_22px_rgba(31,200,255,0.35)] ${className ?? ''}`}>
+    {title && (
+      <div className="panel-head">
+        <h3 className="panel-title">{title}</h3>
+      </div>
+    )}
+    <div className="panel-body">{children}</div>
   </div>
 );

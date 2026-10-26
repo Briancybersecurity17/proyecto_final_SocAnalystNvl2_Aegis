@@ -208,7 +208,7 @@ const Dashboard: React.FC = () => {
   const slotBandElement = selectedSlot ? (
     <ReferenceLine
       x={selectedSlot.label}
-      stroke="#1e40af"
+      stroke="#3b82f6"
       strokeWidth={2}
       strokeDasharray="6 4"
       ifOverflow="extendDomain"
@@ -243,10 +243,10 @@ const Dashboard: React.FC = () => {
   return (
     <section className="space-y-8">
       {/* Archivo analizado y momento del resumen */}
-      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
+      <div className="hud-label flex flex-wrap items-center justify-between gap-2">
         <span>
           Conjunto analizado:{' '}
-          <strong className="text-gray-700">{summary.file_name || 'archivo importado'}</strong>
+          <strong className="text-hud-fg">{summary.file_name || 'archivo importado'}</strong>
         </span>
         <span>
           {summary.generated_at
@@ -287,17 +287,22 @@ const Dashboard: React.FC = () => {
               key={level}
               variants={cardIn}
               whileHover={{ y: -3, transition: { duration: 0.18 } }}
-              className="bg-white rounded shadow p-4 border-l-4 transition-shadow duration-200 hover:shadow-md"
-              style={{ borderLeftColor: color }}
+              className="border border-hud-soft bg-inset/80 p-4 shadow-[0_0_12px_rgba(31,200,255,0.14)] transition-shadow duration-200 hover:border-hud-line/50 hover:shadow-[0_0_20px_rgba(31,200,255,0.35)] [clip-path:var(--chamfer-sm)]"
+              style={{ borderLeft: `4px solid ${color}` }}
             >
               <div className="flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-gray-600">{LEVEL_LABELS[level]}</h3>
-                <span className="w-3 h-3 rounded-full" style={{ backgroundColor: color }} />
+                <h3 className="hud-label">{LEVEL_LABELS[level]}</h3>
+                <span
+                  className="h-3 w-3 rounded-full"
+                  style={{ backgroundColor: color, boxShadow: `0 0 8px ${color}` }}
+                />
               </div>
-              <p className="text-3xl font-bold mt-1" style={{ color }}>
+              <p className="mt-1 font-display text-3xl font-bold" style={{ color }}>
                 <Counter value={count} />
               </p>
-              <p className="text-xs text-gray-500 mt-1">{pct(count, rows)}% de {rows} registros</p>
+              <p className="mt-1 font-mono text-[12px] text-[var(--text-dim)]">
+                {pct(count, rows)}% de {rows} registros
+              </p>
             </motion.div>
           )
         })}
@@ -306,19 +311,19 @@ const Dashboard: React.FC = () => {
       {/* AI observations over the imported data */}
       {summary.ai_insights && summary.ai_insights.length > 0 && (
         <DashboardSection title="Observaciones del análisis asistido por IA">
-          <div className="flex flex-wrap gap-2 mb-4">
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 border border-blue-200 px-3 py-1 text-xs font-medium text-blue-800">
-              <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />
+          <div className="mb-4 flex flex-wrap gap-2">
+            <span className="chip whitespace-normal normal-case text-hud-line">
+              <span className="h-1.5 w-1.5 rounded-full bg-hud-line" />
               Redactadas solo con cifras calculadas de tus registros
             </span>
-            <span className="inline-flex items-center rounded-full bg-gray-100 border border-gray-200 px-3 py-1 text-xs text-gray-600">
+            <span className="chip whitespace-normal normal-case text-[var(--text-dim)]">
               {summary.generated_at ? `Generado ${summary.generated_at.replace('T', ' ')}` : ''}
             </span>
           </div>
           <ul className="space-y-3">
             {summary.ai_insights.map((text, i) => (
-              <li key={i} className="flex gap-3 text-sm text-gray-700 leading-relaxed">
-                <span className="shrink-0 h-6 w-6 rounded-full bg-primary text-white text-xs font-bold flex items-center justify-center">
+              <li key={i} className="flex gap-3 font-mono text-[13px] leading-relaxed text-[var(--text)]">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center bg-primary text-xs font-bold text-white">
                   {i + 1}
                 </span>
                 <p>{text}</p>
@@ -330,12 +335,13 @@ const Dashboard: React.FC = () => {
 
       {/* Criticality distribution: donut + list (labels never overlap) */}
       <DashboardSection title="Distribución por criticidad">
-        <p className="text-sm text-gray-600 mb-4">
-          Clasificación calculada por el análisis; no equivale al campo original <code>Severity</code>.
-          <span className="ml-2 text-gray-500">Pulsá un sector —o su fila— para ver su desglose.</span>
+        <p className="mb-4 font-mono text-[12.5px] leading-relaxed text-[var(--text-dim)]">
+          Clasificación calculada por el análisis; no equivale al campo original{' '}
+          <code className="border border-hud-soft bg-[var(--bg-void)] px-1">Severity</code>.
+          <span className="ml-2 text-hud-fg">Pulsá un sector —o su fila— para ver su desglose.</span>
         </p>
         {severityData.every(item => item.value === 0) ? (
-          <p className="py-10 text-center text-sm text-gray-500">
+          <p className="py-10 text-center font-mono text-[13px] text-[var(--text-dim)]">
             No hay datos de clasificación para representar.
           </p>
         ) : (
@@ -358,7 +364,7 @@ const Dashboard: React.FC = () => {
                         <Sector
                           className="chart-glow"
                           style={glowVars(LEVEL_COLORS[selectedLevel.level])}
-                          stroke="#ffffff"
+                          stroke="#050212"
                           strokeWidth={2.5}
                         />
                       ) : undefined
@@ -373,7 +379,12 @@ const Dashboard: React.FC = () => {
                     animationDuration={chartMotion.duration}
                   >
                     {severityData.map(entry => (
-                      <Cell key={entry.level} fill={LEVEL_COLORS[entry.level]} stroke="#fff" strokeWidth={2} />
+                      <Cell
+                        key={entry.level}
+                        fill={LEVEL_COLORS[entry.level]}
+                        stroke="#050212"
+                        strokeWidth={2}
+                      />
                     ))}
                   </Pie>
                   <Tooltip
@@ -401,13 +412,13 @@ const Dashboard: React.FC = () => {
                       type="button"
                       aria-pressed={active}
                       onClick={() => setFocusLevel(prev => (prev === item.level ? null : item.level))}
-                      className={`flex items-center justify-between gap-3 border-b border-gray-100 pb-2 text-left transition-all duration-200 hover:opacity-100 ${
+                      className={`flex items-center justify-between gap-3 border-b border-hud-soft pb-2 text-left transition-all duration-200 hover:opacity-100 ${
                         dimmed ? 'opacity-50' : 'opacity-100'
                       }`}
                     >
-                      <span className="flex items-center gap-2 text-sm text-gray-700">
+                      <span className="flex items-center gap-2 font-mono text-[13px] text-[var(--text)]">
                         <span
-                          className="inline-block h-3 w-3 rounded-sm"
+                          className="inline-block h-3 w-3"
                           style={{
                             background: LEVEL_COLORS[item.level],
                             boxShadow: active ? `0 0 8px ${LEVEL_COLORS[item.level]}` : undefined,
@@ -416,8 +427,12 @@ const Dashboard: React.FC = () => {
                         {item.name}
                       </span>
                       <span className="text-right">
-                        <strong className="text-sm text-gray-900">{fmtCount(item.value)}</strong>
-                        <span className="block text-xs text-gray-500">{pct(item.value, rows)}%</span>
+                        <strong className="font-mono text-[13px] text-[var(--text-bright)]">
+                          {fmtCount(item.value)}
+                        </strong>
+                        <span className="block font-mono text-[12px] text-[var(--text-dim)]">
+                          {pct(item.value, rows)}%
+                        </span>
                       </span>
                     </button>
                   )
@@ -453,19 +468,19 @@ const Dashboard: React.FC = () => {
       {/* Actividad temporal: hora si el backend la aporta, si no día */}
       <DashboardSection title="Actividad temporal por criticidad">
         {timeData.length === 0 ? (
-          <p className="py-10 text-center text-sm text-gray-500">
+          <p className="py-10 text-center font-mono text-[13px] text-[var(--text-dim)]">
             El backend no devolvió agrupaciones temporales para este análisis.
           </p>
         ) : (
           <>
-            <p className="mb-3 text-sm text-gray-600">
+            <p className="mb-3 font-mono text-[12.5px] leading-relaxed text-[var(--text-dim)]">
               {hourly
                 ? 'Agrupación por hora a partir de los timestamps reales del archivo; los tramos sin actividad no aparecen.'
                 : 'Agrupación por día a partir de los timestamps reales del archivo.'}
             </p>
 
             {hourlyTooLong && (
-              <p className="mb-3 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+              <p className="mb-3 border border-hud-line/50 bg-hud-line/10 px-3 py-2 font-mono text-[12.5px] leading-relaxed text-hud-fg">
                 El archivo abarca {fmtCount(hourlyData.length)} tramos con actividad por hora: para
                 que el eje siga siendo legible y el gráfico no pinte miles de puntos, se muestra la
                 serie diaria, con los mismos registros del archivo.
@@ -473,7 +488,7 @@ const Dashboard: React.FC = () => {
             )}
 
             {!hourly && timeData.length === 1 && (
-              <p className="mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              <p className="mb-3 border border-[#ffb020]/50 bg-[#ffb020]/10 px-3 py-2 font-mono text-[12.5px] leading-relaxed text-[#ffb020]">
                 Los datos cubren un solo día ({timeData[0].detail}) y la respuesta no incluye
                 desglose horario: se muestra el total del día. Con una sola fecha no hay
                 tendencia que graficar.
@@ -481,7 +496,7 @@ const Dashboard: React.FC = () => {
             )}
 
             {hourly && dailyData.length === 1 && (
-              <p className="mb-3 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+              <p className="mb-3 border border-hud-line/50 bg-hud-line/10 px-3 py-2 font-mono text-[12.5px] leading-relaxed text-hud-fg">
                 Los datos cubren un solo día ({dailyData[0].detail}): la serie desglosa las
                 horas con actividad de ese día.
               </p>
@@ -596,7 +611,7 @@ const Dashboard: React.FC = () => {
               )}
             </ResponsiveContainer>
 
-            <p className="mt-2 text-xs text-gray-500">
+            <p className="mt-2 font-mono text-[12px] text-[var(--text-dim)]">
               Pulsá un tramo de la serie para fijarlo y ver su desglose por criticidad.
             </p>
 
@@ -605,7 +620,7 @@ const Dashboard: React.FC = () => {
                 <ChartInsight
                   key={`slot-${selectedSlot.label}`}
                   title={`${selectedSlot.detail} · ${hourly ? 'hora' : 'día'}`}
-                  color="#1e40af"
+                  color="#3b82f6"
                   value={`${fmtCount(selectedSlot.total)} eventos`}
                   caption={`${pct(selectedSlot.total, totalSeries)}% de los ${fmtCount(totalSeries)} eventos del periodo`}
                   rows={LEVEL_ORDER.map(level => ({
@@ -623,17 +638,13 @@ const Dashboard: React.FC = () => {
 
       {/* Top hosts, con filtro por nivel */}
       <DashboardSection title="Hosts con mayor volumen de eventos">
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-          <p className="text-sm text-gray-600">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <p className="font-mono text-[12.5px] text-[var(--text-dim)]">
             Registros por host; podés enfocar un nivel de riesgo concreto.
           </p>
-          <label className="flex items-center gap-2 text-sm text-gray-700">
+          <label className="flex items-center gap-2 font-mono text-[12.5px] text-[var(--text)]">
             Nivel
-            <select
-              value={hostLevel}
-              onChange={e => setHostLevel(e.target.value)}
-              className="rounded border border-gray-300 bg-white px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary"
-            >
+            <select value={hostLevel} onChange={e => setHostLevel(e.target.value)} className="hud-input py-2">
               <option value="todos">Todos</option>
               {LEVEL_ORDER.map(level => (
                 <option key={level} value={level}>
@@ -671,20 +682,22 @@ const Dashboard: React.FC = () => {
                   isAnimationActive={chartMotion.isAnimationActive}
                   animationDuration={chartMotion.duration}
                   animationBegin={index * CHART_STAGGER}
-                  label={{ position: 'right', fontSize: 10, fill: '#475569', formatter: (value: number) => (value > 0 ? value : '') }}
+                  label={{ position: 'right', fontSize: 10, fill: '#bfefff', formatter: (value: number) => (value > 0 ? value : '') }}
                 >
                   {/* Las celdas viven dentro de <Bar>: Recharts las lee como
                       hijos de la serie y aplica el marcado a cada host. */}
-                  {selectionCells(hostsData, focusHost, h => h.host, '#1e40af', true, LEVEL_COLORS[level])}
+                  {selectionCells(hostsData, focusHost, h => h.host, '#3b82f6', true, LEVEL_COLORS[level])}
                 </Bar>
               ))}
             </BarChart>
           </ResponsiveContainer>
         ) : (
-          <p className="py-8 text-center text-sm text-gray-500">No hay hosts para mostrar.</p>
+          <p className="py-8 text-center font-mono text-[13px] text-[var(--text-dim)]">
+            No hay hosts para mostrar.
+          </p>
         )}
 
-        <p className="mt-2 text-xs text-gray-500">
+        <p className="mt-2 font-mono text-[12px] text-[var(--text-dim)]">
           Pulsá una barra para fijar el host y ver su reparto por criticidad.
         </p>
 
@@ -693,7 +706,7 @@ const Dashboard: React.FC = () => {
             <ChartInsight
               key={`host-${selectedHostData.host}`}
               title={`Host ${selectedHostData.host}`}
-              color="#1e40af"
+              color="#3b82f6"
               value={`${fmtCount(selectedHostData.total)} eventos`}
               caption={
                 totalHostEvents > 0
@@ -717,7 +730,7 @@ const Dashboard: React.FC = () => {
 
       {/* Original Severity column, kept separate from the derived levels */}
       <DashboardSection title="Valores originales del campo Severity">
-        <p className="text-sm text-gray-600 mb-4">
+        <p className="mb-4 font-mono text-[12.5px] leading-relaxed text-[var(--text-dim)]">
           Tal como vienen en el archivo, sin convertir a Crítico / Alto / Medio / Bajo.
         </p>
         {rawSeverityData.length ? (
@@ -738,19 +751,19 @@ const Dashboard: React.FC = () => {
               <Bar
                 dataKey="count"
                 name="Registros originales"
-                fill="#0891b2"
+                fill="#06b6d4"
                 radius={[5, 5, 0, 0]}
                 isAnimationActive={chartMotion.isAnimationActive}
                 animationDuration={chartMotion.duration}
-                label={{ position: 'top', fontSize: 11, fill: '#475569' }}
+                label={{ position: 'top', fontSize: 11, fill: '#bfefff' }}
               >
                 {/* Recharts lee las celdas desde los hijos de la serie. */}
-                {selectionCells(rawSeverityData, focusRaw, r => r.severity, '#0891b2')}
+                {selectionCells(rawSeverityData, focusRaw, r => r.severity, '#06b6d4')}
               </Bar>
             </BarChart>
           </ResponsiveContainer>
         ) : (
-          <p className="py-8 text-center text-sm text-gray-500">
+          <p className="py-8 text-center font-mono text-[13px] text-[var(--text-dim)]">
             La respuesta no incluye conteos del campo Severity original.
           </p>
         )}
@@ -760,7 +773,7 @@ const Dashboard: React.FC = () => {
             <ChartInsight
               key={`raw-${selectedRaw.severity}`}
               title={`Severity «${selectedRaw.severity}»`}
-              color="#0891b2"
+              color="#06b6d4"
               value={`${fmtCount(selectedRaw.count)} registros`}
               caption={`${pct(selectedRaw.count, rows)}% de los ${rows} registros, tal como vienen en el archivo`}
               note="Este es el valor original de la columna; la clasificación por criticidad del dashboard es un cálculo aparte."
@@ -772,7 +785,7 @@ const Dashboard: React.FC = () => {
 
       {/* Overall risk justification */}
       <DashboardSection title="Justificación del nivel de riesgo">
-        <p className="text-gray-700 leading-relaxed">
+        <p className="font-mono text-[13.5px] leading-relaxed text-[var(--text)]">
           {summary.risk_justification || 'El backend no incluyó una justificación para este análisis.'}
         </p>
       </DashboardSection>

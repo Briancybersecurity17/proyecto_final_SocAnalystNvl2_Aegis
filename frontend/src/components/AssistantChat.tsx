@@ -13,10 +13,10 @@ import { DashboardSection } from './DashboardSection'
 import { EmptyState } from './EmptyState'
 
 const LEVEL_BADGE: Record<string, string> = {
-  critico: 'bg-red-600 text-white',
-  alto: 'bg-orange-500 text-white',
-  medio: 'bg-yellow-400 text-yellow-900',
-  bajo: 'bg-emerald-500 text-white',
+  critico: '#dc2626',
+  alto: '#f97316',
+  medio: '#facc15',
+  bajo: '#10b981',
 }
 
 const LEVEL_LABEL: Record<string, string> = {
@@ -59,13 +59,16 @@ const renderInline = (text: string, keyBase: string): React.ReactNode[] => {
     const key = `${keyBase}-${index++}`
     if (token.startsWith('**')) {
       nodes.push(
-        <strong key={key} className="font-semibold text-gray-900">
+        <strong key={key} className="font-semibold text-[var(--text-bright)]">
           {token.slice(2, -2)}
         </strong>,
       )
     } else {
       nodes.push(
-        <code key={key} className="px-1 py-0.5 rounded bg-gray-100 text-[13px] font-mono text-indigo-700">
+        <code
+          key={key}
+          className="border border-hud-soft bg-[var(--bg-void)] px-1 py-0.5 font-mono text-[12.5px] text-hud-fg"
+        >
           {token.slice(1, -1)}
         </code>,
       )
@@ -79,23 +82,26 @@ const renderInline = (text: string, keyBase: string): React.ReactNode[] => {
 const AnswerBody: React.FC<{ text: string }> = ({ text }) => {
   const lines = text.split('\n')
   return (
-    <div className="space-y-1.5 text-sm leading-relaxed text-gray-700">
+    <div className="space-y-1.5 font-mono text-[13px] leading-relaxed text-[var(--text)]">
       {lines.map((line, i) => {
         const key = `l${i}`
         if (!line.trim()) return <div key={key} className="h-2" />
         if (line.startsWith('> '))
           return (
-            <div key={key} className="border-l-2 border-indigo-300 pl-3 text-gray-600 text-[13px]">
+            <div
+              key={key}
+              className="border-l-2 border-hud-line/60 pl-3 text-[12.5px] text-[var(--text-dim)]"
+            >
               {renderInline(line.slice(2), key)}
             </div>
           )
         if (/^\d+\.\s/.test(line))
           return (
             <div key={key} className="flex gap-2 pl-1">
-              <span className="font-mono text-[13px] text-indigo-600 shrink-0">
+              <span className="shrink-0 font-mono text-[12.5px] text-hud-line">
                 {line.match(/^\d+/)?.[0]}.
               </span>
-              <span className="text-[13px]">{renderInline(line.replace(/^\d+\.\s/, ''), key)}</span>
+              <span className="text-[12.5px]">{renderInline(line.replace(/^\d+\.\s/, ''), key)}</span>
             </div>
           )
         return <p key={key}>{renderInline(line, key)}</p>
@@ -115,59 +121,68 @@ const ReferenceBlock: React.FC<{ reference?: AskResponse['reference'] }> = ({ re
   if (!events.length && !techniques.length) return null
 
   return (
-    <div className="mt-3 rounded-lg border border-violet-200 bg-violet-50/60 p-3">
-      <div className="flex items-center gap-2 mb-2">
-        <span className="text-[11px] font-bold uppercase tracking-wide text-violet-700">
+    <div className="mt-3 border border-[#d946ef]/45 bg-[#d946ef]/10 p-3">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#e879f9]">
           Referencia de marco
         </span>
-        <span className="text-[10px] text-violet-500">MITRE ATT&amp;CK · Event IDs Windows</span>
+        <span className="font-mono text-[10px] text-[#f0abfc]">
+          MITRE ATT&amp;CK · Event IDs Windows
+        </span>
       </div>
 
       {events.length > 0 && (
-        <div className="space-y-1.5 mb-2.5">
+        <div className="mb-2.5 space-y-1.5">
           {events.map(item => (
-            <div key={item.id} className="text-[12px] leading-snug text-gray-700">
-              <span className="font-mono font-semibold text-violet-800">Event ID {item.id}</span>
-              <span className={`ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full ${
-                item.match === 'evidencia'
-                  ? 'bg-emerald-100 text-emerald-700'
-                  : 'bg-gray-200 text-gray-600'
-              }`}>
+            <div key={item.id} className="text-[12px] leading-snug text-[var(--text)]">
+              <span className="font-mono font-semibold text-[#f0abfc]">Event ID {item.id}</span>
+              <span
+                className={`ml-1.5 px-1.5 py-0.5 text-[10px] ${
+                  item.match === 'evidencia'
+                    ? 'border border-[#10b981]/60 bg-[#10b981]/15 text-[#10b981]'
+                    : 'border border-hud-soft bg-[var(--bg-void)] text-[var(--text-dim)]'
+                }`}
+              >
                 {item.match === 'evidencia' ? 'en tus registros' : 'citado en tu consulta'}
               </span>
-              <div className="text-gray-600">{item.titulo}</div>
-              <div className="text-gray-500">{item.por_que_importa}</div>
+              <div className="text-[var(--text-dim)]">{item.titulo}</div>
+              <div className="text-[var(--text-dim)]">{item.por_que_importa}</div>
             </div>
           ))}
         </div>
       )}
 
       {techniques.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
           {techniques.map(tech => (
-            <div key={tech.id} className="border border-violet-200 rounded-lg bg-white p-2.5">
+            <div key={tech.id} className="border border-[#d946ef]/35 bg-[var(--bg-void)] p-2.5">
               <div className="flex items-start justify-between gap-2">
                 <div>
-                  <span className="font-mono text-xs font-bold text-violet-700">{tech.id}</span>
-                  <span className="ml-1.5 text-[12px] font-semibold text-gray-800">{tech.name}</span>
+                  <span className="font-mono text-xs font-bold text-[#f0abfc]">{tech.id}</span>
+                  <span className="ml-1.5 text-[12px] font-semibold text-[var(--text-bright)]">
+                    {tech.name}
+                  </span>
                 </div>
-                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-700 whitespace-nowrap">
+                <span className="whitespace-nowrap border border-[#d946ef]/50 bg-[#d946ef]/15 px-1.5 py-0.5 text-[10px] text-[#f0abfc]">
                   {tech.tactic_es}
                 </span>
               </div>
               {tech.aliases.length > 0 && (
-                <div className="text-[10px] text-gray-400 mt-0.5">
+                <div className="mt-0.5 text-[10px] text-[var(--text-dim)]">
                   antes: {tech.aliases.join(', ')}
                 </div>
               )}
-              <p className="text-[11.5px] text-gray-600 mt-1">{tech.descripcion_es}</p>
-              <p className="text-[11px] text-gray-500 mt-1">
-                <span className="font-semibold text-gray-600">Detección:</span> {tech.se_detecta}
+              <p className="mt-1 text-[11.5px] text-[var(--text-dim)]">{tech.descripcion_es}</p>
+              <p className="mt-1 text-[11px] text-[var(--text-dim)]">
+                <span className="font-semibold text-[var(--text)]">Detección:</span> {tech.se_detecta}
               </p>
-              <div className="flex items-center justify-between mt-1.5">
+              <div className="mt-1.5 flex items-center justify-between">
                 <div className="flex flex-wrap gap-1">
                   {tech.eventos.slice(0, 4).map(ev => (
-                    <span key={ev} className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">
+                    <span
+                      key={ev}
+                      className="border border-hud-soft bg-[var(--bg-panel)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-dim)]"
+                    >
                       {ev}
                     </span>
                   ))}
@@ -176,7 +191,7 @@ const ReferenceBlock: React.FC<{ reference?: AskResponse['reference'] }> = ({ re
                   href={tech.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-[10.5px] text-indigo-600 hover:underline shrink-0 ml-2"
+                  className="ml-2 shrink-0 text-[10.5px] text-hud-line hover:underline"
                 >
                   attack.mitre.org ↗
                 </a>
@@ -186,7 +201,7 @@ const ReferenceBlock: React.FC<{ reference?: AskResponse['reference'] }> = ({ re
         </div>
       )}
 
-      <p className="text-[10.5px] text-violet-600/80 mt-2 border-t border-violet-200 pt-1.5">
+      <p className="mt-2 border-t border-[#d946ef]/30 pt-1.5 text-[10.5px] text-[#f0abfc]/85">
         {reference.note}
       </p>
     </div>
@@ -301,19 +316,19 @@ export const AssistantChat: React.FC = () => {
     if (!rag) return null
     if (!rag.available)
       return {
-        tone: 'bg-amber-50 border-amber-200 text-amber-800',
+        tone: '#ffb020',
         text: `Índice semántico no disponible (${rag.reason ?? 'sin motor'}): la consulta usa búsqueda léxica sobre los registros.`,
       }
     if (!rag.events)
       return {
-        tone: 'bg-indigo-50 border-indigo-200 text-indigo-800',
+        tone: '#1fc8ff',
         text: 'Indexando los registros en el índice semántico… la primera consulta puede tardar unos segundos.',
       }
     const kbPart = kb
       ? ` · base de conocimiento: ${kb.techniques} técnicas ATT&CK + ${kb.event_ids} Event IDs`
       : ''
     return {
-      tone: 'bg-emerald-50 border-emerald-200 text-emerald-800',
+      tone: '#10b981',
       text: `Recuperación híbrida activa · ${rag.events} eventos indexados · ${rag.model}${kbPart}`,
     }
   }, [rag, kb])
@@ -327,20 +342,25 @@ export const AssistantChat: React.FC = () => {
   return (
     <section className="space-y-4">
       {ragNote && (
-        <div className={`border rounded-lg px-4 py-2.5 text-sm ${ragNote.tone}`}>{ragNote.text}</div>
+        <div
+          className="border px-4 py-2.5 font-mono text-[12.5px]"
+          style={{ borderColor: `${ragNote.tone}80`, background: `${ragNote.tone}14`, color: ragNote.tone }}
+        >
+          {ragNote.text}
+        </div>
       )}
 
       <DashboardSection>
         {/* Sugerencias */}
         {messages.length === 0 && (
           <div className="mb-4">
-            <p className="text-sm text-gray-500 mb-2">Prueba con una de estas consultas:</p>
+            <p className="hud-label mb-2">Prueba con una de estas consultas:</p>
             <div className="flex flex-wrap gap-2">
               {suggestions.map(suggestion => (
                 <button
                   key={suggestion}
                   onClick={() => send(suggestion)}
-                  className="text-sm border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-full px-3.5 py-1.5 transition-colors"
+                  className="btn-hud"
                 >
                   {suggestion}
                 </button>
@@ -350,12 +370,9 @@ export const AssistantChat: React.FC = () => {
         )}
 
         {/* Conversación */}
-        <div
-          ref={listRef}
-          className="h-[46vh] min-h-[320px] overflow-y-auto rounded-lg border border-gray-200 bg-gray-50 p-4 space-y-4"
-        >
+        <div className="h-[46vh] min-h-[320px] space-y-4 overflow-y-auto border border-hud-soft bg-[var(--bg-void)] p-4">
           {messages.length === 0 && (
-            <p className="text-sm text-gray-400 text-center mt-12">
+            <p className="mt-12 text-center font-mono text-[13px] text-[var(--text-dim)]">
               El asistente responde citando los <strong>Log_ID</strong> de los eventos recuperados.
               No genera hallazgos que no estén en tu archivo.
             </p>
@@ -369,7 +386,7 @@ export const AssistantChat: React.FC = () => {
                 animate={{ opacity: 1, y: 0 }}
                 className="flex justify-end"
               >
-                <div className="max-w-[85%] bg-primary text-white rounded-2xl rounded-br-sm px-4 py-2.5 text-sm">
+                <div className="max-w-[85%] border border-[#60a5fa]/50 bg-primary px-4 py-2.5 font-mono text-[13px] text-white shadow-[0_0_12px_rgba(30,64,175,0.5)]">
                   {message.text}
                 </div>
               </motion.div>
@@ -380,79 +397,83 @@ export const AssistantChat: React.FC = () => {
                 animate={{ opacity: 1, y: 0 }}
                 className="flex justify-start"
               >
-                <div className="max-w-[92%] bg-white border border-gray-200 rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm">
+                <div className="max-w-[92%] border border-hud-soft bg-[var(--bg-panel)] px-4 py-3 shadow-[0_0_12px_rgba(31,200,255,0.12)]">
                   <AnswerBody text={message.text} />
 
                   {message.response && (
-                    <div className="mt-3 pt-3 border-t border-gray-100 space-y-2">
+                    <div className="mt-3 space-y-2 border-t border-hud-soft pt-3">
                       <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                        <span className="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-medium">
+                        <span className="chip whitespace-normal normal-case text-hud-line">
                           {message.response.mode === 'aggregate'
                             ? message.response.summary_line
                             : `${message.response.retrieved} eventos recuperados`}
                         </span>
-                        <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
+                        <span className="chip whitespace-normal normal-case text-[var(--text-dim)]">
                           confianza {message.response.confidence}
                         </span>
-                        <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
+                        <span className="chip whitespace-normal normal-case text-[var(--text-dim)]">
                           {message.response.engine === 'llm'
                             ? `modelo ${message.response.model}`
                             : 'motor local determinista'}
                         </span>
                         {message.response.warnings.includes('baja_confianza') && (
-                          <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                          <span className="chip whitespace-normal normal-case text-[#ffb020]">
                             baja similitud
                           </span>
                         )}
                       </div>
 
                       {message.response.evidence.length > 0 && (
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                          {message.response.evidence.map((item, idx) => (
-                            <div
-                              key={`${item.log_id}-${idx}`}
-                              className="border border-gray-200 rounded-lg p-2.5 bg-white"
-                            >
-                              <div className="flex items-center justify-between gap-2 mb-1.5">
-                                <span className="font-mono text-xs font-semibold text-gray-800">
-                                  {item.log_id}
-                                </span>
-                                <span
-                                  className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded-full ${
-                                    LEVEL_BADGE[item.level] ?? 'bg-gray-200 text-gray-700'
-                                  }`}
-                                >
-                                  {LEVEL_LABEL[item.level] ?? item.level}
-                                </span>
+                        <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                          {message.response.evidence.map((item, idx) => {
+                            const tone = LEVEL_BADGE[item.level] ?? '#7280a3'
+                            return (
+                              <div
+                                key={`${item.log_id}-${idx}`}
+                                className="border border-hud-soft bg-[var(--bg-void)] p-2.5"
+                              >
+                                <div className="mb-1.5 flex items-center justify-between gap-2">
+                                  <span className="font-mono text-xs font-semibold text-hud-fg">
+                                    {item.log_id}
+                                  </span>
+                                  <span
+                                    className="chip text-[10px]"
+                                    style={{ color: tone, background: `${tone}1f` }}
+                                  >
+                                    {LEVEL_LABEL[item.level] ?? item.level}
+                                  </span>
+                                </div>
+                                <div className="space-y-0.5 font-mono text-[11px] text-[var(--text-dim)]">
+                                  <div className="truncate text-[var(--text)]" title={item.description}>
+                                    {item.description}
+                                  </div>
+                                  <div>
+                                    host {item.host} · origen {item.source_ip}
+                                  </div>
+                                  <div>
+                                    Event_ID {item.event_id} · {item.severity}
+                                    {item.result && item.result !== '—' && (
+                                      <span className="text-[var(--text)]"> · Result {item.result}</span>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="mt-2">
+                                  <div className="h-1.5 overflow-hidden bg-[var(--bg-panel)]">
+                                    <div
+                                      className="h-full bg-hud-line"
+                                      style={{
+                                        width: `${Math.round(item.relevance * 100)}%`,
+                                        boxShadow: '0 0 8px #1fc8ff',
+                                      }}
+                                    />
+                                  </div>
+                                  <div className="mt-0.5 text-[10px] text-[var(--text-dim)]">
+                                    similitud {(item.relevance * 100).toFixed(0)}%
+                                  </div>
+                                </div>
                               </div>
-                              <div className="text-[11px] text-gray-600 space-y-0.5 font-mono">
-                                <div
-                                  className="truncate text-gray-800"
-                                  title={item.description}
-                                >
-                                  {item.description}
-                                </div>
-                                <div>host {item.host} · origen {item.source_ip}</div>
-                                <div>
-                                  Event_ID {item.event_id} · {item.severity}
-                                  {item.result && item.result !== '—' && (
-                                    <span className="text-gray-800"> · Result {item.result}</span>
-                                  )}
-                                </div>
-                              </div>
-                              <div className="mt-2">
-                                <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden">
-                                  <div
-                                    className="h-full bg-indigo-500"
-                                    style={{ width: `${Math.round(item.relevance * 100)}%` }}
-                                  />
-                                </div>
-                                <div className="text-[10px] text-gray-400 mt-0.5">
-                                  similitud {(item.relevance * 100).toFixed(0)}%
-                                </div>
-                              </div>
-                            </div>
-                          ))}
+                            )
+                          })}
                         </div>
                       )}
 
@@ -466,17 +487,17 @@ export const AssistantChat: React.FC = () => {
 
           {loading && (
             <div className="flex justify-start">
-              <div className="bg-white border border-gray-200 rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm">
-                <div className="flex items-center gap-1.5 text-gray-400">
+              <div className="border border-hud-soft bg-[var(--bg-panel)] px-4 py-3 shadow-[0_0_12px_rgba(31,200,255,0.12)]">
+                <div className="flex items-center gap-1.5 text-hud-line">
                   {[0, 1, 2].map(i => (
                     <motion.span
                       key={i}
-                      className="h-2 w-2 rounded-full bg-indigo-400"
+                      className="h-2 w-2 rounded-full bg-hud-line"
                       animate={{ opacity: [0.3, 1, 0.3] }}
                       transition={{ duration: 1, repeat: Infinity, delay: i * 0.15 }}
                     />
                   ))}
-                  <span className="ml-2 text-xs">recuperando evidencias…</span>
+                  <span className="ml-2 font-mono text-xs">recuperando evidencias…</span>
                 </div>
               </div>
             </div>
@@ -484,21 +505,17 @@ export const AssistantChat: React.FC = () => {
         </div>
 
         {error && (
-          <div className="mt-3 border border-red-200 bg-red-50 text-red-700 text-sm rounded-lg px-4 py-2.5">
+          <div className="mt-3 border border-[#dc2626]/60 bg-[#dc2626]/10 px-4 py-2.5 font-mono text-[13px] text-[#f87171]">
             {error}
           </div>
         )}
 
         {/* Filtros + entrada */}
         <div className="mt-4 flex flex-col gap-3">
-          <div className="flex flex-wrap items-center gap-3 text-sm">
-            <label className="flex items-center gap-2 text-gray-600">
+          <div className="flex flex-wrap items-center gap-3 font-mono text-[13px]">
+            <label className="flex items-center gap-2 text-[var(--text-dim)]">
               <span>Filtrar por criticidad</span>
-              <select
-                value={level}
-                onChange={e => setLevel(e.target.value)}
-                className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
-              >
+              <select value={level} onChange={e => setLevel(e.target.value)} className="hud-input py-1.5">
                 <option value="">Todas</option>
                 <option value="critico">Crítico</option>
                 <option value="alto">Alto</option>
@@ -506,12 +523,12 @@ export const AssistantChat: React.FC = () => {
                 <option value="bajo">Bajo</option>
               </select>
             </label>
-            <label className="flex items-center gap-2 text-gray-600 cursor-pointer">
+            <label className="flex cursor-pointer items-center gap-2 text-[var(--text-dim)]">
               <input
                 type="checkbox"
                 checked={suspicious}
                 onChange={e => setSuspicious(e.target.checked)}
-                className="h-4 w-4 accent-indigo-600"
+                className="h-4 w-4 accent-[#1fc8ff]"
               />
               <span>Solo sospechosos</span>
             </label>
@@ -529,19 +546,19 @@ export const AssistantChat: React.FC = () => {
               onChange={e => setInput(e.target.value)}
               placeholder="Pregunta sobre los registros… p. ej. ¿qué pasó en DC-01?"
               maxLength={300}
-              className="flex-1 border border-gray-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent"
+              className="hud-input flex-1"
             />
             <button
               type="submit"
               disabled={loading || input.trim().length < 3}
-              className="px-5 py-2.5 rounded-lg bg-primary text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90 transition-opacity"
+              className="btn-hud btn-primary-hud"
             >
               {loading ? 'Consultando…' : 'Consultar'}
             </button>
           </form>
 
           {summary && (
-            <p className="text-xs text-gray-400">
+            <p className="font-mono text-[11.5px] text-[var(--text-dim)]">
               Base: {summary.rows} registros indexados · los datos nunca salen de tu equipo.
             </p>
           )}

@@ -84,22 +84,23 @@ export const ChartInsight: React.FC<{
     animate={{ opacity: 1, y: 0 }}
     exit={{ opacity: 0, y: -6, transition: { duration: 0.14 } }}
     transition={{ duration: 0.22, ease: 'easeOut' }}
-    className="mt-4 rounded-lg border p-4"
-    style={{ borderColor: `${color}66`, background: `${color}12` }}
+    className="mt-4 border p-4 [clip-path:var(--chamfer-sm)]"
+    style={{ borderColor: `${color}66`, background: `${color}1f` }}
   >
     <div className="flex items-start justify-between gap-4">
       <div>
-        <p className="text-xs font-semibold uppercase tracking-wide" style={{ color }}>
+        <p className="font-mono text-[11px] uppercase tracking-[0.16em]" style={{ color }}>
           {title}
         </p>
-        <p className="text-2xl font-bold text-gray-900">{value}</p>
-        {caption && <p className="text-xs text-gray-600">{caption}</p>}
+        <p className="font-display text-2xl font-bold text-[var(--text-bright)]">{value}</p>
+        {caption && <p className="font-mono text-[12px] text-[var(--text-dim)]">{caption}</p>}
       </div>
       <button
         type="button"
         onClick={onClose}
         aria-label="Quitar selección"
-        className="rounded p-1 text-gray-500 transition-colors hover:bg-white hover:text-gray-800"
+        className="rounded p-1 font-mono transition-colors"
+        style={{ color: `${color}cc`, background: `${color}14` }}
       >
         ✕
       </button>
@@ -112,13 +113,17 @@ export const ChartInsight: React.FC<{
       >
         {rows.map(row => (
           <div key={row.label}>
-            <dt className="text-[11px] uppercase tracking-wide text-gray-500">{row.label}</dt>
-            <dd className="text-sm font-semibold text-gray-800">{row.value}</dd>
+            <dt className="hud-label mb-0.5">{row.label}</dt>
+            <dd className="font-mono text-[13px] font-semibold text-[var(--text-bright)]">
+              {row.value}
+            </dd>
           </div>
         ))}
       </dl>
     )}
 
-    {note && <p className="mt-3 text-xs leading-relaxed text-gray-600">{note}</p>}
+    {note && (
+      <p className="mt-3 font-mono text-[12px] leading-relaxed text-[var(--text-dim)]">{note}</p>
+    )}
   </motion.div>
 )

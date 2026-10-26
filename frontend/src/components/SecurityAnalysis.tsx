@@ -29,11 +29,11 @@ import {
   CartesianGrid,
 } from 'recharts'
 
-const LEVEL_BADGE: Record<string, string> = {
-  critico: 'bg-red-600 text-white',
-  alto: 'bg-orange-500 text-white',
-  medio: 'bg-yellow-400 text-yellow-900',
-  bajo: 'bg-emerald-500 text-white',
+const LEVEL_BADGE: Record<string, { color: string; bg: string }> = {
+  critico: { color: '#dc2626', bg: 'rgba(220,38,38,0.16)' },
+  alto: { color: '#f97316', bg: 'rgba(249,115,22,0.16)' },
+  medio: { color: '#facc15', bg: 'rgba(250,204,21,0.16)' },
+  bajo: { color: '#10b981', bg: 'rgba(16,185,129,0.16)' },
 }
 
 export const SecurityAnalysis: React.FC = () => {
@@ -112,29 +112,33 @@ export const SecurityAnalysis: React.FC = () => {
   return (
     <section className="space-y-8">
       {/* KPIs */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="bg-white rounded shadow p-4 text-center">
-          <h3 className="text-sm font-medium text-gray-600">Eventos sospechosos</h3>
-          <p className="text-3xl font-bold text-orange-600">{toCount(summary.suspicious_events)}</p>
-          <p className="text-xs text-gray-500">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="border border-hud-soft bg-inset/80 p-4 text-center [clip-path:var(--chamfer-sm)]">
+          <h3 className="hud-label mb-2">Eventos sospechosos</h3>
+          <p className="font-display text-3xl font-bold text-[#f97316]">
+            {toCount(summary.suspicious_events)}
+          </p>
+          <p className="mt-1 font-mono text-[12px] text-[var(--text-dim)]">
             {pct(toCount(summary.suspicious_events), toCount(summary.rows))}% de {summary.rows} registros
           </p>
         </div>
-        <div className="bg-white rounded shadow p-4 text-center">
-          <h3 className="text-sm font-medium text-gray-600">Hosts afectados</h3>
-          <p className="text-3xl font-bold text-red-600">{hostData.length}</p>
-          <p className="text-xs text-gray-500">con eventos sospechosos</p>
+        <div className="border border-hud-soft bg-inset/80 p-4 text-center [clip-path:var(--chamfer-sm)]">
+          <h3 className="hud-label mb-2">Hosts afectados</h3>
+          <p className="font-display text-3xl font-bold text-[#dc2626]">{hostData.length}</p>
+          <p className="mt-1 font-mono text-[12px] text-[var(--text-dim)]">con eventos sospechosos</p>
         </div>
-        <div className="bg-white rounded shadow p-4 text-center">
-          <h3 className="text-sm font-medium text-gray-600">IPs de origen</h3>
-          <p className="text-3xl font-bold text-blue-600">{ipData.length}</p>
-          <p className="text-xs text-gray-500">con actividad marcada para revisión</p>
+        <div className="border border-hud-soft bg-inset/80 p-4 text-center [clip-path:var(--chamfer-sm)]">
+          <h3 className="hud-label mb-2">IPs de origen</h3>
+          <p className="font-display text-3xl font-bold text-hud-line">{ipData.length}</p>
+          <p className="mt-1 font-mono text-[12px] text-[var(--text-dim)]">
+            con actividad marcada para revisión
+          </p>
         </div>
       </div>
 
       {/* Correlation: IP -> hosts */}
       <DashboardSection title="Correlación: IP de origen → hosts impactados">
-        <p className="text-sm text-gray-600 mb-3">
+        <p className="mb-3 font-mono text-[12.5px] leading-relaxed text-[var(--text-dim)]">
           El alcance entre hosts ayuda a priorizar la investigación, pero el volumen por sí
           solo no demuestra que una IP sea maliciosa.
         </p>
@@ -161,14 +165,14 @@ export const SecurityAnalysis: React.FC = () => {
               <Bar
                 dataKey="hosts"
                 name="Hosts distintos"
-                fill="#0891b2"
+                fill="#06b6d4"
                 isAnimationActive={chartMotion.isAnimationActive}
                 animationDuration={chartMotion.duration}
-                label={{ position: 'right', fontSize: 10, fill: '#475569' }}
+                label={{ position: 'right', fontSize: 10, fill: '#bfefff' }}
               >
                 {/* Recharts lee las celdas desde los hijos de cada serie; el i-ésimo
                     <Cell> se aplica al i-ésimo segmento (IP) de cada barra. */}
-                {selectionCells(ipData, focusIp, i => i.ip, '#f97316', true, '#0891b2')}
+                {selectionCells(ipData, focusIp, i => i.ip, '#f97316', true, '#06b6d4')}
               </Bar>
               <Bar
                 dataKey="events"
@@ -176,19 +180,19 @@ export const SecurityAnalysis: React.FC = () => {
                 fill="#f97316"
                 isAnimationActive={chartMotion.isAnimationActive}
                 animationDuration={chartMotion.duration}
-                label={{ position: 'right', fontSize: 10, fill: '#475569' }}
+                label={{ position: 'right', fontSize: 10, fill: '#bfefff' }}
               >
                 {selectionCells(ipData, focusIp, i => i.ip, '#f97316', true, '#f97316')}
               </Bar>
             </BarChart>
           </ResponsiveContainer>
         ) : (
-          <p className="py-8 text-center text-sm text-gray-500">
+          <p className="py-8 text-center font-mono text-[13px] text-[var(--text-dim)]">
             No hay IP sospechosas disponibles en este análisis.
           </p>
         )}
 
-        <p className="mt-2 text-xs text-gray-500">
+        <p className="mt-2 font-mono text-[12px] text-[var(--text-dim)]">
           Pulsá una barra para fijar la IP y ver su alcance completo.
         </p>
 
@@ -235,19 +239,19 @@ export const SecurityAnalysis: React.FC = () => {
                 fill="#f97316"
                 isAnimationActive={chartMotion.isAnimationActive}
                 animationDuration={chartMotion.duration}
-                label={{ position: 'right', fontSize: 11, fill: '#475569' }}
+                label={{ position: 'right', fontSize: 11, fill: '#bfefff' }}
               >
                 {selectionCells(hostData, focusSuspHost, h => h.host, '#f97316')}
               </Bar>
             </BarChart>
           </ResponsiveContainer>
         ) : (
-          <p className="py-8 text-center text-sm text-gray-500">
+          <p className="py-8 text-center font-mono text-[13px] text-[var(--text-dim)]">
             El análisis no registró eventos sospechosos por host.
           </p>
         )}
 
-        <p className="mt-2 text-xs text-gray-500">
+        <p className="mt-2 font-mono text-[12px] text-[var(--text-dim)]">
           Pulsá una barra para fijar el host y ver cómo se reparte su actividad.
         </p>
 
@@ -273,23 +277,23 @@ export const SecurityAnalysis: React.FC = () => {
       {/* Full suspicious events table */}
       <DashboardSection title="Eventos sospechosos identificados">
         {fetchError && (
-          <div role="alert" className="mb-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+          <div role="alert" className="mb-3 border border-[#dc2626]/60 bg-[#dc2626]/10 px-3 py-2 font-mono text-[13px] text-[#f87171]">
             {fetchError}
           </div>
         )}
-        <div className="overflow-auto border border-gray-200 rounded max-h-96">
-          <table className="min-w-full text-sm">
+        <div className="max-h-96 overflow-auto border border-hud-soft bg-inset/70">
+          <table className="hud-table min-w-full">
             <caption className="sr-only">Eventos sospechosos identificados en el archivo</caption>
-            <thead className="bg-gray-100 sticky top-0">
+            <thead className="sticky top-0 z-[1]">
               <tr>
-                <th scope="col" className="px-3 py-2 text-left">Timestamp</th>
-                <th scope="col" className="px-3 py-2 text-left">Host</th>
-                <th scope="col" className="px-3 py-2 text-left">Event ID</th>
-                <th scope="col" className="px-3 py-2 text-left">IP origen</th>
-                <th scope="col" className="px-3 py-2 text-left">Descripción</th>
-                {hasResult && <th scope="col" className="px-3 py-2 text-left">Resultado</th>}
-                <th scope="col" className="px-3 py-2 text-left">Nivel</th>
-                <th scope="col" className="px-3 py-2 text-left">Justificación</th>
+                <th scope="col" className="whitespace-nowrap">Timestamp</th>
+                <th scope="col" className="whitespace-nowrap">Host</th>
+                <th scope="col" className="whitespace-nowrap">Event ID</th>
+                <th scope="col" className="whitespace-nowrap">IP origen</th>
+                <th scope="col">Descripción</th>
+                {hasResult && <th scope="col" className="whitespace-nowrap">Resultado</th>}
+                <th scope="col" className="whitespace-nowrap">Nivel</th>
+                <th scope="col">Justificación</th>
               </tr>
             </thead>
             <tbody>
@@ -299,38 +303,45 @@ export const SecurityAnalysis: React.FC = () => {
                   initial={{ opacity: 0, y: 5 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.2, delay: Math.min(idx, 12) * 0.035, ease: 'easeOut' }}
-                  className={`${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-blue-50`}
                 >
-                  <td className="px-3 py-2 whitespace-nowrap">{String(row.Timestamp ?? '—')}</td>
-                  <td className="px-3 py-2 whitespace-nowrap font-medium">{String(row.Hostname ?? '—')}</td>
-                  <td className="px-3 py-2 whitespace-nowrap">{String(row.Event_ID ?? '—')}</td>
-                  <td className="px-3 py-2 whitespace-nowrap">{String(row.Source_IP ?? '—')}</td>
-                  <td className="px-3 py-2 max-w-xs truncate" title={String(row.Event_Description ?? '')}>
+                  <td className="whitespace-nowrap">{String(row.Timestamp ?? '—')}</td>
+                  <td className="whitespace-nowrap font-semibold text-hud-fg">{String(row.Hostname ?? '—')}</td>
+                  <td className="whitespace-nowrap">{String(row.Event_ID ?? '—')}</td>
+                  <td className="whitespace-nowrap">{String(row.Source_IP ?? '—')}</td>
+                  <td className="max-w-xs truncate" title={String(row.Event_Description ?? '')}>
                     {String(row.Event_Description ?? '—')}
                   </td>
                   {hasResult && (
-                    <td className="px-3 py-2 whitespace-nowrap">
+                    <td className="whitespace-nowrap">
                       {String(row.Result ?? '—')}
                     </td>
                   )}
-                  <td className="px-3 py-2 whitespace-nowrap">
-                    <span className={`px-2 py-0.5 rounded text-xs font-semibold ${LEVEL_BADGE[row.risk_level] ?? 'bg-gray-200'}`}>
+                  <td className="whitespace-nowrap">
+                    <span
+                      className="chip"
+                      style={{
+                        color: LEVEL_BADGE[row.risk_level]?.color ?? 'var(--text-dim)',
+                        background: LEVEL_BADGE[row.risk_level]?.bg ?? 'transparent',
+                      }}
+                    >
                       {LEVEL_LABELS[row.risk_level] ?? row.risk_level}
                     </span>
                   </td>
-                  <td className="px-3 py-2 text-xs text-gray-600 max-w-sm" title={row.risk_reason}>
+                  <td className="max-w-sm text-[11.5px] text-[var(--text-dim)]" title={row.risk_reason}>
                     {row.risk_reason}
                   </td>
                 </motion.tr>
               ))}
               {loading && (
                 <tr>
-                  <td colSpan={hasResult ? 8 : 7} className="px-3 py-6 text-center text-gray-500">Cargando…</td>
+                  <td colSpan={hasResult ? 8 : 7} className="px-3 py-6 text-center text-[var(--text-dim)]">
+                    Cargando…
+                  </td>
                 </tr>
               )}
               {data && !loading && data.rows.length === 0 && (
                 <tr>
-                  <td colSpan={hasResult ? 8 : 7} className="px-3 py-6 text-center text-gray-500">
+                  <td colSpan={hasResult ? 8 : 7} className="px-3 py-6 text-center text-[var(--text-dim)]">
                     No se encontraron eventos sospechosos
                   </td>
                 </tr>
@@ -340,21 +351,23 @@ export const SecurityAnalysis: React.FC = () => {
         </div>
 
         {/* Pagination */}
-        <div className="flex items-center justify-between mt-3 text-sm text-gray-600">
+        <div className="mt-3 flex items-center justify-between font-mono text-[12px] text-[var(--text-dim)]">
           <span>{data ? `${data.total} eventos sospechosos` : ''}</span>
           <div className="flex items-center gap-2">
             <button
               onClick={() => setPage(p => Math.max(1, p - 1))}
               disabled={page <= 1 || loading}
-              className="px-3 py-1 border rounded disabled:opacity-40 hover:bg-gray-100"
+              className="btn-hud"
             >
               ← Anterior
             </button>
-            <span>Página {page} / {totalPages}</span>
+            <span className="text-hud-fg">
+              Página {page} / {totalPages}
+            </span>
             <button
               onClick={() => setPage(p => Math.min(totalPages, p + 1))}
               disabled={page >= totalPages || loading}
-              className="px-3 py-1 border rounded disabled:opacity-40 hover:bg-gray-100"
+              className="btn-hud"
             >
               Siguiente →
             </button>

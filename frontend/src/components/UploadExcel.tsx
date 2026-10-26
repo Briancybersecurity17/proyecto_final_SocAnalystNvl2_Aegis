@@ -137,75 +137,77 @@ const UploadExcel: React.FC = () => {
       }}
       onDragLeave={() => setDragging(false)}
       onDrop={handleDrop}
-      className={`rounded border-2 bg-white shadow-sm p-5 transition-colors ${
-        dragging ? 'border-primary bg-primary/5' : 'border-gray-200'
-      }`}
+      className={`panel transition-shadow ${dragging ? 'shadow-[0_0_28px_rgba(31,200,255,0.6)]' : ''}`}
     >
-      <p className="text-sm text-gray-500 mb-3">
-        Formato admitido: <strong>.xlsx</strong>. Se leen todas las hojas del libro.
-      </p>
-
-      <div className="flex flex-wrap items-center gap-3">
-        {/* Botón propio: el input nativo queda oculto (sr-only) pero sigue
-            siendo el elemento real que recibe el archivo — enfocable con
-            teclado y con foco visible. */}
-        <label
-          className={`inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-medium text-white transition-colors cursor-pointer focus-within:ring-2 focus-within:ring-primary focus-within:ring-offset-2 ${
-            busy ? 'bg-primary/60 cursor-wait' : 'bg-primary hover:bg-primary/90'
-          }`}
-        >
-          <input
-            type="file"
-            accept=".xlsx"
-            ref={fileInputRef}
-            onChange={handleUpload}
-            disabled={busy}
-            className="sr-only"
-          />
-          {busy ? 'Importando…' : 'Seleccionar archivo'}
-        </label>
-        <span className="text-sm text-gray-600">
-          {fileName ? (
-            <span className="font-medium text-gray-800">{fileName}</span>
-          ) : (
-            'Ningún archivo seleccionado'
-          )}
-        </span>
-        <span className="text-sm text-gray-400">o arrastrá el archivo aquí</span>
-      </div>
-
-      {/* Estado del proceso */}
-      {busy && (
-        <p className="mt-3 flex items-center gap-2 text-sm text-blue-700">
-          <span className="inline-block h-3.5 w-3.5 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
-          {progressMsg}
+      <div className="panel-body">
+        <p className="hud-label mb-3">
+          Formato admitido: <strong className="text-hud-fg">.xlsx</strong> · se leen todas las hojas del libro
         </p>
-      )}
 
-      {waitMsg && !busy && (
-        <p className="mt-3 text-sm text-amber-700" role="status">{waitMsg}</p>
-      )}
-
-      {status === 'done' && summary && !error && (
-        <div className="mt-3 rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-          <strong>Archivo analizado:</strong> {summary.file_name || '—'} ·{' '}
-          {summary.rows} registros · {summary.unique_hosts ?? '—'} hosts ·{' '}
-          {summary.columns.length} campos · hojas:{' '}
-          {(summary.sheet_names || []).join(', ') || '—'}
-          {summary.missing_columns && summary.missing_columns.length > 0 && (
-            <span className="block text-amber-700 mt-1">
-              ⚠ Columnas ausentes (no se pudieron analizar):{' '}
-              {summary.missing_columns.join(', ')}
-            </span>
-          )}
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Botón propio: el input nativo queda oculto (sr-only) pero sigue
+              siendo el elemento real que recibe el archivo — enfocable con
+              teclado y con foco visible. */}
+          <label
+            className={`btn-hud btn-primary-hud inline-flex cursor-pointer items-center gap-2 ${
+              busy ? 'cursor-wait opacity-70' : ''
+            }`}
+          >
+            <input
+              type="file"
+              accept=".xlsx"
+              ref={fileInputRef}
+              onChange={handleUpload}
+              disabled={busy}
+              className="sr-only"
+            />
+            {busy ? 'Importando…' : 'Seleccionar archivo'}
+          </label>
+          <span className="font-mono text-[13px] text-[var(--text-dim)]">
+            {fileName ? (
+              <span className="text-hud-fg">{fileName}</span>
+            ) : (
+              'Ningún archivo seleccionado'
+            )}
+          </span>
+          <span className="hud-label">o arrastrá el archivo aquí</span>
         </div>
-      )}
 
-      {error && (
-        <p className="mt-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-          {error}
-        </p>
-      )}
+        {/* Estado del proceso */}
+        {busy && (
+          <p className="mt-3 flex items-center gap-2 font-mono text-[13px] text-hud-line">
+            <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-hud-line border-t-transparent" />
+            {progressMsg}
+          </p>
+        )}
+
+        {waitMsg && !busy && (
+          <p className="mt-3 font-mono text-[13px] text-[#ffb020]" role="status">
+            {waitMsg}
+          </p>
+        )}
+
+        {status === 'done' && summary && !error && (
+          <div className="mt-3 border border-[#10b981]/60 bg-[#10b981]/10 px-3 py-2 font-mono text-[13px] text-[#10b981]">
+            <strong>Archivo analizado:</strong> {summary.file_name || '—'} ·{' '}
+            {summary.rows} registros · {summary.unique_hosts ?? '—'} hosts ·{' '}
+            {summary.columns.length} campos · hojas:{' '}
+            {(summary.sheet_names || []).join(', ') || '—'}
+            {summary.missing_columns && summary.missing_columns.length > 0 && (
+              <span className="mt-1 block text-[#ffb020]">
+                ⚠ Columnas ausentes (no se pudieron analizar):{' '}
+                {summary.missing_columns.join(', ')}
+              </span>
+            )}
+          </div>
+        )}
+
+        {error && (
+          <p className="mt-3 border border-[#dc2626]/60 bg-[#dc2626]/10 px-3 py-2 font-mono text-[13px] text-[#f87171]">
+            {error}
+          </p>
+        )}
+      </div>
     </div>
   )
 }

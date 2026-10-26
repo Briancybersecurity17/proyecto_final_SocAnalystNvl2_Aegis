@@ -12,11 +12,20 @@ const LEVELS = [
   { id: 'bajo', label: 'Bajo' },
 ]
 
-const LEVEL_BADGE: Record<string, string> = {
-  critico: 'bg-red-600 text-white',
-  alto: 'bg-orange-500 text-white',
-  medio: 'bg-yellow-400 text-yellow-900',
-  bajo: 'bg-emerald-500 text-white',
+const LEVEL_BADGE: Record<string, { color: string; bg: string }> = {
+  critico: { color: '#dc2626', bg: 'rgba(220,38,38,0.16)' },
+  alto: { color: '#f97316', bg: 'rgba(249,115,22,0.16)' },
+  medio: { color: '#facc15', bg: 'rgba(250,204,21,0.16)' },
+  bajo: { color: '#10b981', bg: 'rgba(16,185,129,0.16)' },
+}
+
+// Tono de cada filtro de nivel («Todos» usa el cian del HUD)
+const LEVEL_TONE: Record<string, string> = {
+  '': '#1fc8ff',
+  critico: '#dc2626',
+  alto: '#f97316',
+  medio: '#facc15',
+  bajo: '#10b981',
 }
 
 // Orden de lectura para el analista: primero qué pasó (descripción) y si tuvo
@@ -127,34 +136,41 @@ const DataTable: React.FC = () => {
   return (
     <DashboardSection title="Registros importados (visualización del Excel)">
       {/* Filters */}
-      <div className="flex flex-wrap items-center gap-3 mb-4">
+      <div className="mb-4 flex flex-wrap items-center gap-3">
         <input
           type="text"
           value={qInput}
           onChange={e => setQInput(e.target.value)}
           placeholder="Buscar en las columnas del archivo…"
-          className="border border-gray-300 rounded px-3 py-2 text-sm w-64 focus:outline-none focus:ring-2 focus:ring-primary"
+          className="hud-input w-64"
         />
-        <div className="flex rounded overflow-hidden border border-gray-300">
-          {LEVELS.map(l => (
-            <button
-              key={l.id}
-              onClick={() => setLevel(l.id)}
-              className={`px-3 py-2 text-sm ${
-                level === l.id ? 'bg-primary text-white' : 'bg-white text-gray-700 hover:bg-gray-100'
-              }`}
-            >
-              {l.label}
-            </button>
-          ))}
+        <div className="flex overflow-hidden border border-hud-soft">
+          {LEVELS.map(l => {
+            const tone = LEVEL_TONE[l.id] ?? '#1fc8ff'
+            const active = level === l.id
+            return (
+              <button
+                key={l.id}
+                onClick={() => setLevel(l.id)}
+                className="border-r border-hud-soft px-3 py-2 font-mono text-[12px] tracking-wide transition-colors last:border-r-0"
+                style={{
+                  color: active ? tone : 'var(--text-dim)',
+                  background: active ? `${tone}22` : 'transparent',
+                  boxShadow: active ? `inset 0 -2px 0 0 ${tone}` : undefined,
+                }}
+              >
+                {l.label}
+              </button>
+            )
+          })}
         </div>
         {resultOptions.length > 0 && (
-          <label className="flex items-center gap-2 text-sm text-gray-700">
+          <label className="flex cursor-pointer items-center gap-2 font-mono text-[12px] text-[var(--text-dim)]">
             Resultado
             <select
               value={result}
               onChange={e => setResult(e.target.value)}
-              className="border border-gray-300 rounded px-2 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary"
+              className="hud-input py-2"
             >
               <option value="">Todos</option>
               {resultOptions.map(([value, count]) => (
@@ -165,41 +181,41 @@ const DataTable: React.FC = () => {
             </select>
           </label>
         )}
-        <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+        <label className="flex cursor-pointer items-center gap-2 font-mono text-[12px] text-[var(--text-dim)]">
           <input
             type="checkbox"
             checked={suspicious}
             onChange={e => setSuspicious(e.target.checked)}
-            className="accent-primary"
+            className="accent-[#1fc8ff]"
           />
           Solo sospechosos
         </label>
-        {loading && <span className="text-sm text-gray-500">Cargando…</span>}
+        {loading && <span className="hud-label text-hud-line">Cargando…</span>}
       </div>
 
-      {error && <p className="text-red-600 text-sm mb-2">{error}</p>}
+      {error && <p className="mb-2 font-mono text-sm text-[#f97316]">{error}</p>}
 
       {/* Table */}
-      <div className="overflow-auto border border-gray-200 rounded max-h-96">
-        <table className="min-w-full text-sm">
+      <div className="max-h-96 overflow-auto border border-hud-soft bg-inset/70">
+        <table className="hud-table min-w-full">
           <caption className="sr-only">Registros del archivo importado, con su nivel de riesgo</caption>
-          <thead className="bg-gray-100 sticky top-0">
+          <thead className="sticky top-0 z-[1]">
             <tr>
               {visibleColumns.map(col => (
-                <th key={col} scope="col" className="px-3 py-2 text-left font-semibold whitespace-nowrap">
+                <th key={col} scope="col" className="whitespace-nowrap">
                   {col}
                 </th>
               ))}
-              <th scope="col" className="px-3 py-2 text-left font-semibold whitespace-nowrap">Nivel</th>
+              <th scope="col" className="whitespace-nowrap">Nivel</th>
             </tr>
           </thead>
           <tbody>
             {data?.rows.map((row, idx) => (
-              <tr key={idx} className={`${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-blue-50`}>
+              <tr key={idx}>
                 {visibleColumns.map(col => (
                   <td
                     key={col}
-                    className={`px-3 py-2 whitespace-nowrap truncate ${
+                    className={`whitespace-nowrap truncate ${
                       LONG_COLUMNS.has(col) ? 'max-w-sm' : 'max-w-56'
                     }`}
                     title={String(row[col] ?? '')}
@@ -207,9 +223,13 @@ const DataTable: React.FC = () => {
                     {String(row[col] ?? '—')}
                   </td>
                 ))}
-                <td className="px-3 py-2 whitespace-nowrap">
+                <td className="whitespace-nowrap">
                   <span
-                    className={`px-2 py-0.5 rounded text-xs font-semibold ${LEVEL_BADGE[row.risk_level] ?? 'bg-gray-200'}`}
+                    className="chip"
+                    style={{
+                      color: LEVEL_BADGE[row.risk_level]?.color ?? 'var(--text-dim)',
+                      background: LEVEL_BADGE[row.risk_level]?.bg ?? 'transparent',
+                    }}
                     title={row.risk_reason}
                   >
                     {LEVEL_LABELS[row.risk_level] ?? row.risk_level}
@@ -219,7 +239,7 @@ const DataTable: React.FC = () => {
             ))}
             {data && data.rows.length === 0 && (
               <tr>
-                <td colSpan={visibleColumns.length + 1} className="px-3 py-6 text-center text-gray-500">
+                <td colSpan={visibleColumns.length + 1} className="px-3 py-6 text-center text-[var(--text-dim)]">
                   Sin resultados para los filtros aplicados
                 </td>
               </tr>
@@ -229,7 +249,7 @@ const DataTable: React.FC = () => {
       </div>
 
       {/* Pagination */}
-      <div className="flex items-center justify-between mt-3 text-sm text-gray-600">
+      <div className="mt-3 flex items-center justify-between font-mono text-[12px] text-[var(--text-dim)]">
         <span>
           {data ? `${data.total} de ${data.total_rows} registros` : ''}
           {visibleColumns.length > 0 &&
@@ -239,15 +259,17 @@ const DataTable: React.FC = () => {
           <button
             onClick={() => setPage(p => Math.max(1, p - 1))}
             disabled={page <= 1 || loading}
-            className="px-3 py-1 border rounded disabled:opacity-40 hover:bg-gray-100"
+            className="btn-hud"
           >
             ← Anterior
           </button>
-          <span>Página {page} / {totalPages}</span>
+          <span className="text-hud-fg">
+            Página {page} / {totalPages}
+          </span>
           <button
             onClick={() => setPage(p => Math.min(totalPages, p + 1))}
             disabled={page >= totalPages || loading}
-            className="px-3 py-1 border rounded disabled:opacity-40 hover:bg-gray-100"
+            className="btn-hud"
           >
             Siguiente →
           </button>
