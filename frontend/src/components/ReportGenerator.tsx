@@ -418,7 +418,7 @@ const ReportGenerator: React.FC = () => {
             <button
               onClick={fetchReport}
               disabled={loading}
-              className="btn-hud disabled:opacity-50"
+              className="btn-hud whitespace-nowrap disabled:opacity-50"
             >
               {loading ? 'Generando…' : 'Regenerar'}
             </button>
@@ -430,7 +430,7 @@ const ReportGenerator: React.FC = () => {
                   return (
                     <button
                       disabled
-                      className="btn-hud"
+                      className="btn-hud whitespace-nowrap"
                       title="Genera el informe para poder descargarlo"
                     >
                       Descargar informe PDF
@@ -438,7 +438,7 @@ const ReportGenerator: React.FC = () => {
                   )
                 }
                 if (pdfLoading) {
-                  return <button disabled className="btn-hud">Preparando PDF…</button>
+                  return <button disabled className="btn-hud whitespace-nowrap">Preparando PDF…</button>
                 }
                 if (pdfError || !blob) {
                   return <span className="font-mono text-[13px] text-[#f87171]">Error generando el PDF</span>
@@ -451,7 +451,7 @@ const ReportGenerator: React.FC = () => {
                     }}
                     whileTap={{ scale: 0.97 }}
                     initial={false}
-                    className="btn-hud btn-primary-hud"
+                    className="btn-hud btn-primary-hud whitespace-nowrap"
                   >
                     ⬇ Descargar informe PDF
                   </motion.button>

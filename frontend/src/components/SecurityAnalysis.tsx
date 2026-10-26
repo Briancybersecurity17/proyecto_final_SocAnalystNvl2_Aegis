@@ -351,23 +351,23 @@ export const SecurityAnalysis: React.FC = () => {
         </div>
 
         {/* Pagination */}
-        <div className="mt-3 flex items-center justify-between font-mono text-[12px] text-[var(--text-dim)]">
-          <span>{data ? `${data.total} eventos sospechosos` : ''}</span>
-          <div className="flex items-center gap-2">
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 font-mono text-[12px] text-[var(--text-dim)]">
+          <span className="max-w-md">{data ? `${data.total} eventos sospechosos` : ''}</span>
+          <div className="flex shrink-0 items-center gap-2">
             <button
               onClick={() => setPage(p => Math.max(1, p - 1))}
               disabled={page <= 1 || loading}
-              className="btn-hud"
+              className="btn-hud whitespace-nowrap"
             >
               ← Anterior
             </button>
-            <span className="text-hud-fg">
+            <span className="whitespace-nowrap text-hud-fg">
               Página {page} / {totalPages}
             </span>
             <button
               onClick={() => setPage(p => Math.min(totalPages, p + 1))}
               disabled={page >= totalPages || loading}
-              className="btn-hud"
+              className="btn-hud whitespace-nowrap"
             >
               Siguiente →
             </button>

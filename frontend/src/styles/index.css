@@ -356,7 +356,13 @@ textarea:focus-visible,
   text-transform: uppercase;
   color: var(--hud-fg);
   text-align: left;
-  background: rgba(31, 200, 255, 0.07);
+  /*
+   * Fondo opaco: en las tablas con `thead` sticky (DataTable,
+   * SecurityAnalysis) un fondo translúcido dejaba ver las filas que
+   * pasaban por debajo y los textos se superponían. #0c1328 es el mismo
+   * tinte de cian al 7% sobre --bg-inset, calculado sin alfa.
+   */
+  background: #0c1328;
   border-bottom: 1px solid var(--hud-line-dim);
   padding: 9px 12px;
   white-space: nowrap;
