@@ -133,24 +133,41 @@ def apply_filters(
     tabla, el resumen y el panel de facetas enseñen las mismas filas: si las
     reglas divergieran, los KPI no cuadrarían con lo que ve el analista.
 
-    `skip_fields` contiene facetas que NO se aplican: el panel de facetas
-    lo usa para recuentar cada campo ignorando la selección de ese mismo
-    campo (estilo Splunk), de modo que con User=jsmith activo la faceta
-    User siga ofreciendo el resto de usuarios para poder cambiar de valor.
+    `skip_fields` es un conjunto de nombres de campo cuyo filtro NO se
+    aplica, para que el panel de facetas recunte cada campo ignorando la
+    selección de ese mismo campo (spec §4.4, «para que el panel permita
+    cambiar de valor»): `_level` salta el canónico `level`, `_suspicious`
+    salta el canónico `suspicious` y cualquier otro nombre salta la entrada
+    homónima de `p.facets`. Así, con `?User=jsmith` activo la faceta User
+    sigue ofreciendo el resto de usuarios y con `?level=critico` la faceta
+    Criticidad sigue ofreciendo los cuatro niveles.
     """
+    def saltar(campo: str) -> bool:
+        """¿Se omite el filtro «propio» de `campo` en esta pasada?
+
+        Único sitio donde se resuelve el mapeo nombre-de-campo → filtro:
+        las facetas derivadas llegan como parámetros canónicos (no como
+        entradas de `p.facets`), así que el salto tiene que alcanzarlas
+        también allí donde se aplican.
+        """
+        return bool(skip_fields) and campo in skip_fields
+
     # 1. Ventana inclusiva sobre Timestamp. Con filtro activo las filas NaT
     #    caen fuera (comparar NaT da False); sin filtro no se tocan.
+    #    La ventana no es el filtro «de» ninguna faceta: nunca se salta.
     if p.from_dt is not None:
         df = df[df["Timestamp"] >= p.from_dt]
     if p.to_dt is not None:
         df = df[df["Timestamp"] <= p.to_dt]
 
-    # 2. Nivel exacto sobre la columna derivada _level.
-    if p.level:
+    # 2. Nivel exacto sobre la columna derivada _level. Su «propia» faceta
+    #    es _level, cuyo filtro es el canónico `level` (ver saltar).
+    if p.level and not saltar("_level"):
         df = df[df["_level"] == p.level]
 
-    # 3. Solo sospechosos: el toggle en False no restringe nada.
-    if p.suspicious:
+    # 3. Solo sospechosos: el toggle en False no restringe nada. Su faceta
+    #    derivada _suspicious tiene el canónico `suspicious` como filtro.
+    if p.suspicious and not saltar("_suspicious"):
         df = df[df["_suspicious"]]
 
     # 4. Result con la misma guardia que /rows:813-815, para que un archivo
@@ -188,7 +205,7 @@ def apply_filters(
         # El panel de facetas recuenta este campo sin su propia selección
         # (skip_fields): contar User=jsmith dentro de la faceta User solo
         # enseñaría el valor ya elegido y el analista no podría cambiar.
-        if skip_fields and col in skip_fields:
+        if saltar(col):
             continue
         # URL vieja o dataset que no coincide: la faceta se ignora en
         # silencio, nunca debe tumbar el request con un 500 (spec §8).
