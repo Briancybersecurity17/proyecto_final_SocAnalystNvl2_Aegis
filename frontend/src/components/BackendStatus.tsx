@@ -3,10 +3,10 @@ import { getRagStatus } from '../api/client'
 
 type ConnState = 'checking' | 'ok' | 'down'
 
-const STYLE: Record<ConnState, { dot: string; label: string }> = {
-  checking: { dot: 'bg-gray-300', label: 'Conectando con el backend…' },
-  ok: { dot: 'bg-emerald-400', label: 'Backend conectado' },
-  down: { dot: 'bg-rose-400', label: 'Sin conexión con el backend' },
+const STYLE: Record<ConnState, { dot: string; label: string; color: string }> = {
+  checking: { dot: 'bg-hud-muted', label: 'Conectando con el backend…', color: '#7280a3' },
+  ok: { dot: 'bg-emerald-400', label: 'Backend conectado', color: '#10b981' },
+  down: { dot: 'bg-rose-500', label: 'Sin conexión con el backend', color: '#f87171' },
 }
 
 /**
@@ -35,11 +35,12 @@ const BackendStatus: React.FC = () => {
     }
   }, [])
 
-  const { dot, label } = STYLE[state]
+  const { dot, label, color } = STYLE[state]
 
   return (
     <span
-      className="inline-flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1 text-xs font-medium text-white"
+      className="chip"
+      style={{ color, background: `${color}14`, boxShadow: `0 0 10px ${color}33` }}
       title="Estado de la API (se comprueba cada 15 s)"
       aria-live="polite"
     >

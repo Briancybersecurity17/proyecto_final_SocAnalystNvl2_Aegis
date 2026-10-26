@@ -1,8 +1,8 @@
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-/* You can extend the design tokens here if you wish */
 
 /* ── Gráficos (Recharts) ─────────────────────────────────────────────── */
 
@@ -27,10 +27,10 @@
 @keyframes chart-glow-pulse {
   0%,
   100% {
-    filter: drop-shadow(0 0 4px var(--chart-glow, #1e40af));
+    filter: drop-shadow(0 0 4px var(--chart-glow, #3b82f6));
   }
   50% {
-    filter: drop-shadow(0 0 14px var(--chart-glow, #1e40af));
+    filter: drop-shadow(0 0 14px var(--chart-glow, #3b82f6));
   }
 }
 
@@ -42,6 +42,354 @@
 @media (prefers-reduced-motion: reduce) {
   .chart-glow {
     animation: none;
-    filter: drop-shadow(0 0 9px var(--chart-glow, #1e40af));
+    filter: drop-shadow(0 0 9px var(--chart-glow, #3b82f6));
+  }
+}
+
+/* La leyenda y las etiquetas de Recharts heredan la tipografía del HUD. */
+.recharts-legend-item-text,
+.recharts-label {
+  font-family: var(--font-mono);
+}
+.recharts-default-legend {
+  color: var(--text);
+}
+
+/* ============================================================
+   DESIGN TOKENS — tema oscuro HUD
+   Paneles con borde neón y esquinas cortadas (chamfer), títulos
+   en Orbitron uppercase y datos en JetBrains Mono.
+
+   La paleta de CRITICIDAD queda fija por política del proyecto
+   (rojo/naranja/amarillo/verde) y el azul #1e40af sigue siendo la
+   color primaria de marca: no se tocan.
+   ============================================================ */
+:root {
+  /* fondos */
+  --bg-void: #050212;
+  --bg-panel: #0d0620;
+  --bg-panel-2: #140a2e;
+  --bg-inset: #0a0518;
+
+  /* líneas / acentos HUD */
+  --cyan: #00e5ff;
+  --hud-line: #1fc8ff;
+  --hud-line-dim: #0b7fb5;
+  --hud-line-soft: #12456a;
+  --hud-fg: #bfefff;
+  --hud-muted: #3f6b88;
+  --magenta: #d946ef;
+
+  /* marca (sin cambios respecto a la versión clara) */
+  --primary: #1e40af;
+
+  /* texto */
+  --text: #dce6f5;
+  --text-dim: #7280a3;
+  --text-bright: #f2f6ff;
+
+  /* criticidad (fijo) */
+  --sev-critical: #dc2626;
+  --sev-high: #f97316;
+  --sev-medium: #facc15;
+  --sev-low: #10b981;
+
+  --font-display: 'Orbitron', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+
+  /* esquinas cortadas: el look característico del panel */
+  --chamfer: polygon(15px 0, 100% 0, 100% calc(100% - 15px), calc(100% - 15px) 100%, 0 100%, 0 15px);
+  --chamfer-sm: polygon(9px 0, 100% 0, 100% calc(100% - 9px), calc(100% - 9px) 100%, 0 100%, 0 9px);
+}
+
+/* ============================================================
+   BASE
+   ============================================================ */
+html {
+  /* controles nativos (select, checkbox, scrollbars) en modo oscuro */
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background:
+    radial-gradient(ellipse 90% 60% at 50% 0%, rgba(30, 64, 175, 0.22), transparent 60%),
+    radial-gradient(ellipse 70% 50% at 100% 100%, rgba(217, 70, 239, 0.10), transparent 60%),
+    var(--bg-void);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* grilla ambiental de scanline */
+.grid-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(31, 200, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(31, 200, 255, 0.035) 1px, transparent 1px);
+  background-size: 38px 38px;
+  mask-image: radial-gradient(ellipse 70% 70% at 50% 40%, black 20%, transparent 75%);
+}
+
+/* foco de teclado visible en todo control */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role='button']:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+/* scrollbars del HUD */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--hud-line-soft) var(--bg-inset);
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--hud-line-soft);
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: var(--bg-inset);
+}
+
+/* ============================================================
+   PRIMITIVAS — panel plate (aro neón + relleno interior)
+   ============================================================ */
+@layer components {
+  .panel {
+    position: relative;
+    background: linear-gradient(175deg, #a6edff 0%, var(--hud-line) 35%, #0d6f9c 100%);
+    padding: 2px;
+    clip-path: var(--chamfer);
+    box-shadow:
+      0 20px 34px -14px rgba(0, 0, 0, 0.85),
+      0 0 8px 1px rgba(31, 200, 255, 0.67),
+      0 0 18px rgba(31, 200, 255, 0.4),
+      0 0 34px rgba(31, 200, 255, 0.23);
+  }
+
+  .panel::after {
+    content: '';
+    position: absolute;
+    inset: 2px;
+    z-index: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(120% 90% at 50% 0%, rgba(31, 200, 255, 0.08), transparent 60%),
+      linear-gradient(180deg, var(--bg-panel), var(--bg-inset) 55%, var(--bg-inset));
+    box-shadow:
+      inset 0 16px 28px -16px rgba(0, 0, 0, 0.95),
+      inset 0 0 24px rgba(31, 200, 255, 0.12);
+    clip-path: polygon(13px 0, 100% 0, 100% calc(100% - 13px), calc(100% - 13px) 100%, 0 100%, 0 13px);
+  }
+
+  .panel > * {
+    position: relative;
+    z-index: 1;
+  }
+
+  /* cabecera de panel: pill uppercase con tick romboidal */
+  .panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 14px 16px 12px;
+    border-bottom: 1px solid var(--hud-line-soft);
+  }
+
+  .panel-title {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 13px;
+    line-height: 1.5;
+    letter-spacing: 2px;
+    color: var(--hud-line);
+    text-transform: uppercase;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding: 7px 14px 7px 12px;
+    clip-path: var(--chamfer-sm);
+    background: linear-gradient(180deg, rgba(31, 200, 255, 0.16), rgba(31, 200, 255, 0.03));
+    border: 1px solid rgba(31, 200, 255, 0.55);
+    box-shadow: 0 0 10px rgba(31, 200, 255, 0.3), inset 0 0 10px rgba(31, 200, 255, 0.1);
+    text-shadow: 0 0 8px rgba(31, 200, 255, 0.33);
+  }
+
+  .panel-title::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    flex: 0 0 6px;
+    align-self: flex-start;
+    margin-top: 7px;
+    background: var(--hud-line);
+    box-shadow: 0 0 6px var(--hud-line);
+    transform: rotate(45deg);
+  }
+
+  .panel-body {
+    padding: 14px 16px 16px;
+  }
+
+  /* rótulos de dato / meta */
+  .hud-label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--hud-muted);
+  }
+
+  .hud-data {
+    font-family: var(--font-mono);
+    color: var(--text-bright);
+  }
+
+  /* botones */
+  .btn-hud {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 9px 16px;
+    clip-path: var(--chamfer-sm);
+    border: 1px solid rgba(31, 200, 255, 0.55);
+    color: var(--hud-fg);
+    background: linear-gradient(180deg, rgba(31, 200, 255, 0.14), rgba(31, 200, 255, 0.03));
+    transition: box-shadow 0.18s ease, background 0.18s ease, color 0.18s ease;
+  }
+
+  .btn-hud:hover:not(:disabled) {
+    background: linear-gradient(180deg, rgba(31, 200, 255, 0.26), rgba(31, 200, 255, 0.08));
+    box-shadow: 0 0 12px rgba(31, 200, 255, 0.45);
+    color: var(--text-bright);
+  }
+
+  .btn-hud:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  /* sólido de marca (primaria #1e40af) */
+  .btn-primary-hud {
+    border-color: rgba(96, 165, 250, 0.6);
+    background: linear-gradient(180deg, #2b53d4, var(--primary));
+    color: #fff;
+    box-shadow: 0 0 12px rgba(30, 64, 175, 0.55);
+  }
+
+  .btn-primary-hud:hover:not(:disabled) {
+    background: linear-gradient(180deg, #3560ea, #1e40af);
+    box-shadow: 0 0 18px rgba(59, 130, 246, 0.6);
+    color: #fff;
+  }
+
+  /* chips: el borde lleva el mismo color que el texto */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 3px 9px;
+    clip-path: var(--chamfer-sm);
+    border: 1px solid currentColor;
+    background: rgba(255, 255, 255, 0.03);
+    white-space: nowrap;
+  }
+
+  /* campos */
+  .hud-input {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--text-bright);
+    background: var(--bg-inset);
+    border: 1px solid var(--hud-line-soft);
+    padding: 8px 12px;
+    outline: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .hud-input::placeholder {
+    color: var(--hud-muted);
+  }
+
+  .hud-input:focus {
+    border-color: var(--hud-line);
+    box-shadow: 0 0 10px rgba(31, 200, 255, 0.35);
+  }
+}
+
+/* ============================================================
+   TABLAS DE DATOS
+   ============================================================ */
+.hud-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.hud-table thead th {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--hud-fg);
+  text-align: left;
+  background: rgba(31, 200, 255, 0.07);
+  border-bottom: 1px solid var(--hud-line-dim);
+  padding: 9px 12px;
+  white-space: nowrap;
+}
+
+.hud-table tbody td {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text);
+  border-bottom: 1px solid rgba(31, 200, 255, 0.09);
+  padding: 8px 12px;
+}
+
+.hud-table tbody tr:hover {
+  background: rgba(31, 200, 255, 0.05);
+}
+
+.hud-table caption {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--hud-muted);
+  text-align: left;
+  padding-bottom: 8px;
+}
+
+/* ============================================================
+   MOVIMIENTO — «menos movimiento» desactiva parpadeos/latidos
+   ============================================================ */
+@media (prefers-reduced-motion: reduce) {
+  .chart-glow,
+  .panel-title {
+    animation: none !important;
   }
 }

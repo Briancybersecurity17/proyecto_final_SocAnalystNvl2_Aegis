@@ -56,6 +56,16 @@ const App: React.FC = () => {
   const notice = useAnalysisStore(state => state.notice);
   const setNotice = useAnalysisStore(state => state.setNotice);
 
+  // Tono del aviso: verde para lo que salió bien, ámbar para lo que pide
+  // atención del analista y cian mientras se está restaurando.
+  const noticeTone = !notice
+    ? '#1fc8ff'
+    : notice.startsWith('Análisis restaurado')
+      ? '#10b981'
+      : notice.startsWith('Restaurando')
+        ? '#1fc8ff'
+        : '#ffb020';
+
   // Al abrir la pestaña (F5 o reciclage de memoria del navegador) se mira si
   // quedó un análisis guardado y se le pregunta al backend si sigue ahí.
   useEffect(() => {
@@ -78,17 +88,20 @@ const App: React.FC = () => {
 
   return (
     <MotionConfig reducedMotion="user">
-      <div className="flex h-screen overflow-hidden bg-gray-100">
+      <div className="flex h-screen overflow-hidden">
+        {/* Grilla ambiental del HUD (fijo, no intercepta el ratón) */}
+        <div className="grid-bg" aria-hidden="true" />
+
         {/* Sidebar navigation */}
         <Sidebar active={activeSection} setActive={setActiveSection} />
 
         {/* Main content area */}
-        <main className="flex-1 min-w-0 overflow-y-auto">
+        <main className="relative z-[1] flex-1 min-w-0 overflow-y-auto">
           {/* Header */}
-          <header className="bg-primary text-white px-6 py-4 flex items-center justify-between shadow">
-            <div>
+          <header className="mx-6 mt-6 flex flex-wrap items-center justify-between gap-4">
+            <div className="min-w-0">
               <TypingTitle text={meta.title} />
-              <p className="text-sm text-blue-100">{meta.subtitle}</p>
+              <p className="hud-label mt-1 text-[var(--hud-muted)]">{meta.subtitle}</p>
             </div>
             <BackendStatus />
           </header>
@@ -105,14 +118,19 @@ const App: React.FC = () => {
               >
                 <div
                   role="status"
-                  className="mx-6 mt-4 flex flex-wrap items-center justify-between gap-3 rounded border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900"
+                  className="mx-6 mt-5 flex flex-wrap items-center justify-between gap-3 border bg-inset/90 px-4 py-3 font-mono text-[13px] shadow-[0_0_14px_rgba(31,200,255,0.2)] [clip-path:var(--chamfer-sm)]"
+                  style={{
+                    color: noticeTone,
+                    borderColor: `${noticeTone}80`,
+                    boxShadow: `0 0 14px ${noticeTone}33`,
+                  }}
                 >
-                  <p className="flex-1 min-w-0">{notice}</p>
+                  <p className="min-w-0 flex-1">{notice}</p>
                   <div className="flex items-center gap-2">
                     {!summary && loadAnalysisRef() && (
                       <button
                         onClick={() => void restoreAnalysis()}
-                        className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-primary"
+                        className="btn-hud btn-primary-hud"
                       >
                         Restaurar
                       </button>
@@ -120,7 +138,8 @@ const App: React.FC = () => {
                     <button
                       onClick={() => setNotice(null)}
                       aria-label="Descartar aviso"
-                      className="rounded px-2 py-1 text-blue-700 hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-primary"
+                      className="rounded px-2 py-1 hover:bg-hud-line/15 focus:outline-none focus:ring-2 focus:ring-hud-line"
+                      style={{ color: noticeTone }}
                     >
                       ✕
                     </button>

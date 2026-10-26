@@ -53,12 +53,15 @@ export const TypingTitle: React.FC<TypingTitleProps> = ({ text, budget = 700 }) 
   }, [text, speed, reduced]);
 
   return (
-    <h1 className="text-xl font-semibold" aria-label={text}>
+    <h1
+      className="font-display text-2xl font-bold uppercase tracking-[0.18em] text-hud-line [text-shadow:0_0_12px_rgba(31,200,255,0.5)]"
+      aria-label={text}
+    >
       <span aria-hidden="true">{shown}</span>
       {!done && (
         <span
           aria-hidden="true"
-          className="ml-0.5 inline-block h-4 w-[3px] translate-y-[2px] bg-white/80 animate-pulse"
+          className="ml-0.5 inline-block h-5 w-[4px] translate-y-[3px] bg-hud-line animate-pulse"
         />
       )}
     </h1>

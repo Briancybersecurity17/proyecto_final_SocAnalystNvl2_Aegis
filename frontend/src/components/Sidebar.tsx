@@ -89,32 +89,39 @@ const sections: { id: Section; label: string; icon: React.ReactNode }[] = [
 
 export const Sidebar: React.FC<SidebarProps> = ({ active, setActive }) => {
   return (
-    <nav className="bg-gray-800 text-white w-64 flex-shrink-0 h-full relative shadow-lg overflow-y-auto">
-      <div className="p-4 border-b border-gray-700">
-        <div className="text-xl font-semibold">Comunidad Dojo</div>
-        <div className="text-xs text-gray-400 mt-0.5">SOC Analyst · Nivel 2</div>
+    <nav className="relative z-[1] w-64 flex-shrink-0 h-full overflow-y-auto border-r border-hud-soft bg-inset/85 backdrop-blur">
+      <div className="border-b border-hud-soft p-5">
+        <div className="font-display text-lg font-bold uppercase leading-tight tracking-[0.18em] text-hud-line [text-shadow:0_0_10px_rgba(31,200,255,0.45)]">
+          Comunidad
+          <br />
+          Dojo
+        </div>
+        <div className="hud-label mt-2">SOC Analyst · Nivel 2</div>
       </div>
 
-      <ul className="mt-3 space-y-1 px-2">
-        {sections.map((s) => (
-          <li key={s.id}>
-            <button
-              className={`flex items-center w-full px-3 py-2.5 rounded transition-colors ${
-                active === s.id
-                  ? 'bg-primary text-white shadow'
-                  : 'text-gray-300 hover:bg-gray-700 hover:text-white'
-              }`}
-              onClick={() => setActive(s.id)}
-              aria-current={active === s.id ? 'page' : undefined}
-            >
-              {s.icon}
-              <span className="ml-3 text-sm">{s.label}</span>
-            </button>
-          </li>
-        ))}
+      <ul className="mt-4 space-y-1.5 px-3">
+        {sections.map((s) => {
+          const isActive = active === s.id;
+          return (
+            <li key={s.id}>
+              <button
+                className={`flex w-full items-center px-3 py-2.5 text-left transition-all [clip-path:var(--chamfer-sm)] ${
+                  isActive
+                    ? 'border border-hud-line/60 bg-gradient-to-r from-hud-line/20 to-hud-line/5 text-hud-line shadow-[0_0_12px_rgba(31,200,255,0.35)]'
+                    : 'border border-transparent text-[var(--text-dim)] hover:border-hud-soft hover:bg-hud-line/10 hover:text-hud-fg'
+                }`}
+                onClick={() => setActive(s.id)}
+                aria-current={isActive ? 'page' : undefined}
+              >
+                {s.icon}
+                <span className="ml-3 font-mono text-[13px] tracking-wide">{s.label}</span>
+              </button>
+            </li>
+          );
+        })}
       </ul>
 
-      <div className="absolute bottom-0 w-full p-4 text-xs text-gray-500 border-t border-gray-700">
+      <div className="hud-label absolute bottom-0 w-full border-t border-hud-soft p-4">
         © 2026 Comunidad Dojo
       </div>
     </nav>
