@@ -651,7 +651,8 @@ def build_qa_context(
             "severity": meta.get("severity", "—"),
             "level": hit.get("level", "bajo"),
             "suspicious": bool(hit.get("suspicious")),
-            "description": meta.get("result", "—"),
+            "description": meta.get("description", "—"),
+            "result": meta.get("result", "—"),
             "relevance": float(hit.get("score", 0.0)),
             "document": hit.get("document", ""),
         })
@@ -665,6 +666,9 @@ def build_qa_context(
         # cifras exactas en lugar de con unas pocas filas recuperadas.
         "top_hosts": summary.get("top_hosts") or {},
         "hosts_by_level": summary.get("top_hosts_by_level") or {},
+        # Campo Result (Success/Failure/Allowed o código HTTP) y sus hosts.
+        "result_counts": summary.get("result_counts") or {},
+        "result_hosts": summary.get("result_hosts") or {},
         "suspicious_events": int(summary.get("suspicious_events") or 0),
         "unique_hosts": summary.get("unique_hosts"),
         # Aviso del backend: el índice semántico aún se está construyendo y la
@@ -717,6 +721,35 @@ AGGREGATE_MARKERS = (
     "ranking", "top host", "top hosts", "total de", "como se distribuyen",
 )
 
+# Campo Result del archivo: éxito/fallo de la operación o código HTTP.
+RESULT_MARKERS = (
+    "resultado", "result", "codigo de respuesta", "codigos de respuesta",
+    "codigo http", "codigos http", "respuestas http", "status code",
+    "failure", "success", "allowed", "fallo", "fallaron", "fallidas",
+    "fallidos", "fallido", "exito", "exitos", "permitido", "permitidos",
+    "http", "iis",
+)
+
+# Consultas que piden FILAS concretas: se responden con la recuperación
+# normal (evidencias con Log_ID), no con un resumen de conteos.
+ROW_REQUEST_MARKERS = (
+    "muestrame", "muestra los", "listar", "listado", "ver los", "ver las",
+    "ejemplo", "log_id", "cual fue el evento",
+)
+
+# Contexto para interpretar un código suelto («¿hubo 500?») como HTTP.
+HTTP_CONTEXT = ("http", "respuesta", "codigo", "status", "servidor", "web", "iis", "proxy")
+
+# Equivalencias entre lo que escribe el analista y los valores del archivo.
+_RESULT_SYNONYMS = {
+    "failure": ("fallo", "fallaron", "fallido", "fallidos", "fallida",
+                "fallidas", "fracaso", "fracasaron"),
+    "success": ("exito", "exitos", "exitosa", "exitosos", "correcto",
+                "correctos", "completado"),
+    "allowed": ("permitido", "permitidos", "permitidas", "autorizado",
+                "autorizados", "aceptado"),
+}
+
 _LEVEL_PATTERNS = {
     "critico": r"critic[oa]s?",
     "alto": r"alt[oa]s?",
@@ -733,10 +766,33 @@ def _norm_text(text: str) -> str:
     )
 
 
+def is_result_question(question: str) -> bool:
+    """¿La consulta versa sobre el campo Result (éxito/fallo o código HTTP)?
+
+    Se responde con los conteos exactos del resumen: la distribución de
+    `Result` existe entera en el análisis y no hace falta recuperar filas.
+    """
+    text = _norm_text(question)
+    # «muéstrame los eventos con resultado Failure»: se piden FILAS, no
+    # conteos, así que esta consulta va por la recuperación normal.
+    if any(marker in text for marker in ROW_REQUEST_MARKERS):
+        return False
+    if any(marker in text for marker in RESULT_MARKERS):
+        return True
+    # Códigos sueltos (500, 404…) solo cuentan si hay contexto de respuesta.
+    if re.search(r"\b[245]\d\d\b", text) and any(ctx in text for ctx in HTTP_CONTEXT):
+        return True
+    return False
+
+
 def is_aggregate_question(question: str) -> bool:
     """¿La consulta pide un conteo / distribución / ranking sobre el dataset?"""
     text = _norm_text(question)
-    return any(marker in text for marker in AGGREGATE_MARKERS)
+    if any(marker in text for marker in AGGREGATE_MARKERS):
+        return True
+    # Las preguntas sobre el campo Result son agregaciones: se contestan con
+    # los conteos exactos del archivo, no con unas pocas filas recuperadas.
+    return is_result_question(question)
 
 
 def _level_terms(question: str) -> List[str]:
@@ -748,13 +804,147 @@ def _level_terms(question: str) -> List[str]:
     return found
 
 
+def _result_terms(question: str, counts: Dict[str, Any]) -> List[str]:
+    """Valores de Result citados en la consulta, con sus claves reales del archivo."""
+    text = _norm_text(question)
+    found: List[str] = []
+    for key in counts:
+        key_norm = _norm_text(str(key))
+        if not key_norm:
+            continue
+        hit = (
+            re.search(rf"\b{re.escape(key_norm)}\b", text)
+            if key_norm.isdigit()
+            else key_norm in text
+        )
+        if hit and str(key) not in found:
+            found.append(str(key))
+    # Sinónimos en español para los valores en inglés del archivo
+    normalized = {_norm_text(str(k)): str(k) for k in counts}
+    for canonical, words in _RESULT_SYNONYMS.items():
+        real = normalized.get(canonical)
+        if real and real not in found and any(word in text for word in words):
+            found.append(real)
+    return found
+
+
+def _missing_http_codes(question: str, counts: Dict[str, Any]) -> List[str]:
+    """Códigos HTTP citados en la consulta que NO aparecen en el archivo."""
+    text = _norm_text(question)
+    if not any(ctx in text for ctx in HTTP_CONTEXT):
+        return []
+    present = {_norm_text(str(k)) for k in counts}
+    missing: List[str] = []
+    for code in re.findall(r"\b[245]\d\d\b", text):
+        if code not in present and code not in missing:
+            missing.append(code)
+    return missing
+
+
+# Marcadores que piden además el reparto GENERAL del dataset (críticas, hosts…):
+# en ese caso la respuesta de Result se añade, no sustituye al resto.
+GENERAL_DISTRIBUTION_MARKERS = (
+    "distribucion", "distribuyen", "reparten", "reparto", "desglose",
+    "por nivel", "por criticidad", "por host", "resumen", "estadistic",
+    "ranking", "top host", "top hosts", "con mas", "mas eventos",
+    "concentran", "concentra", "como se distribuyen",
+)
+
+
+def _result_focused(question: str, results: Dict[str, Any]) -> bool:
+    """¿La consulta pide SOLO el reparto de Result?
+
+    - «¿cuántos registros fallaron?» → centrada (marca el valor Failure).
+    - «¿hubo errores HTTP 400?» → centrada (código citado).
+    - «¿cuántos hay por criticidad y con resultado Success?» → no: pide además
+      el reparto general, que se añade a la respuesta.
+    """
+    if not results or not is_result_question(question):
+        return False
+    text = _norm_text(question)
+    cites_value = bool(
+        _result_terms(question, results) or _missing_http_codes(question, results)
+    )
+    if cites_value:
+        return not any(marker in text for marker in GENERAL_DISTRIBUTION_MARKERS)
+    return not any(marker in text for marker in AGGREGATE_MARKERS)
+
+
+def _result_lines(ctx: Dict[str, Any]) -> List[str]:
+    """Reparto EXACTO del campo Result (éxito/fallo y códigos HTTP de respuesta)."""
+    results = ctx.get("result_counts") or {}
+    if not results:
+        return []
+    rows = ctx["dataset_rows"]
+    question = ctx["question"]
+    mentioned = _result_terms(question, results)
+    missing = _missing_http_codes(question, results)
+    lines: List[str] = []
+
+    # Reparto completo del campo, de mayor a menor
+    parts = [
+        f"{value} {int(count)} ({_pct(int(count), rows)})"
+        for value, count in sorted(results.items(), key=lambda kv: -int(kv[1]))
+    ]
+    lines.append("Distribución del campo Result: " + " · ".join(parts) + ".")
+
+    hosts_by_result = ctx.get("result_hosts") or {}
+    for value in mentioned:
+        count = int(results.get(value, 0) or 0)
+        lines.append(
+            f"Registros con Result «{value}»: {count} de {rows} ({_pct(count, rows)})."
+        )
+        hosts = hosts_by_result.get(value) or {}
+        if hosts:
+            lines.append(
+                f"Hosts con Result «{value}»: "
+                + ", ".join(f"{host} {int(n)}" for host, n in hosts.items())
+                + "."
+            )
+    # «¿devolvieron error HTTP?» (sin citar código concreto): se suman los
+    # 4xx/5xx presentes en el archivo, con el detalle de cada uno.
+    if not missing and re.search(
+        r"error http|errores http|codigo[s]? de error|respuesta[s]? de error",
+        _norm_text(question),
+    ):
+        err = {
+            str(k): int(v)
+            for k, v in results.items()
+            if str(k).isdigit() and str(k)[:1] in ("4", "5")
+        }
+        if err:
+            total_err = sum(err.values())
+            detalle = ", ".join(f"{code} ×{n}" for code, n in sorted(err.items()))
+            lines.append(
+                f"Registros con código HTTP de error (4xx/5xx): {total_err} de {rows} "
+                f"({_pct(total_err, rows)}) — {detalle}."
+            )
+    # Códigos citados que el archivo no contiene: se responde con el 0 explícito
+    # (p. ej. «400» no existe en esta carga).
+    for code in missing:
+        lines.append(
+            f"No hay registros con Result «{code}» en este archivo (0 de {rows})."
+        )
+    return lines
+
+
 def _aggregate_lines(ctx: Dict[str, Any]) -> List[str]:
     """Líneas con cifras EXACTAS del resumen del análisis (nunca inventadas)."""
     rows = ctx["dataset_rows"]
     counts = ctx["level_counts"] or {}
-    requested = [lvl for lvl in _level_terms(ctx["question"]) if lvl in LEVEL_ORDER]
+    question = ctx["question"]
+    requested = [lvl for lvl in _level_terms(question) if lvl in LEVEL_ORDER]
     hosts_by_level = ctx.get("hosts_by_level") or {}
     lines: List[str] = []
+    result_q = is_result_question(question)
+    results = ctx.get("result_counts") or {}
+    # Pregunta centrada en Result (sin pedir además el reparto general):
+    # se responde solo con ese campo para no enturbiar la respuesta.
+    if _result_focused(question, results):
+        return _result_lines(ctx) + [
+            f"Todas las cifras proceden del resumen calculado sobre tus {rows} "
+            "registros importados; no se ha añadido ningún dato externo."
+        ]
 
     def _hosts_for(lvl: str, n: int = 3) -> List[tuple]:
         pairs = [
@@ -848,6 +1038,10 @@ def _aggregate_lines(ctx: Dict[str, Any]) -> List[str]:
     if unique_hosts:
         lines.append(f"Hosts distintos en la carga: {int(unique_hosts)}.")
 
+    # 4) Campo Result (éxito/fallo o código HTTP), si la consulta lo toca
+    if result_q:
+        lines += _result_lines(ctx)
+
     lines.append(
         f"Todas las cifras proceden del resumen calculado sobre tus {rows} "
         "registros importados; no se ha añadido ningún dato externo."
@@ -865,8 +1059,15 @@ def _aggregate_answer(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     reference = ctx.get("reference") or {
         "available": False, "event_ids": [], "techniques": [], "note": "",
     }
+    # Titular según lo que pide la consulta: reparto de Result o resumen general
+    only_result = _result_focused(ctx["question"], ctx.get("result_counts") or {})
+    headline = (
+        f"Resumen exacto del campo Result en tus {ctx['dataset_rows']} registros importados:"
+        if only_result
+        else f"Resumen exacto de tus {ctx['dataset_rows']} registros importados:"
+    )
     lines = [
-        f"Resumen exacto de tus {ctx['dataset_rows']} registros importados:",
+        headline,
         "",
     ]
     lines += _aggregate_lines(ctx)

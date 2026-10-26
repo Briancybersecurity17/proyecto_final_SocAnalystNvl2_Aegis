@@ -92,7 +92,10 @@ export interface AskEvidence {
   severity: string
   level: string
   suspicious: boolean
+  /** Descripción del evento (Event_Description) tal como está en el archivo. */
   description: string
+  /** Resultado del evento (Success/Failure/Allowed o código HTTP). */
+  result: string
   relevance: number
   document: string
 }

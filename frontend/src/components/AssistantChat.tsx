@@ -210,6 +210,15 @@ export const AssistantChat: React.FC = () => {
   const listRef = useRef<HTMLDivElement>(null)
   const ready = status === 'done' && !!analysisId
 
+  // Sugerencias: la de Result solo aparece si el archivo tiene ese campo.
+  const suggestions = useMemo(() => {
+    const base = [...SUGGESTIONS]
+    if (summary?.result_counts && Object.keys(summary.result_counts).length > 0) {
+      base.push('¿Cuántos registros fallaron o devolvieron error HTTP?')
+    }
+    return base
+  }, [summary])
+
   // Estado del índice semántico (se actualiza mientras termina la indexación)
   useEffect(() => {
     if (!ready || !analysisId) return
@@ -316,7 +325,7 @@ export const AssistantChat: React.FC = () => {
           <div className="mb-4">
             <p className="text-sm text-gray-500 mb-2">Prueba con una de estas consultas:</p>
             <div className="flex flex-wrap gap-2">
-              {SUGGESTIONS.map(suggestion => (
+              {suggestions.map(suggestion => (
                 <button
                   key={suggestion}
                   onClick={() => send(suggestion)}
@@ -406,8 +415,19 @@ export const AssistantChat: React.FC = () => {
                                 </span>
                               </div>
                               <div className="text-[11px] text-gray-600 space-y-0.5 font-mono">
+                                <div
+                                  className="truncate text-gray-800"
+                                  title={item.description}
+                                >
+                                  {item.description}
+                                </div>
                                 <div>host {item.host} · origen {item.source_ip}</div>
-                                <div>Event_ID {item.event_id} · {item.severity}</div>
+                                <div>
+                                  Event_ID {item.event_id} · {item.severity}
+                                  {item.result && item.result !== '—' && (
+                                    <span className="text-gray-800"> · Result {item.result}</span>
+                                  )}
+                                </div>
                               </div>
                               <div className="mt-2">
                                 <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden">

@@ -422,6 +422,29 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
     # Resultado de la operación por registro: Success/Failure/Allowed o
     # código HTTP (200/404/500) según el origen del log.
     result_counts = _counts(df["Result"]) if "Result" in df.columns else {}
+    # Hosts por valor de Result: permite responder «¿de qué hosts son los 500?»
+    # con recuentos exactos, igual que ya se hace por nivel de criticidad.
+    result_hosts: Dict[str, Dict[str, int]] = {}
+    if "Result" in df.columns and "Hostname" in df.columns and total:
+        _res_tmp = pd.DataFrame({
+            "value": df["Result"].astype(str).str.strip(),
+            "host": df["Hostname"].astype(str),
+        })
+        _res_tmp = _res_tmp[
+            (_res_tmp["value"] != "")
+            & (_res_tmp["value"].str.lower() != "nan")
+            & (_res_tmp["host"] != "")
+            & (_res_tmp["host"].str.lower() != "nan")
+        ]
+        if len(_res_tmp):
+            _res_grp = (
+                _res_tmp.groupby(["value", "host"]).size().reset_index(name="n")
+            )
+            for _value, _grp in _res_grp.groupby("value"):
+                _top = _grp.sort_values(["n", "host"], ascending=[False, True]).head(4)
+                result_hosts[str(_value)] = {
+                    str(row["host"]): int(row["n"]) for row in _top.to_dict("records")
+                }
     level_counts = {lvl: int((df["_level"] == lvl).sum()) for lvl in LEVEL_ORDER}
 
     # Correspondencia auditable: cada valor original del campo Severity y el
@@ -574,6 +597,7 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
         "severity_counts": severity_counts,
         "severity_mapping": severity_mapping,
         "result_counts": result_counts,
+        "result_hosts": result_hosts,
         "level_counts": level_counts,
         "risk_levels": risk_levels,
         "unique_hosts": unique_hosts,

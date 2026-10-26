@@ -349,6 +349,7 @@ def build_metadata(row: Dict[str, Any], analysis_id: str, position: int) -> Dict
         ("Timestamp", "timestamp"),
         ("Log_Source", "log_source"),
         ("Result", "result"),
+        ("Event_Description", "description"),
     ):
         value = _clean(row.get(key))
         if value:
