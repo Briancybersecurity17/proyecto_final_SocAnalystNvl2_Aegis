@@ -37,6 +37,8 @@ export interface ReportEvidence {
   source_ip: string
   description: string
   severity: string
+  /** Resultado del evento (Success/Failure/Allowed o código HTTP), si existe. */
+  result?: string
   reason: string
 }
 

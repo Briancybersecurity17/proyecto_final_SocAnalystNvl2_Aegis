@@ -89,6 +89,8 @@ def _evidence(example: Dict[str, Any]) -> Dict[str, Any]:
         "source_ip": str(example.get("Source_IP", "") or "—"),
         "description": str(example.get("Event_Description", "") or "—"),
         "severity": str(example.get("Severity", "") or "—"),
+        # Resultado de la operación (Success/Failure/Allowed o código HTTP)
+        "result": str(example.get("Result", "") or "—"),
         "reason": str(example.get("_reason", example.get("risk_reason", "")) or "—"),
     }
 
@@ -130,6 +132,18 @@ def build_context(summary: Dict[str, Any]) -> Dict[str, Any]:
         "suspicious_evidence": [
             _evidence(e) for e in (summary.get("suspicious_details") or [])[:6]
         ],
+        # Registros con respuesta HTTP de error (4xx/5xx) en el campo Result:
+        # sirven de evidencia al hallazgo «respuestas HTTP de error».
+        "result_errors": {
+            "codes": (summary.get("http_errors") or {}).get("codes") or {},
+            "hosts": (summary.get("http_errors") or {}).get("hosts") or {},
+            "levels": (summary.get("http_errors") or {}).get("levels") or {},
+            "severities": (summary.get("http_errors") or {}).get("severities") or {},
+            "total": int((summary.get("http_errors") or {}).get("total") or 0),
+            "examples": [
+                _evidence(e) for e in (summary.get("http_errors") or {}).get("examples") or []
+            ],
+        },
     }
 
 
@@ -138,6 +152,30 @@ def build_context(summary: Dict[str, Any]) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 def _pct(count: int, total: int) -> str:
     return f"{(count / total) * 100:.1f}%" if total else "0,0%"
+
+
+# Significado de referencia de los códigos HTTP citados en el informe
+# (conocimiento del marco, no una afirmación sobre los registros).
+_HTTP_CODE_MEANINGS = {
+    "400": "solicitud mal formada (bad request)",
+    "401": "autenticación requerida",
+    "403": "acceso prohibido",
+    "404": "recurso solicitado no existe o no fue encontrado",
+    "408": "tiempo de espera de la solicitud agotado",
+    "429": "demasiadas solicitudes (rate limit)",
+    "500": "error interno del servidor",
+    "502": "puerta de enlace inválida (bad gateway)",
+    "503": "servicio no disponible",
+    "504": "tiempo de espera de la puerta de enlace agotado",
+}
+
+
+def _http_code_meaning(code: str) -> str:
+    """Referencia de significado para un código HTTP concreto."""
+    known = _HTTP_CODE_MEANINGS.get(code)
+    if known:
+        return known
+    return "error del lado del cliente (4xx)" if code.startswith("4") else "error del lado del servidor (5xx)"
 
 
 def _fallback_narrative(ctx: Dict[str, Any]) -> Dict[str, Any]:
@@ -218,6 +256,49 @@ def _fallback_narrative(ctx: Dict[str, Any]) -> Dict[str, Any]:
                     f"Correlación por IP de origen: {ip_txt}."
                 ),
                 "evidence": ctx["suspicious_evidence"][:4],
+            }
+        )
+
+    # Respuestas HTTP de error (4xx/5xx) en el campo Result: hallazgo con las
+    # evidencias de esos registros concretos (Log_ID, Timestamp, Severity).
+    errors = ctx.get("result_errors") or {}
+    error_codes_txt = ""
+    error_hosts_txt = ""
+    if int(errors.get("total") or 0) > 0:
+        codes = errors.get("codes") or {}
+        error_codes_txt = ", ".join(
+            f"{code} ×{n}" for code, n in sorted(codes.items(), key=lambda kv: -kv[1])
+        )
+        code_meanings = "; ".join(
+            f"{code} → {_http_code_meaning(code)}" for code in sorted(codes)
+        )
+        err_hosts = errors.get("hosts") or {}
+        error_hosts_txt = ", ".join(f"{h} ({n})" for h, n in list(err_hosts.items())[:4])
+        sev_err = errors.get("severities") or {}
+        sev_txt = ", ".join(f"{s} ×{n}" for s, n in sorted(sev_err.items(), key=lambda kv: -kv[1]))
+        lvl_err = errors.get("levels") or {}
+        lvl_key = next((l for l in LEVEL_ORDER if int(lvl_err.get(l, 0) or 0) > 0), None)
+        findings.append(
+            {
+                "id": f"H-{len(findings) + 1:02d}",
+                "title": "Respuestas HTTP de error en los registros (4xx/5xx)",
+                "level": lvl_key or "medio",
+                "explanation": (
+                    f"{errors['total']} de {total} registros ({_pct(int(errors['total']), total)}) "
+                    f"tienen en el campo Result un código de respuesta HTTP de error: {error_codes_txt}. "
+                    f"Se concentran en {error_hosts_txt or 'n/d'} y su severidad original es "
+                    f"{sev_txt or 'n/d'}"
+                    + (
+                        f", que la política de clasificación mapea al nivel "
+                        f"«{LEVEL_LABELS.get(lvl_key or '', '')}»."
+                        if lvl_key
+                        else "."
+                    )
+                    + f" Referencia técnica del marco HTTP (no es un dato del archivo): {code_meanings}. "
+                    "Corresponde revisar el servicio que genera esos códigos (rutas solicitadas y "
+                    "logs de aplicación) sin salirse de lo observado en el archivo."
+                ),
+                "evidence": (errors.get("examples") or [])[:6],
             }
         )
 
@@ -323,6 +404,19 @@ def _fallback_narrative(ctx: Dict[str, Any]) -> Dict[str, Any]:
             ),
         },
     ]
+
+    # Acción específica para los errores HTTP, solo si el archivo los contiene
+    if error_codes_txt:
+        action_plan.append(
+            {
+                "priority": "P2",
+                "action": "Revisar los registros con respuesta HTTP de error (4xx/5xx)",
+                "rationale": (
+                    f"{errors['total']} registros con {error_codes_txt} en {error_hosts_txt or 'n/d'}; "
+                    "inspeccionar el servicio web de origen y las rutas solicitadas en esos eventos."
+                ),
+            }
+        )
 
     # --- Conclusiones ------------------------------------------------------
     conclusions = (

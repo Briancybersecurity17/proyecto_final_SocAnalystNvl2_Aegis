@@ -296,6 +296,7 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
                         <Text style={pdf.evidenceBold}>#{i + 1}</Text>{'  '}
                         Log_ID {e.log_id} · {e.timestamp} · Host {e.host} · Event_ID {e.event_id} ·
                         IP {e.source_ip} · Severidad {e.severity}
+                        {e.result && e.result !== '—' ? ` · Result ${e.result}` : ''}
                       </Text>
                       <Text style={pdf.evidenceLine}>Evento: {e.description}</Text>
                       <Text style={pdf.evidenceLine}>Justificación: {e.reason}</Text>
@@ -571,6 +572,7 @@ const ReportGenerator: React.FC = () => {
                               <p>
                                 <strong>#{i + 1}</strong> Log_ID {fmt(e.log_id)} · {fmt(e.timestamp)} · Host{' '}
                                 <strong>{fmt(e.host)}</strong> · Event_ID {fmt(e.event_id)} · IP {fmt(e.source_ip)} · Severidad {fmt(e.severity)}
+                                {e.result && e.result !== '—' ? <> · Result {fmt(e.result)}</> : null}
                               </p>
                               <p className="mt-1">Evento: {e.description}</p>
                               <p className="mt-1 text-gray-500">Justificación: {e.reason}</p>

@@ -523,6 +523,27 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
     suspicious_rows = df[df["_suspicious"]]
     suspicious_details = _records(suspicious_rows[detail_cols + ["_reason"]].head(10)) if suspicious_events else []
 
+    # --- HTTP error responses (Result = 4xx/5xx) ---------------------------
+    # Registros con un código de respuesta HTTP de error en el campo Result:
+    # son la base del hallazgo «respuestas HTTP de error» del informe, con
+    # Log_ID, Timestamp y Severity de cada uno (nada se deduce, todo se cita).
+    http_errors: Dict[str, Any] = {"codes": {}, "hosts": {}, "levels": {},
+                                   "severities": {}, "total": 0, "examples": []}
+    if "Result" in df.columns and total:
+        _res_str = df["Result"].astype(str).str.strip()
+        _err_mask = _res_str.str.fullmatch(r"[45]\d\d").fillna(False)
+        _err_rows = df[_err_mask]
+        if len(_err_rows):
+            _err_cols = detail_cols + [c for c in ("Result", "_reason") if c in _err_rows.columns]
+            http_errors = {
+                "codes": {str(k): int(v) for k, v in _res_str[_err_mask].value_counts().items()},
+                "hosts": _counts(_err_rows["Hostname"], n=6) if "Hostname" in _err_rows.columns else {},
+                "levels": _counts(_err_rows["_level"]) if "_level" in _err_rows.columns else {},
+                "severities": _counts(_err_rows["Severity"]) if "Severity" in _err_rows.columns else {},
+                "total": int(len(_err_rows)),
+                "examples": _records(_err_rows[_err_cols].head(12)),
+            }
+
     suspicious_correlations: Dict[str, int] = {}
     suspicious_by_ip: List[Dict[str, Any]] = []
     if suspicious_events and "Hostname" in df.columns:
@@ -608,6 +629,7 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
         "top_hosts_by_level": top_hosts_by_level,
         "suspicious_events": suspicious_events,
         "suspicious_details": suspicious_details,
+        "http_errors": http_errors,
         "suspicious_correlations": suspicious_correlations,
         "suspicious_by_ip": suspicious_by_ip,
     }
