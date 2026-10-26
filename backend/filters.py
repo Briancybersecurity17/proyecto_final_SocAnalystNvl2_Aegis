@@ -9,6 +9,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 import pandas as pd
+# `Request` solo se usa para leer la query string: fastapi no importa a
+# `filters`, así que aquí no puede haber import circular (a diferencia del
+# dual con `main`, que sí se importa dentro de las funciones).
+from fastapi import Request
 
 
 @dataclass
@@ -26,6 +30,96 @@ class FilterParams:
     result: str = ""           # match exacto sobre _result_label
     q: str = ""                # texto libre en columnas originales
     facets: dict[str, list[str]] = field(default_factory=dict)   # OR dentro de un campo
+
+
+# Parámetros con significado fijo para la API: nunca se tratan como faceta,
+# aunque el archivo tenga una columna con ese nombre (R11).
+_CANONICOS = frozenset({"from", "to", "level", "suspicious", "result", "q"})
+
+
+def _parse_ventana(valor: str, nombre: str) -> datetime | None:
+    """Fecha de la query → datetime; vacía → None; ilegible → ValueError.
+
+    El `ValueError` lo recoge el endpoint para responder 400 (R10): una URL
+    con una fecha escrita mal es un error del cliente, no un 500 del servidor.
+    """
+    texto = str(valor).strip()
+    if not texto:
+        return None
+    try:
+        momento = pd.to_datetime(texto)
+    except (ValueError, TypeError, OverflowError) as exc:
+        raise ValueError(f"El parámetro «{nombre}» no es una fecha válida: {texto!r}") from exc
+    if pd.isna(momento):
+        raise ValueError(f"El parámetro «{nombre}» no es una fecha válida: {texto!r}")
+    return momento   # pd.Timestamp, subclase de datetime: compara bien con la columna Timestamp
+
+
+def parse_filters(request: Request, df: pd.DataFrame) -> FilterParams:
+    """Traduce los parámetros de la query a `FilterParams` (spec §4.4).
+
+    Separa los canónicos (ventana, nivel, sospechosos, result, q) del resto,
+    que solo se aceptan como faceta si el nombre coincide exactamente con una
+    columna del archivo y no empieza por «_»: así una URL vieja o un
+    parámetro de más no cambian el resultado ni revientan la petición.
+
+    Lanza `ValueError` con mensaje legible cuando el filtro no tiene
+    sentido (nivel fuera de catálogo, ventana invertida o fechas
+    ingparseables); el endpoint lo convierte en un 400.
+    """
+    query = request.query_params
+    params = FilterParams()
+
+    # 1. Ventana temporal: se valida siempre (una fecha ilegible o una
+    #    ventana invertida son 400 aunque el archivo no tenga Timestamp),
+    #    pero solo se aplica si la columna existe: en un archivo mínimo sin
+    #    Timestamp no hay nada que acotar (spec §8) y aplicarla reventaría
+    #    contra una columna inexistente.
+    desde = _parse_ventana(query.get("from", ""), "from")
+    hasta = _parse_ventana(query.get("to", ""), "to")
+    if desde is not None and hasta is not None and desde > hasta:
+        raise ValueError(
+            f"El parámetro «from» ({desde.isoformat()}) es posterior a «to» "
+            f"({hasta.isoformat()}): la ventana no puede quedar vacía"
+        )
+    if "Timestamp" in df.columns:
+        params.from_dt, params.to_dt = desde, hasta
+
+    # 2. Nivel: catálogo fijo. Un valor fuera de él no filtra nada y el
+    #    panel enseñaría «0 filas» sin motivo, mejor avisar con 400.
+    #    LEVEL_ORDER vive en `main` y se importa aquí dentro con el mismo
+    #    patrón dual paquete/suelto que `_result_label` (ver apply_filters),
+    #    porque `main` importa `filters` a nivel de módulo y un import aquí
+    #    arriba crearía el import circular main ↔ filters.
+    nivel = str(query.get("level", "")).strip()
+    if nivel:
+        try:  # paquete (uvicorn backend.main:app) o módulo suelto (pytest)
+            from backend.main import LEVEL_ORDER
+        except ImportError:  # pragma: no cover
+            from main import LEVEL_ORDER
+        if nivel not in LEVEL_ORDER:
+            raise ValueError(
+                f"Nivel «{nivel}» no válido; debe ser uno de: {', '.join(LEVEL_ORDER)}"
+            )
+        params.level = nivel
+
+    # 3. Solo sospechosos: la query llega como true/1 en cualquier
+    #    combinación de mayúsculas (?suspicious=True lo envía el toggle).
+    params.suspicious = str(query.get("suspicious", "")).strip().lower() in ("true", "1")
+    params.result = str(query.get("result", ""))
+    params.q = str(query.get("q", ""))
+
+    # 4. Facetas: `multi_items` conserva los parámetros repetidos
+    #    (?Hostname=DC-01&Hostname=WEB-01 → OR dentro del mismo campo).
+    for nombre, valor in query.multi_items():
+        # Los canónicos ya se consumieron arriba y los derivados (_level…)
+        # no son columnas del archivo: se ignoran (R11).
+        if nombre in _CANONICOS or nombre.startswith("_"):
+            continue
+        if nombre in df.columns:
+            params.facets.setdefault(nombre, []).append(valor)
+
+    return params
 
 
 def apply_filters(df: pd.DataFrame, p: FilterParams) -> pd.DataFrame:
@@ -54,7 +148,7 @@ def apply_filters(df: pd.DataFrame, p: FilterParams) -> pd.DataFrame:
     #    sin columna Result se filtre en silencio en vez de reventar.
     #    `_result_label` es una función de `main` y se importa aquí dentro,
     #    con el mismo patrón dual paquete/suelto que kb_store:36-39, porque
-    #    `main` importará `filters` a nivel de módulo (Tarea 4) y un import
+    #    `main` importa `filters` a nivel de módulo (Tarea 4) y un import
     #    aquí arriba crearía el import circular main ↔ filters.
     if p.result.strip() and "Result" in df.columns:
         try:  # paquete (uvicorn backend.main:app) o módulo suelto (pytest)

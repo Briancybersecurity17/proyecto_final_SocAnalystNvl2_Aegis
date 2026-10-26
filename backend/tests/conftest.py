@@ -37,37 +37,37 @@ DATASET_12_FILAS = [
 ]
 
 
-def xlsx_bytes() -> io.BytesIO:
-    """Excel sintético de 12 filas en memoria.
-
-    Los Timestamp van como texto a propósito: así el backend es quien debe
-    convertirlos a datetime al ingerir (comportamiento que se quiere probar).
-    """
-    df = pd.DataFrame(DATASET_12_FILAS, columns=COLUMNAS)
+def _xlsx(df: pd.DataFrame) -> io.BytesIO:
+    """DataFrame en memoria como un .xlsx listo para subir al backend."""
     buffer = io.BytesIO()
     df.to_excel(buffer, index=False, engine="openpyxl")
     buffer.seek(0)
     return buffer
 
 
-@pytest.fixture
-def client() -> TestClient:
-    return TestClient(app)
+def xlsx_bytes() -> io.BytesIO:
+    """Excel sintético de 12 filas en memoria.
+
+    Los Timestamp van como texto a propósito: así el backend es quien debe
+    convertirlos a datetime al ingerir (comportamiento que se quiere probar).
+    """
+    return _xlsx(pd.DataFrame(DATASET_12_FILAS, columns=COLUMNAS))
 
 
-@pytest.fixture
-def analysis_id(client: TestClient) -> str:
-    """Sube el Excel sintético y devuelve el id cuando el análisis está «done».
+def _subir_y_esperar(client: TestClient, filename: str, contenido: io.BytesIO) -> str:
+    """Sube un Excel al backend y devuelve el id cuando el análisis está «done».
 
-    Si el análisis termina en «error», el fixture falla mostrando el mensaje
-    del backend para diagnosticar desde el test.
+    Helper compartido por los tres fixtures de sesión: así subida, sondeo y
+    mensajes de error son idénticos sin repetir el ciclo en cada fixture.
+    Si el análisis termina en «error», falla mostrando el mensaje del
+    backend para diagnosticar desde el test.
     """
     res = client.post(
         "/api/analyze",
         files={
             "file": (
-                "dataset_sintetico.xlsx",
-                xlsx_bytes(),
+                filename,
+                contenido,
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
         },
@@ -86,3 +86,54 @@ def analysis_id(client: TestClient) -> str:
             pytest.fail(f"El análisis terminó en error: {state.get('error')}")
         time.sleep(0.1)
     pytest.fail(f"El análisis no terminó en 60 s (estado final: {state and state['status']})")
+
+
+# Los fixtures que tocan la API son de sesión (R8): los tests solo leen el
+# store, así que cada subida + indexación RAG se hace una única vez por
+# corrida en vez de por test. Un fixture de sesión no puede depender de uno
+# de función, por eso `client` también es de sesión y se define primero.
+@pytest.fixture(scope="session")
+def client() -> TestClient:
+    return TestClient(app)
+
+
+@pytest.fixture(scope="session")
+def analysis_id(client: TestClient) -> str:
+    """Sube el Excel sintético y devuelve el id cuando el análisis está «done»."""
+    return _subir_y_esperar(client, "dataset_sintetico.xlsx", xlsx_bytes())
+
+
+@pytest.fixture(scope="session")
+def analysis_id_na(client: TestClient) -> str:
+    """2 filas con las columnas estándar; la segunda con Timestamp basura.
+
+    Al ingerir, `pd.to_datetime(..., errors="coerce")` convierte esa celda
+    en NaT: sin filtro temporal las 2 filas cuentan, con ventana la fila
+    NaT cae fuera (comparar contra NaT da False).
+    """
+    df = pd.DataFrame(
+        [
+            (1, "2026-01-05 10:00", "DC-01", 4624, "jsmith", "10.10.2.15", "DC-01", "Windows", "An account was successfully logged on to the system", "Success", "Informational"),
+            (2, "no-es-fecha", "WS-018", 4625, "admin", "10.10.2.15", "WS-018", "Windows", "An account failed to log on with an invalid account", "Failure", "High"),
+        ],
+        columns=COLUMNAS,
+    )
+    return _subir_y_esperar(client, "archivo_con_na.xlsx", _xlsx(df))
+
+
+@pytest.fixture(scope="session")
+def analysis_id_minimo(client: TestClient) -> str:
+    """Archivo de 2 filas solo con Log_ID y Event_Description.
+
+    Sin Timestamp la ventana temporal no puede aplicarse (parse_filters la
+    ignora) y sin Severity todo se clasifica como «bajo»: así se prueba que
+    /summary tolera archivos sin las columnas que asume el dataset sintético.
+    """
+    df = pd.DataFrame(
+        [
+            (1, "Registro de actividad normal del sistema"),
+            (2, "Intento de acceso con credenciales invalidas"),
+        ],
+        columns=["Log_ID", "Event_Description"],
+    )
+    return _subir_y_esperar(client, "archivo_minimo.xlsx", _xlsx(df))
