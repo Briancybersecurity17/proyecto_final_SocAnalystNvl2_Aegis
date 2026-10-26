@@ -62,6 +62,22 @@ export const toCount = (value: unknown): number =>
 export const pct = (part: number, total: number): string =>
   total > 0 ? ((part / total) * 100).toFixed(1) : '0.0'
 
+/**
+ * Formato de un porcentaje ya calculado en el backend (viene redondeado a 1
+ * decimal): 13.6 → «13.6», 1 → «1.0». Sin esto convivían «1%» y «13.6%» en la
+ * misma tabla, con y sin decimal.
+ */
+export const fmtPct = (value: unknown): string => {
+  const n = Number(value)
+  return Number.isFinite(n) ? n.toFixed(1) : '0.0'
+}
+
+/**
+ * Entero con separador de miles: el mismo formato en tarjetas, tooltips y
+ * tablas (antes unas mostraban «10000 registros» y otras «10,000 eventos»).
+ */
+export const fmtCount = (value: unknown): string => toCount(value).toLocaleString('es-ES')
+
 /** Duración de la entrada de un gráfico (ms). */
 export const CHART_DURATION = 800
 

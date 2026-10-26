@@ -352,6 +352,10 @@ def build_metadata(row: Dict[str, Any], analysis_id: str, position: int) -> Dict
         ("Event_Description", "description"),
     ):
         value = _clean(row.get(key))
+        if value and out == "result":
+            # Result leído como float (celdas vacías): «404.0» → «404»
+            if value.endswith(".0") and value[:-3].lstrip("-").isdigit():
+                value = value[:-3]
         if value:
             meta[out] = value[:300]
     return meta

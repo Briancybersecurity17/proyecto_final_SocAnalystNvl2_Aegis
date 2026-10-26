@@ -7,6 +7,7 @@ const UploadExcel: React.FC = () => {
   const [progressMsg, setProgressMsg] = useState('')
   const [fileName, setFileName] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
+  const [waitMsg, setWaitMsg] = useState('')
 
   const status = useAnalysisStore(state => state.status)
   const summary = useAnalysisStore(state => state.summary)
@@ -21,12 +22,21 @@ const UploadExcel: React.FC = () => {
 
   /** Ruta única de importación: la usan el input y el arrastre. */
   const handleFile = async (file: File | undefined | null) => {
-    if (!file || busy) return
+    if (!file) return
+    if (busy) {
+      setWaitMsg('Ya hay una importación en curso: espera a que termine antes de cargar otro archivo.')
+      return
+    }
+    setWaitMsg('')
+    // Se limpia el análisis anterior ANTES de validar: con un archivo no
+    // válido, el resto de la app no debe seguir mostrando los datos del
+    // anterior como si siguieran vigentes.
+    reset()
+    setFileName(null) // el nombre del archivo anterior ya no corresponde
     if (!file.name.toLowerCase().endsWith('.xlsx')) {
       setError('Solo se admiten archivos .xlsx')
       return
     }
-    reset() // limpia análisis/errores de una carga anterior
     setFileName(file.name)
     setStatus('uploading')
     setProgressMsg(`Subiendo «${file.name}»…`)
@@ -138,6 +148,10 @@ const UploadExcel: React.FC = () => {
           <span className="inline-block h-3.5 w-3.5 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
           {progressMsg}
         </p>
+      )}
+
+      {waitMsg && !busy && (
+        <p className="mt-3 text-sm text-amber-700" role="status">{waitMsg}</p>
       )}
 
       {status === 'done' && summary && !error && (

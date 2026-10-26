@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { getRows, RowsResponse } from '../api/client'
 import { useAnalysisStore } from '../store'
 import { LEVEL_LABELS } from '../charts'
@@ -48,22 +48,58 @@ const DataTable: React.FC = () => {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [page, setPage] = useState(1)
-  const [q, setQ] = useState('')
+  const [qInput, setQInput] = useState('') // texto del input (se estabiliza con debounce)
+  const [q, setQ] = useState('') // búsqueda ya estabilizada, la que viaja al backend
   const [level, setLevel] = useState('')
   const [result, setResult] = useState('')
   const [suspicious, setSuspicious] = useState(false)
+  const abortRef = useRef<AbortController | null>(null)
+
+  // Un archivo nuevo arranca de cero: la página, los filtros y las filas del
+  // análisis anterior no deben colarse en el nuevo (si la tabla anterior
+  // estaba en la página 5 y el archivo nuevo solo tiene 4, se quedaba vacía).
+  useEffect(() => {
+    abortRef.current?.abort()
+    setData(null)
+    setError('')
+    setPage(1)
+    setQ('')
+    setQInput('')
+    setLevel('')
+    setResult('')
+    setSuspicious(false)
+  }, [analysisId])
+
+  // Búsqueda con debounce: una petición por pausa de tecleo, no por tecla.
+  useEffect(() => {
+    const timer = window.setTimeout(() => setQ(qInput), 300)
+    return () => window.clearTimeout(timer)
+  }, [qInput])
 
   const fetchRows = useCallback(async () => {
     if (!analysisId || status !== 'done') return
+    // Se cancela la petición en vuelo: si no, una respuesta lenta de un
+    // filtro anterior puede pintar la tabla con los filtros actuales.
+    abortRef.current?.abort()
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
     setLoading(true)
     setError('')
     try {
-      const res = await getRows(analysisId, { page, pageSize: 25, q, level, suspicious, result })
+      const res = await getRows(
+        analysisId,
+        { page, pageSize: 25, q, level, suspicious, result, signal: ctrl.signal },
+      )
+      if (ctrl.signal.aborted) return
       setData(res)
-    } catch (err) {
+      // El backend recorta páginas fuera de rango y devuelve la última válida.
+      setPage(res.page)
+    } catch {
+      if (ctrl.signal.aborted) return
       setError('No se pudieron cargar los registros')
+      setData(null)
     } finally {
-      setLoading(false)
+      if (!ctrl.signal.aborted) setLoading(false)
     }
   }, [analysisId, status, page, q, level, suspicious, result])
 
@@ -94,9 +130,9 @@ const DataTable: React.FC = () => {
       <div className="flex flex-wrap items-center gap-3 mb-4">
         <input
           type="text"
-          value={q}
-          onChange={e => setQ(e.target.value)}
-          placeholder="Buscar en todos los campos…"
+          value={qInput}
+          onChange={e => setQInput(e.target.value)}
+          placeholder="Buscar en las columnas del archivo…"
           className="border border-gray-300 rounded px-3 py-2 text-sm w-64 focus:outline-none focus:ring-2 focus:ring-primary"
         />
         <div className="flex rounded overflow-hidden border border-gray-300">
@@ -146,14 +182,15 @@ const DataTable: React.FC = () => {
       {/* Table */}
       <div className="overflow-auto border border-gray-200 rounded max-h-96">
         <table className="min-w-full text-sm">
+          <caption className="sr-only">Registros del archivo importado, con su nivel de riesgo</caption>
           <thead className="bg-gray-100 sticky top-0">
             <tr>
               {visibleColumns.map(col => (
-                <th key={col} className="px-3 py-2 text-left font-semibold whitespace-nowrap">
+                <th key={col} scope="col" className="px-3 py-2 text-left font-semibold whitespace-nowrap">
                   {col}
                 </th>
               ))}
-              <th className="px-3 py-2 text-left font-semibold whitespace-nowrap">Nivel</th>
+              <th scope="col" className="px-3 py-2 text-left font-semibold whitespace-nowrap">Nivel</th>
             </tr>
           </thead>
           <tbody>

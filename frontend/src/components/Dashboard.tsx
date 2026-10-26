@@ -19,6 +19,7 @@ import {
   glowVars,
   toCount,
   pct,
+  fmtCount,
   useChartMotion,
   ChartClickState,
 } from '../charts'
@@ -43,13 +44,18 @@ import {
 } from 'recharts'
 
 /** Contador animado para las cifras de las tarjetas de criticidad. */
-const Counter: React.FC<{ value: number }> = ({ value }) => <>{useCountUp(value)}</>
+const Counter: React.FC<{ value: number }> = ({ value }) => <>{fmtCount(useCountUp(value))}</>
 
-/** "2026-10-23 07:00" → "23/10 07:00" (etiqueta corta para el eje). */
-const hourLabel = (stamp: string): string => {
+/**
+ * "2026-10-23 07:00" → "23/10 07:00" (etiqueta corta para el eje).
+ * Con `withYear` añade el año: sin él, datos de dos años distintos producían
+ * etiquetas idénticas y el total del tooltip se pisaba entre tramos.
+ */
+const hourLabel = (stamp: string, withYear = false): string => {
   const [date, time] = stamp.split(' ')
-  const [, month, day] = date.split('-')
-  return `${Number(day)}/${Number(month)} ${time}`
+  const [year, month, day] = date.split('-')
+  const base = `${Number(day)}/${Number(month)} ${time}`
+  return withYear ? `${base}/${year.slice(2)}` : base
 }
 
 /** Un punto de la serie temporal, ya por hora ya por día. */
@@ -102,6 +108,10 @@ const Dashboard: React.FC = () => {
   // Serie horaria real (fecha+hora presentes en los timestamps del archivo).
   // Si hay varios tramos se usa como eje principal: da mucha más resolución
   // que la agregación diaria y no se inventa ningún dato.
+  const hourlyStamps = Object.keys(summary.events_per_hour_by_level ?? {})
+  // Con datos de más de un año la etiqueta corta se queda sin año y dos
+  // tramos distintos colisionarían (mismo «23/10 07:00»).
+  const hourlyMultiYear = new Set(hourlyStamps.map(s => s.slice(0, 4))).size > 1
   const hourlyData: TimePoint[] = Object.entries(summary.events_per_hour_by_level ?? {})
     .map(([stamp, levels]) => {
       const critico = toCount(levels.critico)
@@ -109,7 +119,7 @@ const Dashboard: React.FC = () => {
       const medio = toCount(levels.medio)
       const bajo = toCount(levels.bajo)
       return {
-        label: hourLabel(stamp),
+        label: hourLabel(stamp, hourlyMultiYear),
         detail: stamp,
         critico,
         alto,
@@ -363,7 +373,7 @@ const Dashboard: React.FC = () => {
                   <Tooltip
                     contentStyle={TOOLTIP_STYLE}
                     formatter={(value: number, _name, item) => [
-                      `${toCount(value).toLocaleString()} registros (${pct(toCount(value), rows)}%)`,
+                      `${fmtCount(value)} registros (${pct(toCount(value), rows)}%)`,
                       item?.payload?.name ?? _name,
                     ]}
                   />
@@ -400,7 +410,7 @@ const Dashboard: React.FC = () => {
                         {item.name}
                       </span>
                       <span className="text-right">
-                        <strong className="text-sm text-gray-900">{item.value.toLocaleString()}</strong>
+                        <strong className="text-sm text-gray-900">{fmtCount(item.value)}</strong>
                         <span className="block text-xs text-gray-500">{pct(item.value, rows)}%</span>
                       </span>
                     </button>
@@ -415,7 +425,7 @@ const Dashboard: React.FC = () => {
                   key={`nivel-${selectedLevel.level}`}
                   title={`Nivel ${selectedLevel.name}`}
                   color={LEVEL_COLORS[selectedLevel.level]}
-                  value={`${selectedLevel.value.toLocaleString()} registros`}
+                  value={`${fmtCount(selectedLevel.value)} registros`}
                   caption={`${pct(selectedLevel.value, rows)}% de los ${rows} registros del archivo`}
                   rows={topHostsForLevel.map(host => ({
                     label: host.host,
@@ -484,7 +494,7 @@ const Dashboard: React.FC = () => {
                   <Tooltip
                     cursor={LINE_CURSOR}
                     contentStyle={TOOLTIP_STYLE}
-                    formatter={(value: number, name) => [`${toCount(value).toLocaleString()} eventos`, name]}
+                    formatter={(value: number, name) => [`${fmtCount(value)} eventos`, name]}
                     labelFormatter={label => `${label} · ${totalByLabel.get(String(label)) ?? 0} eventos`}
                   />
                   <Legend />
@@ -518,7 +528,7 @@ const Dashboard: React.FC = () => {
                   <Tooltip
                     cursor={BAR_CURSOR}
                     contentStyle={TOOLTIP_STYLE}
-                    formatter={(value: number, name) => [`${toCount(value).toLocaleString()} eventos`, name]}
+                    formatter={(value: number, name) => [`${fmtCount(value)} eventos`, name]}
                     labelFormatter={label => `${label} · ${totalByLabel.get(String(label)) ?? 0} eventos`}
                   />
                   <Legend />
@@ -548,7 +558,7 @@ const Dashboard: React.FC = () => {
                   <Tooltip
                     cursor={LINE_CURSOR}
                     contentStyle={TOOLTIP_STYLE}
-                    formatter={(value: number, name) => [`${toCount(value).toLocaleString()} eventos`, name]}
+                    formatter={(value: number, name) => [`${fmtCount(value)} eventos`, name]}
                     labelFormatter={label => `${label} · ${totalByLabel.get(String(label)) ?? 0} eventos`}
                   />
                   <Legend />
@@ -582,11 +592,11 @@ const Dashboard: React.FC = () => {
                   key={`slot-${selectedSlot.label}`}
                   title={`${selectedSlot.detail} · ${hourly ? 'hora' : 'día'}`}
                   color="#1e40af"
-                  value={`${selectedSlot.total.toLocaleString()} eventos`}
-                  caption={`${pct(selectedSlot.total, totalSeries)}% de los ${totalSeries.toLocaleString()} eventos del periodo`}
+                  value={`${fmtCount(selectedSlot.total)} eventos`}
+                  caption={`${pct(selectedSlot.total, totalSeries)}% de los ${fmtCount(totalSeries)} eventos del periodo`}
                   rows={LEVEL_ORDER.map(level => ({
                     label: LEVEL_LABELS[level],
-                    value: `${selectedSlot[level].toLocaleString()} eventos`,
+                    value: `${fmtCount(selectedSlot[level])} eventos`,
                   }))}
                   note="Cifras tomadas de los timestamps del archivo: los tramos sin actividad no aparecen en la serie."
                   onClose={() => setFocusSlot(null)}
@@ -634,7 +644,7 @@ const Dashboard: React.FC = () => {
               <Tooltip
                 cursor={BAR_CURSOR}
                 contentStyle={TOOLTIP_STYLE}
-                formatter={(value: number, name) => [`${toCount(value).toLocaleString()} eventos`, name]}
+                formatter={(value: number, name) => [`${fmtCount(value)} eventos`, name]}
               />
               <Legend />
               {shownLevels.map((level, index) => (
@@ -651,7 +661,7 @@ const Dashboard: React.FC = () => {
                 >
                   {/* Las celdas viven dentro de <Bar>: Recharts las lee como
                       hijos de la serie y aplica el marcado a cada host. */}
-                  {selectionCells(hostsData, focusHost, h => h.host, '#1e40af', true)}
+                  {selectionCells(hostsData, focusHost, h => h.host, '#1e40af', true, LEVEL_COLORS[level])}
                 </Bar>
               ))}
             </BarChart>
@@ -670,15 +680,15 @@ const Dashboard: React.FC = () => {
               key={`host-${selectedHostData.host}`}
               title={`Host ${selectedHostData.host}`}
               color="#1e40af"
-              value={`${selectedHostData.total.toLocaleString()} eventos`}
+              value={`${fmtCount(selectedHostData.total)} eventos`}
               caption={
                 totalHostEvents > 0
-                  ? `${pct(selectedHostData.total, totalHostEvents)}% de los ${totalHostEvents.toLocaleString()} eventos contabilizados por host`
+                  ? `${pct(selectedHostData.total, totalHostEvents)}% de los ${fmtCount(totalHostEvents)} eventos contabilizados por host`
                   : undefined
               }
               rows={LEVEL_ORDER.map(level => ({
                 label: LEVEL_LABELS[level],
-                value: `${selectedHostData[level].toLocaleString()} eventos`,
+                value: `${fmtCount(selectedHostData[level])} eventos`,
               }))}
               note={
                 hostLevel === 'todos'
@@ -709,7 +719,7 @@ const Dashboard: React.FC = () => {
               <Tooltip
                 cursor={BAR_CURSOR}
                 contentStyle={TOOLTIP_STYLE}
-                formatter={(value: number) => [`${toCount(value).toLocaleString()} registros`, 'Cantidad']}
+                formatter={(value: number) => [`${fmtCount(value)} registros`, 'Cantidad']}
               />
               <Bar
                 dataKey="count"
@@ -737,7 +747,7 @@ const Dashboard: React.FC = () => {
               key={`raw-${selectedRaw.severity}`}
               title={`Severity «${selectedRaw.severity}»`}
               color="#0891b2"
-              value={`${selectedRaw.count.toLocaleString()} registros`}
+              value={`${fmtCount(selectedRaw.count)} registros`}
               caption={`${pct(selectedRaw.count, rows)}% de los ${rows} registros, tal como vienen en el archivo`}
               note="Este es el valor original de la columna; la clasificación por criticidad del dashboard es un cálculo aparte."
               onClose={() => setFocusRaw(null)}

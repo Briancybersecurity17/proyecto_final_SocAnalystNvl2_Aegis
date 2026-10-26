@@ -7,6 +7,7 @@ import {
 } from '../store'
 import { generateReport } from '../api/client'
 import { EmptyState } from './EmptyState'
+import { fmtCount, fmtPct } from '../charts'
 import {
   BlobProvider,
   Document,
@@ -264,8 +265,8 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
                 <Text style={[pdf.critCell, pdf.w80, { fontFamily: 'Helvetica-Bold', color: meta.color }]}>
                   {meta.label}
                 </Text>
-                <Text style={[pdf.critCell, pdf.w60]}>{block?.count ?? 0}</Text>
-                <Text style={[pdf.critCell, pdf.w50]}>{block?.percentage ?? 0}%</Text>
+                <Text style={[pdf.critCell, pdf.w60]}>{fmtCount(block?.count ?? 0)}</Text>
+                <Text style={[pdf.critCell, pdf.w50]}>{fmtPct(block?.percentage ?? 0)}%</Text>
                 <Text style={[pdf.critCell, { flex: 1 }]}>{block?.justification ?? '—'}</Text>
               </View>
             )
@@ -374,6 +375,9 @@ const ReportGenerator: React.FC = () => {
       const narrative = await generateReport(analysisId)
       setReport(narrative)
     } catch {
+      // Se limpia el informe anterior: si no, quedaba visible bajo el error,
+      // como si respondiera a la petición que acaba de fallar.
+      setReport(null)
       setError('No se pudo generar el informe. Reintenta.')
     } finally {
       setLoading(false)
@@ -418,7 +422,16 @@ const ReportGenerator: React.FC = () => {
           </button>
           <BlobProvider document={report ? <ReportDoc summary={summary} report={report} analysisId={analysisId} /> : <Document><Page size="A4" /></Document>}>
             {({ blob, loading: pdfLoading, error: pdfError }) => {
-              if (!report || pdfLoading) {
+              if (!report) {
+                // Sin informe no hay PDF que descargar: se avisa en lugar de
+                // dejar el botón en «Preparando…» indefinidamente.
+                return (
+                  <button disabled className="px-4 py-2 text-sm bg-gray-300 text-white rounded" title="Genera el informe para poder descargarlo">
+                    Descargar informe PDF
+                  </button>
+                )
+              }
+              if (pdfLoading) {
                 return (
                   <button disabled className="px-4 py-2 text-sm bg-gray-300 text-white rounded">
                     Preparando PDF…
@@ -519,12 +532,13 @@ const ReportGenerator: React.FC = () => {
             <p className="text-sm text-gray-700 mb-3">{summary.risk_justification}</p>
             <div className="overflow-auto">
               <table className="min-w-full text-sm border border-gray-200">
+                <caption className="sr-only">Clasificación de criticidad: registros y porcentaje por nivel</caption>
                 <thead className="bg-gray-800 text-white">
                   <tr>
-                    <th className="px-3 py-2 text-left">Nivel</th>
-                    <th className="px-3 py-2 text-left">Registros</th>
-                    <th className="px-3 py-2 text-left">%</th>
-                    <th className="px-3 py-2 text-left">Justificación</th>
+                    <th scope="col" className="px-3 py-2 text-left">Nivel</th>
+                    <th scope="col" className="px-3 py-2 text-left">Registros</th>
+                    <th scope="col" className="px-3 py-2 text-left">%</th>
+                    <th scope="col" className="px-3 py-2 text-left">Justificación</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -536,8 +550,8 @@ const ReportGenerator: React.FC = () => {
                         <td className="px-3 py-2">
                           <span className={`px-2 py-0.5 rounded text-xs font-bold ${meta.chip}`}>{meta.label}</span>
                         </td>
-                        <td className="px-3 py-2 font-semibold">{b?.count ?? 0}</td>
-                        <td className="px-3 py-2">{b?.percentage ?? 0}%</td>
+                        <td className="px-3 py-2 font-semibold">{fmtCount(b?.count ?? 0)}</td>
+                        <td className="px-3 py-2">{fmtPct(b?.percentage ?? 0)}%</td>
                         <td className="px-3 py-2 text-gray-700">{b?.justification ?? '—'}</td>
                       </tr>
                     )
@@ -592,19 +606,20 @@ const ReportGenerator: React.FC = () => {
             <p className="text-sm text-gray-700 text-justify mb-3">{report.correlation}</p>
             {summary.suspicious_by_ip.length > 0 && (
               <table className="min-w-full text-sm border border-gray-200">
+                <caption className="sr-only">Correlación entre IP de origen, eventos sospechosos y hosts impactados</caption>
                 <thead className="bg-gray-100">
                   <tr>
-                    <th className="px-3 py-2 text-left">IP de origen</th>
-                    <th className="px-3 py-2 text-left">Eventos sospechosos</th>
-                    <th className="px-3 py-2 text-left">Hosts impactados</th>
+                    <th scope="col" className="px-3 py-2 text-left">IP de origen</th>
+                    <th scope="col" className="px-3 py-2 text-left">Eventos sospechosos</th>
+                    <th scope="col" className="px-3 py-2 text-left">Hosts impactados</th>
                   </tr>
                 </thead>
                 <tbody>
                   {summary.suspicious_by_ip.slice(0, 6).map(ip => (
                     <tr key={ip.ip}>
                       <td className="px-3 py-2 font-mono">{ip.ip}</td>
-                      <td className="px-3 py-2">{ip.events}</td>
-                      <td className="px-3 py-2">{ip.hosts}</td>
+                      <td className="px-3 py-2">{fmtCount(ip.events)}</td>
+                      <td className="px-3 py-2">{fmtCount(ip.hosts)}</td>
                     </tr>
                   ))}
                 </tbody>

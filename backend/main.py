@@ -202,8 +202,9 @@ def row_reason(row: pd.Series) -> str:
     if severity and severity.lower() != "nan":
         reasons.append(f"severidad «{severity}»")
     # Result: éxito/fallo de la operación o código HTTP de respuesta.
-    raw_result = row.get("Result", "")
-    result_txt = "" if pd.isna(raw_result) else str(raw_result).strip()
+    # Se normaliza («404.0» → «404») para que la justificación muestre el
+    # valor tal cual está en el archivo.
+    result_txt = _result_label(row.get("Result", ""))
     if result_txt:
         reasons.append(f"resultado «{result_txt}»")
     desc = str(row.get("Event_Description", "") or "")
@@ -234,6 +235,22 @@ def _is_suspicious(row: pd.Series) -> bool:
 
 def _pct(count: int, total: int) -> float:
     return round((count / total) * 100, 1) if total else 0.0
+
+
+def _result_label(value: Any) -> str:
+    """Texto normalizado del campo Result.
+
+    Si la columna tiene celdas vacías pandas la lee como numérica y «404»
+    llega como «404.0»: se muestra y se compara sin el «.0» para que el
+    filtro, el dropdown y la detección de códigos HTTP casen con el valor
+    real del archivo. NaN y vacíos quedan como cadena vacía.
+    """
+    if value is None or (isinstance(value, float) and value != value):
+        return ""
+    text = str(value).strip()
+    if re.fullmatch(r"-?\d+\.0+", text):
+        text = text.split(".", 1)[0]
+    return text
 
 
 def _enrich_records(df: pd.DataFrame) -> List[Dict[str, Any]]:
@@ -421,13 +438,17 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
     severity_counts = _counts(raw_severity) if "Severity" in df.columns else {}
     # Resultado de la operación por registro: Success/Failure/Allowed o
     # código HTTP (200/404/500) según el origen del log.
-    result_counts = _counts(df["Result"]) if "Result" in df.columns else {}
+    if "Result" in df.columns:
+        _rc = df["Result"].map(_result_label)
+        result_counts = {str(k): int(v) for k, v in _rc[_rc != ""].value_counts().items()}
+    else:
+        result_counts = {}
     # Hosts por valor de Result: permite responder «¿de qué hosts son los 500?»
     # con recuentos exactos, igual que ya se hace por nivel de criticidad.
     result_hosts: Dict[str, Dict[str, int]] = {}
     if "Result" in df.columns and "Hostname" in df.columns and total:
         _res_tmp = pd.DataFrame({
-            "value": df["Result"].astype(str).str.strip(),
+            "value": df["Result"].map(_result_label),
             "host": df["Hostname"].astype(str),
         })
         _res_tmp = _res_tmp[
@@ -530,7 +551,7 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
     http_errors: Dict[str, Any] = {"codes": {}, "hosts": {}, "levels": {},
                                    "severities": {}, "total": 0, "examples": []}
     if "Result" in df.columns and total:
-        _res_str = df["Result"].astype(str).str.strip()
+        _res_str = df["Result"].map(_result_label)
         _err_mask = _res_str.str.fullmatch(r"[45]\d\d").fillna(False)
         _err_rows = df[_err_mask]
         if len(_err_rows):
@@ -548,7 +569,7 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
     suspicious_by_ip: List[Dict[str, Any]] = []
     if suspicious_events and "Hostname" in df.columns:
         suspicious_correlations = _counts(suspicious_rows["Hostname"], n=6)
-    if suspicious_events and "Source_IP" in df.columns:
+    if suspicious_events and "Source_IP" in df.columns and "Hostname" in df.columns:
         grouped_ip = (
             suspicious_rows.groupby("Source_IP")
             .agg(events=("Source_IP", "size"), hosts=("Hostname", "nunique"))
@@ -559,6 +580,19 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
             {"ip": str(ip), "events": int(r.events), "hosts": int(r.hosts)}
             for ip, r in grouped_ip.iterrows()
         ]
+    elif suspicious_events and "Source_IP" in df.columns:
+        # Sin columna Hostname no hay «alcance por host»: se cuenta el volumen
+        # por IP sin inventar hosts.
+        grouped_ip = (
+            suspicious_rows.groupby("Source_IP")
+            .size()
+            .sort_values(ascending=False)
+            .head(6)
+        )
+        suspicious_by_ip = [
+            {"ip": str(ip), "events": int(n), "hosts": 0}
+            for ip, n in grouped_ip.items()
+        ]
 
     # --- risk level with data-grounded justification -----------------------
     highest = next((lvl for lvl in LEVEL_ORDER if level_counts[lvl] > 0), None)
@@ -568,10 +602,14 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
     else:
         risk = highest
         sub = df[df["_level"] == highest]
-        top_events = sub["Event_ID"].value_counts().head(3)
-        top_hosts_high = sub["Hostname"].value_counts().head(3)
-        events_txt = ", ".join(f"{e} ({int(c)})" for e, c in top_events.items()) if len(top_events) else "n/d"
-        hosts_txt = ", ".join(f"{h} ({int(c)})" for h, c in top_hosts_high.items()) if len(top_hosts_high) else "n/d"
+        top_events = sub["Event_ID"].value_counts().head(3) if "Event_ID" in sub.columns else pd.Series(dtype=int)
+        top_hosts_high = sub["Hostname"].value_counts().head(3) if "Hostname" in sub.columns else pd.Series(dtype=int)
+        events_txt = ", ".join(f"{e} ({int(c)})" for e, c in top_events.items()) if len(top_events) else (
+            "n/d" if "Event_ID" in sub.columns else "n/d (el archivo no trae la columna Event_ID)"
+        )
+        hosts_txt = ", ".join(f"{h} ({int(c)})" for h, c in top_hosts_high.items()) if len(top_hosts_high) else (
+            "n/d" if "Hostname" in sub.columns else "n/d (el archivo no trae la columna Hostname)"
+        )
         risk_justification = (
             f"Nivel «{LEVEL_LABELS[highest]}»: {level_counts[highest]} de {total} registros "
             f"({_pct(level_counts[highest], total)}%) clasificados en este nivel. "
@@ -590,7 +628,7 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
             justification = "Sin registros en este nivel dentro de los datos analizados."
             examples: List[Dict[str, Any]] = []
         else:
-            top_events = sub["Event_ID"].value_counts().head(3)
+            top_events = sub["Event_ID"].value_counts().head(3) if "Event_ID" in sub.columns else pd.Series(dtype=int)
             top_hosts_lvl = sub["Hostname"].value_counts().head(3) if "Hostname" in sub.columns else pd.Series(dtype=int)
             ev_txt = ", ".join(f"{e} ×{int(c)}" for e, c in top_events.items())
             hs_txt = ", ".join(f"{h} ×{int(c)}" for h, c in top_hosts_lvl.items())
@@ -766,8 +804,7 @@ async def get_rows(
     else:
         work["_level"] = "bajo"
     work["_reason"] = work.apply(row_reason, axis=1) if len(work) else pd.Series([], dtype=str)
-    if len(work):
-        work["_suspicious"] = work.apply(_is_suspicious, axis=1)
+    work["_suspicious"] = work.apply(_is_suspicious, axis=1) if len(work) else pd.Series(dtype=bool)
 
     if level in LEVEL_ORDER:
         work = work[work["_level"] == level]
@@ -775,16 +812,26 @@ async def get_rows(
         work = work[work["_suspicious"]]
     if result.strip() and "Result" in work.columns:
         wanted = result.strip().lower()
-        work = work[work["Result"].astype(str).str.strip().str.lower() == wanted]
+        work = work[work["Result"].map(_result_label).str.lower() == wanted]
     if q.strip():
+        # La búsqueda libre se limita a las columnas originales del Excel: las
+        # derivadas (_level, _reason, _suspicious) no son datos del archivo y
+        # harían match con textos que el analista no ve en la tabla.
         needle = q.strip().lower()
-        mask = work.apply(
-            lambda r: any(needle in str(v).lower() for v in r.values), axis=1
-        )
-        work = work[mask]
+        search_cols = [c for c in work.columns if not str(c).startswith("_")]
+        if search_cols:
+            mask = work[search_cols].astype(str).apply(
+                lambda col: col.str.lower().str.contains(needle, regex=False, na=False)
+            ).any(axis=1)
+            work = work[mask]
 
     total_filtered = len(work)
     start = (page - 1) * page_size
+    if total_filtered and start >= total_filtered:
+        # Página fuera de rango (p. ej. el archivo nuevo tiene menos páginas
+        # que el anterior): se devuelve la última con datos en lugar de 0 filas.
+        page = (total_filtered - 1) // page_size + 1
+        start = (page - 1) * page_size
     page_df = work.iloc[start:start + page_size]
 
     out_cols = [c for c in df.columns if not str(c).startswith("_")]

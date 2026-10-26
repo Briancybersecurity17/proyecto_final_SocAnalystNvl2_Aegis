@@ -78,6 +78,18 @@ NARRATIVE_KEYS = [
 # ---------------------------------------------------------------------------
 # Contexto: todo lo que la IA puede "ver" (solo datos calculados)
 # ---------------------------------------------------------------------------
+def _result_text(value: Any) -> str:
+    """Texto del campo Result: «404.0» (float por celdas vacías) → «404»."""
+    if value is None:
+        return "—"
+    if isinstance(value, float) and value != value:  # NaN
+        return "—"
+    text = str(value).strip()
+    if re.fullmatch(r"-?\d+\.0+", text):
+        text = text.split(".", 1)[0]
+    return text or "—"
+
+
 def _evidence(example: Dict[str, Any]) -> Dict[str, Any]:
     """Normaliza un registro de ejemplo al formato de evidencia del informe."""
     return {
@@ -90,7 +102,7 @@ def _evidence(example: Dict[str, Any]) -> Dict[str, Any]:
         "description": str(example.get("Event_Description", "") or "—"),
         "severity": str(example.get("Severity", "") or "—"),
         # Resultado de la operación (Success/Failure/Allowed o código HTTP)
-        "result": str(example.get("Result", "") or "—"),
+        "result": _result_text(example.get("Result")),
         "reason": str(example.get("_reason", example.get("risk_reason", "")) or "—"),
     }
 

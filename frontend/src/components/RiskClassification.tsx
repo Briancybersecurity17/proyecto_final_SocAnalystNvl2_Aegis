@@ -4,6 +4,7 @@ import { useAnalysisStore, RiskLevelBlock } from '../store'
 import { DashboardSection } from './DashboardSection'
 import { EmptyState } from './EmptyState'
 import { stagger, cardIn } from '../motion'
+import { fmtCount, fmtPct } from '../charts'
 
 const LEVEL_ORDER = ['critico', 'alto', 'medio', 'bajo'] as const
 
@@ -34,7 +35,7 @@ const executiveNote = (lvl: string, b: RiskLevelBlock, total: number): string =>
   if (b.count === 0) {
     return `Sin registros en este nivel: nada de esta categoría entre los ${total} registros analizados.`
   }
-  const head = `${b.count} registros (${b.percentage}% del total)`
+  const head = `${fmtCount(b.count)} registros (${fmtPct(b.percentage)}% del total)`
   switch (lvl) {
     case 'critico':
       return `${head}: exigen atención inmediata; son la prioridad máxima del análisis.`
@@ -125,7 +126,7 @@ const RiskClassification: React.FC = () => {
                       {b.label}
                     </span>
                   </span>
-                  <span className="text-2xl font-bold" style={{ color: undefined }}>{b.count}</span>
+                  <span className="text-2xl font-bold" style={{ color: undefined }}>{fmtCount(b.count)}</span>
                 </div>
                 <div className="w-full bg-gray-200 rounded-full h-2 mt-3">
                   <motion.div
@@ -136,7 +137,7 @@ const RiskClassification: React.FC = () => {
                     style={{ backgroundColor: style.bar }}
                   />
                 </div>
-                <p className="text-xs text-gray-500 mt-1">{b.percentage}% de los registros</p>
+                <p className="text-xs text-gray-500 mt-1">{fmtPct(b.percentage)}% de los registros</p>
                 <p className="text-xs text-gray-400 mt-2">{expanded ? '▲ Clic para contraer' : '▼ Clic para ver justificación'}</p>
               </button>
 
@@ -176,12 +177,13 @@ const RiskClassification: React.FC = () => {
       <DashboardSection title="Resumen ejecutivo por nivel">
         <div className="overflow-auto">
           <table className="min-w-full text-sm border border-gray-200">
+            <caption className="sr-only">Resumen por nivel de riesgo: registros y porcentaje del total</caption>
             <thead className="bg-gray-100">
               <tr>
-                <th className="px-3 py-2 text-left">Nivel</th>
-                <th className="px-3 py-2 text-left">Registros</th>
-                <th className="px-3 py-2 text-left">% </th>
-                <th className="px-3 py-2 text-left">Qué significa</th>
+                <th scope="col" className="px-3 py-2 text-left">Nivel</th>
+                <th scope="col" className="px-3 py-2 text-left">Registros</th>
+                <th scope="col" className="px-3 py-2 text-left">%</th>
+                <th scope="col" className="px-3 py-2 text-left">Qué significa</th>
               </tr>
             </thead>
             <tbody>
@@ -199,8 +201,8 @@ const RiskClassification: React.FC = () => {
                     <td className="px-3 py-2">
                       <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase ${style.chip}`}>{b.label}</span>
                     </td>
-                    <td className="px-3 py-2 font-semibold">{b.count}</td>
-                    <td className="px-3 py-2">{b.percentage}%</td>
+                    <td className="px-3 py-2 font-semibold">{fmtCount(b.count)}</td>
+                    <td className="px-3 py-2">{fmtPct(b.percentage)}%</td>
                     <td className="px-3 py-2 text-gray-700 max-w-2xl">{executiveNote(lvl, b, summary.rows)}</td>
                   </motion.tr>
                 )
@@ -222,12 +224,13 @@ const RiskClassification: React.FC = () => {
           </p>
           <div className="overflow-auto">
             <table className="min-w-full text-sm border border-gray-200">
+              <caption className="sr-only">Correspondencia entre el valor original de Severity y el nivel de riesgo</caption>
               <thead className="bg-gray-100">
                 <tr>
-                  <th className="px-3 py-2 text-left">Valor original (Severity)</th>
-                  <th className="px-3 py-2 text-left">Nivel de riesgo</th>
-                  <th className="px-3 py-2 text-right">Registros</th>
-                  <th className="px-3 py-2 text-right">% del total</th>
+                  <th scope="col" className="px-3 py-2 text-left">Valor original (Severity)</th>
+                  <th scope="col" className="px-3 py-2 text-left">Nivel de riesgo</th>
+                  <th scope="col" className="px-3 py-2 text-right">Registros</th>
+                  <th scope="col" className="px-3 py-2 text-right">% del total</th>
                 </tr>
               </thead>
               <tbody>
@@ -245,8 +248,8 @@ const RiskClassification: React.FC = () => {
                         {LEVEL_LABELS[m.level] ?? m.level}
                       </span>
                     </td>
-                    <td className="px-3 py-2 text-right font-semibold">{m.count}</td>
-                    <td className="px-3 py-2 text-right">{m.percentage}%</td>
+                    <td className="px-3 py-2 text-right font-semibold">{fmtCount(m.count)}</td>
+                    <td className="px-3 py-2 text-right">{fmtPct(m.percentage)}%</td>
                   </motion.tr>
                 ))}
               </tbody>

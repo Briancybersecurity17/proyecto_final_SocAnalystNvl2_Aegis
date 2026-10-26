@@ -208,6 +208,9 @@ export const AssistantChat: React.FC = () => {
   const [error, setError] = useState<string | null>(null)
 
   const listRef = useRef<HTMLDivElement>(null)
+  // Contador de mensajes: `Date.now()` repetía clave si dos mensajes caían en
+  // el mismo milisegundo (el guard de `loading` es un estado, asíncrono).
+  const msgSeq = useRef(0)
   const ready = status === 'done' && !!analysisId
 
   // Sugerencias: la de Result solo aparece si el archivo tiene ese campo.
@@ -265,7 +268,7 @@ export const AssistantChat: React.FC = () => {
       if (!text || !analysisId || loading) return
       setError(null)
       setInput('')
-      setMessages(prev => [...prev, { id: `u${Date.now()}`, role: 'user', text }])
+      setMessages(prev => [...prev, { id: `u${++msgSeq.current}`, role: 'user', text }])
       setLoading(true)
       try {
         const res = await askQuestion(analysisId, text, {
@@ -273,7 +276,7 @@ export const AssistantChat: React.FC = () => {
           suspicious,
           nResults: 8,
         })
-        setMessages(prev => [...prev, { id: `a${Date.now()}`, role: 'assistant', text: res.answer, response: res }])
+        setMessages(prev => [...prev, { id: `a${++msgSeq.current}`, role: 'assistant', text: res.answer, response: res }])
       } catch (err) {
         const detail =
           (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ??

@@ -1,14 +1,15 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { cardIn, useCountUp } from '../motion';
+import { fmtCount } from '../charts';
 
 interface SummaryCardProps {
   label: string;
   value: React.ReactNode;
 }
 
-/** Cuenta hasta el valor cuando es numérico; si no, lo pinta tal cual. */
-const AnimatedValue: React.FC<{ value: number }> = ({ value }) => <>{useCountUp(value)}</>;
+/** Cuenta hasta el valor cuando es numérico (con miles); si no, lo pinta tal cual. */
+const AnimatedValue: React.FC<{ value: number }> = ({ value }) => <>{fmtCount(useCountUp(value))}</>;
 
 export const SummaryCard: React.FC<SummaryCardProps> = ({ label, value }) => (
   <motion.div

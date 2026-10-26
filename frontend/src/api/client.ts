@@ -50,7 +50,16 @@ export interface RowsResponse {
 
 export const getRows = async (
   analysisId: string,
-  opts: { page?: number; pageSize?: number; q?: string; level?: string; suspicious?: boolean; result?: string } = {},
+  opts: {
+    page?: number
+    pageSize?: number
+    q?: string
+    level?: string
+    suspicious?: boolean
+    result?: string
+    /** Cancela la petición anterior cuando los filtros cambian a toda velocidad. */
+    signal?: AbortSignal
+  } = {},
 ) => {
   const response = await API.get(`/analysis/${analysisId}/rows`, {
     params: {
@@ -61,6 +70,7 @@ export const getRows = async (
       suspicious: opts.suspicious ? 'true' : 'false',
       result: opts.result ?? '',
     },
+    signal: opts.signal,
   })
   return response.data as RowsResponse
 }

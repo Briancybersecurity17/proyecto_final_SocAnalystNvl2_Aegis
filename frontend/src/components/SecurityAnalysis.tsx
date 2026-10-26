@@ -14,6 +14,7 @@ import {
   TOOLTIP_STYLE,
   toCount,
   pct,
+  fmtCount,
   useChartMotion,
   ChartClickState,
 } from '../charts'
@@ -92,6 +93,9 @@ export const SecurityAnalysis: React.FC = () => {
     ? hostData.find(item => item.host === focusSuspHost) ?? null
     : null
   const totalSuspicious = toCount(summary.suspicious_events)
+  // La columna «Resultado» solo existe si el archivo la trae: si no, no se
+  // muestra, para no dar a entender que todos los eventos carecen de resultado.
+  const hasResult = summary.columns.includes('Result')
 
   const pickIp = (state: ChartClickState<{ ip?: string }>): void => {
     const ip = state.activePayload?.[0]?.payload?.ip
@@ -149,7 +153,7 @@ export const SecurityAnalysis: React.FC = () => {
                 cursor={BAR_CURSOR}
                 contentStyle={TOOLTIP_STYLE}
                 formatter={(value: number, name: string) => [
-                  `${toCount(value).toLocaleString()} ${name === 'Hosts distintos' ? 'hosts' : 'eventos'}`,
+                  `${fmtCount(value)} ${name === 'Hosts distintos' ? 'hosts' : 'eventos'}`,
                   name,
                 ]}
               />
@@ -164,7 +168,7 @@ export const SecurityAnalysis: React.FC = () => {
               >
                 {/* Recharts lee las celdas desde los hijos de cada serie; el i-ésimo
                     <Cell> se aplica al i-ésimo segmento (IP) de cada barra. */}
-                {selectionCells(ipData, focusIp, i => i.ip, '#f97316', true)}
+                {selectionCells(ipData, focusIp, i => i.ip, '#f97316', true, '#0891b2')}
               </Bar>
               <Bar
                 dataKey="events"
@@ -174,7 +178,7 @@ export const SecurityAnalysis: React.FC = () => {
                 animationDuration={chartMotion.duration}
                 label={{ position: 'right', fontSize: 10, fill: '#475569' }}
               >
-                {selectionCells(ipData, focusIp, i => i.ip, '#f97316', true)}
+                {selectionCells(ipData, focusIp, i => i.ip, '#f97316', true, '#f97316')}
               </Bar>
             </BarChart>
           </ResponsiveContainer>
@@ -194,8 +198,8 @@ export const SecurityAnalysis: React.FC = () => {
               key={`ip-${selectedIp.ip}`}
               title={`IP de origen ${selectedIp.ip}`}
               color="#f97316"
-              value={`${selectedIp.events.toLocaleString()} eventos`}
-              caption={`${pct(selectedIp.events, totalSuspicious)}% de los ${totalSuspicious.toLocaleString()} eventos sospechosos`}
+              value={`${fmtCount(selectedIp.events)} eventos`}
+              caption={`${pct(selectedIp.events, totalSuspicious)}% de los ${fmtCount(totalSuspicious)} eventos sospechosos`}
               rows={[
                 { label: 'Hosts distintos', value: `${selectedIp.hosts} hosts` },
                 { label: 'Del total sospechoso', value: `${pct(selectedIp.events, totalSuspicious)}%` },
@@ -223,7 +227,7 @@ export const SecurityAnalysis: React.FC = () => {
               <Tooltip
                 cursor={BAR_CURSOR}
                 contentStyle={TOOLTIP_STYLE}
-                formatter={(value: number) => [`${toCount(value).toLocaleString()} eventos`, 'Eventos sospechosos']}
+                formatter={(value: number) => [`${fmtCount(value)} eventos`, 'Eventos sospechosos']}
               />
               <Bar
                 dataKey="count"
@@ -253,8 +257,8 @@ export const SecurityAnalysis: React.FC = () => {
               key={`susp-host-${selectedSuspHost.host}`}
               title={`Host ${selectedSuspHost.host}`}
               color="#f97316"
-              value={`${selectedSuspHost.count.toLocaleString()} eventos`}
-              caption={`${pct(selectedSuspHost.count, totalSuspicious)}% de los ${totalSuspicious.toLocaleString()} eventos marcados como sospechosos`}
+              value={`${fmtCount(selectedSuspHost.count)} eventos`}
+              caption={`${pct(selectedSuspHost.count, totalSuspicious)}% de los ${fmtCount(totalSuspicious)} eventos marcados como sospechosos`}
               rows={LEVEL_ORDER.map(level => ({
                 label: LEVEL_LABELS[level],
                 value: `${toCount(summary.top_hosts_by_level?.[selectedSuspHost.host]?.[level])} eventos`,
@@ -275,16 +279,17 @@ export const SecurityAnalysis: React.FC = () => {
         )}
         <div className="overflow-auto border border-gray-200 rounded max-h-96">
           <table className="min-w-full text-sm">
+            <caption className="sr-only">Eventos sospechosos identificados en el archivo</caption>
             <thead className="bg-gray-100 sticky top-0">
               <tr>
-                <th className="px-3 py-2 text-left">Timestamp</th>
-                <th className="px-3 py-2 text-left">Host</th>
-                <th className="px-3 py-2 text-left">Event ID</th>
-                <th className="px-3 py-2 text-left">IP origen</th>
-                <th className="px-3 py-2 text-left">Descripción</th>
-                <th className="px-3 py-2 text-left">Resultado</th>
-                <th className="px-3 py-2 text-left">Nivel</th>
-                <th className="px-3 py-2 text-left">Justificación</th>
+                <th scope="col" className="px-3 py-2 text-left">Timestamp</th>
+                <th scope="col" className="px-3 py-2 text-left">Host</th>
+                <th scope="col" className="px-3 py-2 text-left">Event ID</th>
+                <th scope="col" className="px-3 py-2 text-left">IP origen</th>
+                <th scope="col" className="px-3 py-2 text-left">Descripción</th>
+                {hasResult && <th scope="col" className="px-3 py-2 text-left">Resultado</th>}
+                <th scope="col" className="px-3 py-2 text-left">Nivel</th>
+                <th scope="col" className="px-3 py-2 text-left">Justificación</th>
               </tr>
             </thead>
             <tbody>
@@ -303,9 +308,11 @@ export const SecurityAnalysis: React.FC = () => {
                   <td className="px-3 py-2 max-w-xs truncate" title={String(row.Event_Description ?? '')}>
                     {String(row.Event_Description ?? '—')}
                   </td>
-                  <td className="px-3 py-2 whitespace-nowrap">
-                    {String(row.Result ?? '—')}
-                  </td>
+                  {hasResult && (
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      {String(row.Result ?? '—')}
+                    </td>
+                  )}
                   <td className="px-3 py-2 whitespace-nowrap">
                     <span className={`px-2 py-0.5 rounded text-xs font-semibold ${LEVEL_BADGE[row.risk_level] ?? 'bg-gray-200'}`}>
                       {LEVEL_LABELS[row.risk_level] ?? row.risk_level}
@@ -318,12 +325,12 @@ export const SecurityAnalysis: React.FC = () => {
               ))}
               {loading && (
                 <tr>
-                  <td colSpan={8} className="px-3 py-6 text-center text-gray-500">Cargando…</td>
+                  <td colSpan={hasResult ? 8 : 7} className="px-3 py-6 text-center text-gray-500">Cargando…</td>
                 </tr>
               )}
               {data && !loading && data.rows.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-3 py-6 text-center text-gray-500">
+                  <td colSpan={hasResult ? 8 : 7} className="px-3 py-6 text-center text-gray-500">
                     No se encontraron eventos sospechosos
                   </td>
                 </tr>

@@ -19,17 +19,20 @@ export interface SelectionItem {
  * aplica por clase, no por estilo en línea, para que la regla de
  * `prefers-reduced-motion` de styles/index.css pueda dejarlo fijo.
  *
- * `keepSeriesFill`: en barras apiladas el color lo pone cada serie, así que la
- * celda no toca `fill` (pintaría todos los tramos del mismo color); solo
- * marca con contorno y atenúa el resto. En barras de un solo color sí se
- * pinta el `fill`.
+ * `keepSeriesFill`: en barras apiladas cada serie tiene su color, así que la
+ * celda se pinta con `seriesFill` (el color de la serie en la que se inserta)
+ * en lugar de con `color`, que queda reservado al halo y al contorno de la
+ * selección. Si `seriesFill` no llega, la celda se pinta con `color`: nunca
+ * se deja `fill` sin definir, porque Recharts entonces pinta el segmento de
+ * negro en lugar de heredar el color de la serie.
  */
 export function selectionCells<T extends Record<string, unknown>>(
   items: T[],
   selectedKey: string | null,
   getKey: (item: T) => string,
   color: string,
-  keepSeriesFill = false
+  keepSeriesFill = false,
+  seriesFill?: string
 ): React.ReactNode[] {
   return items.map(item => {
     const key = getKey(item)
@@ -38,7 +41,7 @@ export function selectionCells<T extends Record<string, unknown>>(
     return (
       <Cell
         key={key}
-        fill={keepSeriesFill ? undefined : color}
+        fill={keepSeriesFill ? seriesFill ?? color : color}
         fillOpacity={dimmed ? 0.3 : 1}
         stroke={
           active

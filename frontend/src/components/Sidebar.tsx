@@ -16,6 +16,8 @@ const icon = (path: React.ReactNode) => (
     strokeWidth="2"
     strokeLinecap="round"
     strokeLinejoin="round"
+    aria-hidden="true"
+    focusable="false"
   >
     {path}
   </svg>
@@ -103,6 +105,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ active, setActive }) => {
                   : 'text-gray-300 hover:bg-gray-700 hover:text-white'
               }`}
               onClick={() => setActive(s.id)}
+              aria-current={active === s.id ? 'page' : undefined}
             >
               {s.icon}
               <span className="ml-3 text-sm">{s.label}</span>
