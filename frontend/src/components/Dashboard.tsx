@@ -13,6 +13,7 @@ import {
   AXIS_TICK,
   GRID,
   TOOLTIP_STYLE,
+  TOOLTIP_ITEM_STYLE,
   BAR_CURSOR,
   LINE_CURSOR,
   CHART_STAGGER,
@@ -389,6 +390,7 @@ const Dashboard: React.FC = () => {
                   </Pie>
                   <Tooltip
                     contentStyle={TOOLTIP_STYLE}
+                    itemStyle={TOOLTIP_ITEM_STYLE}
                     formatter={(value: number, _name, item) => [
                       `${fmtCount(value)} registros (${pct(toCount(value), rows)}%)`,
                       item?.payload?.name ?? _name,

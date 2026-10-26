@@ -53,6 +53,21 @@ export const TOOLTIP_STYLE: CSSProperties = {
   fontFamily: "'JetBrains Mono', 'Courier New', monospace",
 }
 
+/**
+ * Estilo de cada línea («item») del tooltip.
+ *
+ * Hace falta porque Recharts pinta el texto de cada ítem con un estilo INLINE
+ * (`color: entry.color || '#000'`, ver DefaultTooltipContent). En los gráficos
+ * de ejes eso sale bien: el payload trae el color de la serie. Pero el Pie
+ * arma su payload a mano { name, value, payload, dataKey, type } SIN `color`,
+ * así que todo su tooltip cae en el fallback '#000': texto negro sobre el
+ * fondo #0a0518 → se ve como una mancha gris apagada, casi ilegible.
+ * El `color` de TOOLTIP_STYLE no lo salva porque vive en el contenedor y el
+ * `<li>` tiene su propio estilo inline (la herencia pierde). `itemStyle` se
+ * aplica después del fallback, así que gana.
+ */
+export const TOOLTIP_ITEM_STYLE: CSSProperties = { color: '#dce6f5' }
+
 /** Formato de eje/tick con separador de miles según locale del navegador. */
 export const AXIS_TICK = { fill: AXIS, fontSize: 12 }
 

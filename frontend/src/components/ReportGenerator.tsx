@@ -36,6 +36,21 @@ const fmt = (v: unknown): string => {
   return s.length > 26 ? `${s.slice(0, 26)}…` : s
 }
 
+/**
+ * Parte un texto enumerado en un tramo por paso («1) …», «2) …»).
+ *
+ * Hace falta porque `methodology` llega como UNA sola línea: el texto local lo
+ * construye concatenando los pasos con espacios (ver `ai_service.py`) y la IA
+ * a veces hace lo mismo. Como en HTML un <p> colapsa los saltos de línea, el
+ * informe se leía «1) …2) … 3) …» pegado. Separando en cada marcador numérico
+ * se renderiza un párrafo por paso, con o sin saltos de línea en origen.
+ */
+const splitSteps = (text: string): string[] =>
+  text
+    .split(/\s(?=\d{1,2}\)\s)/)
+    .map(step => step.trim())
+    .filter(Boolean)
+
 /* ------------------------------------------------------------------ */
 /* Estilos del PDF                                                     */
 /* ------------------------------------------------------------------ */
@@ -82,6 +97,28 @@ const pdf = StyleSheet.create({
   h3: { fontFamily: 'Helvetica-Bold', fontSize: 10, color: '#374151', marginTop: 8, marginBottom: 3 },
   para: { fontSize: 9.5, lineHeight: 15, marginBottom: 6, textAlign: 'justify' },
   small: { fontSize: 8.5, color: '#4b5563', lineHeight: 13 },
+
+  /* Resumen ejecutivo: distribución por criticidad como barra apilada. */
+  sectionLabel: { fontSize: 8, color: '#6b7280', letterSpacing: 0.6, marginBottom: 5 },
+  stackBar: {
+    flexDirection: 'row',
+    height: 10,
+    borderRadius: 3,
+    overflow: 'hidden',
+    backgroundColor: '#f3f4f6',
+  },
+  stackLegend: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 6 },
+  legendItem: { flexDirection: 'row', alignItems: 'center', marginRight: 16, marginBottom: 3 },
+  legendDot: { width: 7, height: 7, borderRadius: 2, marginRight: 4 },
+  legendText: { fontSize: 8.5, color: '#374151' },
+  aiBox: {
+    backgroundColor: '#eff6ff',
+    borderLeftWidth: 3,
+    borderLeftColor: '#3b82f6',
+    padding: 8,
+    marginTop: 6,
+  },
+  aiLabel: { fontSize: 8, color: '#1d4ed8', fontFamily: 'Helvetica-Bold', marginBottom: 3 },
 
   critTable: { marginTop: 6 },
   critHeader: { flexDirection: 'row', backgroundColor: '#0f2d4f', padding: 6 },
@@ -222,11 +259,53 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
 
         {/* 1. Resumen ejecutivo */}
         <Text style={pdf.h1}>1. Resumen ejecutivo</Text>
-        <Text style={pdf.para}>{report.executive_summary}</Text>
+        {LEVEL_ORDER.some((lvl) => (summary.risk_levels?.[lvl]?.count ?? 0) > 0) && (
+          <View>
+            <Text style={pdf.sectionLabel}>DISTRIBUCIÓN POR CRITICIDAD</Text>
+            {/* Barra apilada al 100%: `flexGrow` proporcional al porcentaje de
+                cada nivel, así el ancho no depende de redondeos. */}
+            <View style={pdf.stackBar}>
+              {LEVEL_ORDER.map((lvl) => {
+                const share = summary.risk_levels?.[lvl]?.percentage ?? 0
+                if (share <= 0) return null
+                return (
+                  <View
+                    key={lvl}
+                    style={{ flexGrow: share, backgroundColor: LEVEL_META[lvl].color }}
+                  />
+                )
+              })}
+            </View>
+            <View style={pdf.stackLegend}>
+              {LEVEL_ORDER.map((lvl) => {
+                const block = summary.risk_levels?.[lvl]
+                return (
+                  <View key={lvl} style={pdf.legendItem}>
+                    <View style={[pdf.legendDot, { backgroundColor: LEVEL_META[lvl].color }]} />
+                    <Text style={pdf.legendText}>
+                      {`${LEVEL_META[lvl].label} ${fmtCount(block?.count ?? 0)} (${fmtPct(block?.percentage ?? 0)}%)`}
+                    </Text>
+                  </View>
+                )
+              })}
+            </View>
+          </View>
+        )}
+        <Text style={pdf.para}>{summary.risk_justification}</Text>
+        {report.source === 'llm' && (
+          <View style={pdf.aiBox}>
+            <Text style={pdf.aiLabel}>Lectura del análisis</Text>
+            <Text style={pdf.para}>{report.executive_summary}</Text>
+          </View>
+        )}
 
         {/* 2. Alcance y metodología */}
         <Text style={pdf.h1}>2. Alcance y metodología</Text>
-        <Text style={pdf.para}>{report.methodology}</Text>
+        {splitSteps(report.methodology).map((step, i) => (
+          <Text key={`met-${i}`} style={pdf.para}>
+            {step}
+          </Text>
+        ))}
         {summary.ai_insights && summary.ai_insights.length > 0 && (
           <View>
             <Text style={pdf.h2}>Observaciones del análisis asistido por IA</Text>
@@ -480,7 +559,7 @@ const ReportGenerator: React.FC = () => {
 
       {report && (
         <div className="panel mx-auto max-w-4xl">
-        <article className="m-2 border-t-4 border-primary bg-white p-6 shadow-[0_18px_40px_-16px_rgba(0,0,0,0.9)] md:p-10">
+        <article className="m-2 border-t-4 border-primary bg-white text-gray-900 p-6 shadow-[0_18px_40px_-16px_rgba(0,0,0,0.9)] md:p-10">
           {/* Portada */}
           <header className="border-b pb-6 mb-6">
             <p className="text-xs uppercase tracking-widest text-primary font-semibold">Comunidad Dojo · SOC Analyst Nivel 2</p>
@@ -510,12 +589,78 @@ const ReportGenerator: React.FC = () => {
 
           <section className="mb-6">
             <h2 className="text-xl font-bold text-gray-900 border-b border-gray-200 pb-1 mb-2">1. Resumen ejecutivo</h2>
-            <p className="text-sm leading-relaxed text-gray-700 text-justify">{report.executive_summary}</p>
+            {/* La distribución sale de datos estructurados (summary.risk_levels),
+                no del texto libre: así el párrafo de abajo no repite lo que la
+                grilla de cabecera ya informa. */}
+            {LEVEL_ORDER.some(lvl => (summary.risk_levels?.[lvl]?.count ?? 0) > 0) && (
+              <div className="mb-4">
+                <p className="text-[11px] uppercase tracking-wide text-gray-500 font-semibold mb-2">
+                  Distribución por criticidad
+                </p>
+                <div className="flex h-3 w-full overflow-hidden rounded-sm bg-gray-100">
+                  {LEVEL_ORDER.map(lvl => {
+                    const share = summary.risk_levels?.[lvl]?.percentage ?? 0
+                    if (share <= 0) return null
+                    return (
+                      <div
+                        key={lvl}
+                        className="h-full"
+                        style={{ width: `${share}%`, backgroundColor: LEVEL_META[lvl].color }}
+                        title={`${LEVEL_META[lvl].label}: ${fmtCount(summary.risk_levels?.[lvl]?.count ?? 0)} registros (${fmtPct(share)}%)`}
+                      />
+                    )
+                  })}
+                </div>
+                <ul className="mt-2 flex flex-wrap gap-x-5 gap-y-1">
+                  {LEVEL_ORDER.map(lvl => {
+                    const block = summary.risk_levels?.[lvl]
+                    return (
+                      <li key={lvl} className="flex items-center gap-1.5 text-xs text-gray-600">
+                        <span
+                          className="inline-block h-2.5 w-2.5 rounded-sm"
+                          style={{ backgroundColor: LEVEL_META[lvl].color }}
+                        />
+                        <span className="font-semibold text-gray-800">{LEVEL_META[lvl].label}</span>
+                        <span>
+                          {fmtCount(block?.count ?? 0)} · {fmtPct(block?.percentage ?? 0)}%
+                        </span>
+                      </li>
+                    )
+                  })}
+                </ul>
+              </div>
+            )}
+
+            {summary.risk_justification && (
+              <p className="text-sm leading-relaxed text-gray-700 text-justify">
+                {summary.risk_justification}
+              </p>
+            )}
+
+            {report.source === 'llm' && (
+              <div className="mt-3 rounded border border-blue-100 bg-blue-50/50 p-3">
+                <p className="text-[11px] uppercase tracking-wide text-blue-800 font-semibold mb-1">
+                  Lectura del análisis
+                </p>
+                <p className="text-sm leading-relaxed text-gray-700 text-justify">
+                  {report.executive_summary}
+                </p>
+              </div>
+            )}
           </section>
 
           <section className="mb-6">
             <h2 className="text-xl font-bold text-gray-900 border-b border-gray-200 pb-1 mb-2">2. Alcance y metodología</h2>
-            <p className="text-sm leading-relaxed text-gray-700 text-justify">{report.methodology}</p>
+            <div className="space-y-1.5">
+              {splitSteps(report.methodology).map((step, i) => (
+                <p
+                  key={i}
+                  className="text-sm leading-relaxed text-gray-700 text-justify whitespace-pre-line"
+                >
+                  {step}
+                </p>
+              ))}
+            </div>
             {summary.ai_insights && summary.ai_insights.length > 0 && (
               <div className="mt-3 rounded border border-blue-100 bg-blue-50/50 p-3">
                 <p className="text-[11px] uppercase tracking-wide text-blue-800 font-semibold mb-2">
