@@ -824,17 +824,17 @@ async def get_analysis(analysis_id: str):
 @app.get("/api/analysis/{analysis_id}/rows")
 async def get_rows(
     analysis_id: str,
+    request: Request,
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=200),
-    q: str = Query("", max_length=200),
-    level: str = Query("", description="critico|alto|medio|bajo"),
-    suspicious: bool = Query(False),
-    result: str = Query("", description="valor exacto del campo Result (Success, Failure, Allowed, 200…)"),
 ):
-    """Paginated view of the imported records (visualisation of the Excel).
+    """Vista paginada de los registros importados (visualización del Excel).
 
-    Supports a free-text search (q), a risk-level filter, a "suspicious only"
-    toggle and an exact Result filter – everything is computed server-side.
+    El juego completo de filtros (ventana from/to, nivel, sospechosos,
+    result, texto libre q y facetas por columna) es el mismo que comparten
+    `/summary` y `/facets`: lo traduce `parse_filters` y lo aplica
+    `apply_filters`, de modo que la tabla enseña exactamente las mismas
+    filas que los KPI del panel. Solo la paginación es exclusiva de aquí.
     """
     if analysis_id not in analysis_store:
         raise HTTPException(status_code=404, detail="Analysis not found")
@@ -842,33 +842,18 @@ async def get_rows(
     if df is None:
         raise HTTPException(status_code=409, detail="El análisis aún no está listo")
 
-    work = df.copy()
-    # classification columns (recomputed on request – cheap for these sizes)
-    if "Severity" in work.columns:
-        work["_level"] = work["Severity"].map(normalize_level)
-    else:
-        work["_level"] = "bajo"
-    work["_reason"] = work.apply(row_reason, axis=1) if len(work) else pd.Series([], dtype=str)
-    work["_suspicious"] = work.apply(_is_suspicious, axis=1) if len(work) else pd.Series(dtype=bool)
+    try:
+        params = parse_filters(request, df)
+    except ValueError as exc:
+        # Filtro imposible (nivel fuera de catálogo, ventana invertida o
+        # fecha ilegible): 400 con el motivo, igual que en /summary, en vez
+        # del silencio anterior que devolvía todas las filas (R16).
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    if level in LEVEL_ORDER:
-        work = work[work["_level"] == level]
-    if suspicious:
-        work = work[work["_suspicious"]]
-    if result.strip() and "Result" in work.columns:
-        wanted = result.strip().lower()
-        work = work[work["Result"].map(_result_label).str.lower() == wanted]
-    if q.strip():
-        # La búsqueda libre se limita a las columnas originales del Excel: las
-        # derivadas (_level, _reason, _suspicious) no son datos del archivo y
-        # harían match con textos que el analista no ve en la tabla.
-        needle = q.strip().lower()
-        search_cols = [c for c in work.columns if not str(c).startswith("_")]
-        if search_cols:
-            mask = work[search_cols].astype(str).apply(
-                lambda col: col.str.lower().str.contains(needle, regex=False, na=False)
-            ).any(axis=1)
-            work = work[mask]
+    # El DataFrame del store ya viene enriquecido desde la ingesta (_level,
+    # _reason, _suspicious y Timestamp tipado) y apply_filters no muta su
+    # entrada: ni se copia ni se recalcula nada por petición (R3).
+    work = apply_filters(df, params)
 
     total_filtered = len(work)
     start = (page - 1) * page_size

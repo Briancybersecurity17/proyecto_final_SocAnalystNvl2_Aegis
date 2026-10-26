@@ -14,6 +14,34 @@ def test_columnas_derivadas_no_filtran_en_rows(client, analysis_id):
     assert {"risk_level", "risk_reason", "suspicious"} <= set(res["rows"][0])
 
 
+# Red de regresión del refactor de /rows (Tarea 6): protege que los 4 filtros
+# de siempre casen exactamente igual con los mismos datos, tanto antes como
+# después de delegar en el motor compartido `filters`. Debe pasar SIEMPRE.
+def test_rows_refactor_es_identico(client, analysis_id):
+    base = f"/api/analysis/{analysis_id}/rows"
+    todos = client.get(base, params={"page_size": 200}).json()
+    assert todos["total"] == 12 and todos["total_rows"] == 12
+
+    por_nivel = client.get(base, params={"page_size": 200, "level": "critico"}).json()
+    assert por_nivel["total"] == 2
+
+    sospechosos = client.get(base, params={"page_size": 200, "suspicious": "true"}).json()
+    assert sospechosos["total"] >= 1
+
+    por_result = client.get(base, params={"page_size": 200, "result": "Failure"}).json()
+    assert por_result["total"] == 6
+
+    por_q = client.get(base, params={"page_size": 200, "q": "jsmith"}).json()
+    assert por_q["total"] == 4
+
+def test_q_no_busca_en_columnas_derivadas(client, analysis_id):
+    # La búsqueda libre no debe colar la clasificación interna: «critico» solo
+    # existe en _level (derivada), no en los datos del archivo que ve el analista.
+    res = client.get(f"/api/analysis/{analysis_id}/rows",
+                     params={"page_size": 200, "q": "critico"}).json()
+    assert res["total"] == 0      # "critico" solo aparece en _level, no en los datos
+
+
 def test_summary_sin_filtros_es_identico_al_global(client, analysis_id):
     res = client.get(f"/api/analysis/{analysis_id}/summary").json()
     assert res["total"] == 12 and res["filtered_total"] == 12 and res["rows"] == 12
