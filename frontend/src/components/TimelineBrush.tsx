@@ -110,6 +110,15 @@ export const TimelineBrush: React.FC = () => {
     const onMove = (e: MouseEvent) => {
       const drag = dragRef.current
       if (!drag) return
+      // Sin ningún botón pulsado el mouseup se perdió fuera de la página (se
+      // soltó sobre DevTools o con alt-tab): se cancela el gesto para que no
+      // reanude la región ni pueda commitear un `setRange` en un clic
+      // posterior. El arrastre en curso mantiene el botón pulsado (buttons≠0).
+      if (e.buttons === 0) {
+        dragRef.current = null
+        setDragRange(null)
+        return
+      }
       const pts = pointsRef.current
       const rect = containerRef.current?.getBoundingClientRect()
       if (!rect || !pts.length) return
@@ -151,11 +160,26 @@ export const TimelineBrush: React.FC = () => {
       setRange(startIso.from, endIso.to)
     }
 
+    // Un press nuevo con un gesto aún vivo significa que su mouseup nunca
+    // llegó a la página: se cancela en fase de captura de `window` (previa a
+    // los handlers de Recharts, que se registran en la raíz de React) para
+    // que ese gesto viejo no pueda commitear un `setRange` en un clic
+    // posterior; si el press es sobre la tira, `startDrag` instala acto
+    // seguido el gesto fresco. No se cancela en `blur` a propósito: acercar
+    // el puntero a las DevTools para inspeccionar no debe abortar el arrastre.
+    const cancelStaleDrag = () => {
+      if (!dragRef.current) return
+      dragRef.current = null
+      setDragRange(null)
+    }
+
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
+    window.addEventListener('mousedown', cancelStaleDrag, true)
     return () => {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
+      window.removeEventListener('mousedown', cancelStaleDrag, true)
     }
   }, [])
 
