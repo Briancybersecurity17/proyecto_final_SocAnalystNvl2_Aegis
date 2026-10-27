@@ -187,10 +187,10 @@ const DataTable: React.FC = () => {
   }, [filtersKey])
 
   // Un solo `/rows` por cambio de filtros: si `filtersKey` cambió en esta
-  // pasada y la tabla está en página >1, el fetch se salta — el efecto de
-  // reset de arriba ya llamó `setPage(1)` y su `fetchRows(page=1)` es el
-  // único `/rows` del cambio. Con filtros intactos (paginación a mano) o en
-  // página 1 el fetch ocurre como siempre.
+  // pasada y la tabla está en página >1, el fetch se salta — el reset de
+  // arriba pone la página en 1 y este mismo efecto se re-ejecuta con
+  // `page=1`, cuyo fetch es el único `/rows` del cambio. Con filtros intactos
+  // (paginación a mano) o en página 1 el fetch ocurre como siempre.
   const prevFiltersKey = useRef(filtersKey)
   useEffect(() => {
     const filtersCambiaron = prevFiltersKey.current !== filtersKey

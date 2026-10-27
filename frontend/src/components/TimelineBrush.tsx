@@ -138,6 +138,9 @@ export const TimelineBrush: React.FC = () => {
     }
 
     const onUp = (e: MouseEvent) => {
+      // Solo el botón izquierdo completa el gesto: un mouseup de otro botón
+      // (p. ej. clic derecho) no debe commitear un filtro.
+      if (e.button !== 0) return
       const drag = dragRef.current
       if (!drag) return
       dragRef.current = null
@@ -193,6 +196,9 @@ export const TimelineBrush: React.FC = () => {
 
   /** Pulsación sobre un tramo: inicia el gesto y pinta su región. */
   const startDrag = (info: { activeLabel?: string }, e: React.MouseEvent): void => {
+    // Solo el botón izquierdo inicia el gesto: un clic derecho no debe
+    // pintar región ni comerse el menú contextual con preventDefault.
+    if (e.button !== 0) return
     // Sin preventDefault el navegador seleccionaría el texto del eje al
     // arrastrar; la info de Recharts (activo bajo el cursor) no se ve afectada.
     e.preventDefault()

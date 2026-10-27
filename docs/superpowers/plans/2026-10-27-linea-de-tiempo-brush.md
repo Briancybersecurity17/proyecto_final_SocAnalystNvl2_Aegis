@@ -1,4 +1,4 @@
-﻿# Línea de tiempo con brush (sub‑proyecto 2) — Plan de implementación
+# Línea de tiempo con brush (sub‑proyecto 2) — Plan de implementación
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
