@@ -68,7 +68,7 @@ def parse_filters(
     df: pd.DataFrame,
     reserved: set[str] | None = None,
 ) -> FilterParams:
-    """Traduce los parámetros de la query a `FilterParams` (spec §4.4).
+    """Traduce los parámetros de la query a `FilterParams` (spec §4.2).
 
     Separa los canónicos (ventana, nivel, sospechosos, result, q) del resto,
     que solo se aceptan como faceta si el nombre coincide exactamente con una
@@ -165,9 +165,10 @@ def apply_filters(
 ) -> pd.DataFrame:
     """Devuelve `df` con los filtros activos combinados con AND.
 
-    Cada filtro replica la regla de `/rows` (main.py:809-826) para que la
-    tabla, el resumen y el panel de facetas enseñen las mismas filas: si las
-    reglas divergieran, los KPI no cuadrarían con lo que ve el analista.
+    Cada filtro replica las reglas históricas de `/rows` (ahora delegadas
+    aquí) para que la tabla, el resumen y el panel de facetas enseñen las
+    mismas filas: si las reglas divergieran, los KPI no cuadrarían con lo
+    que ve el analista.
 
     `skip_fields` es un conjunto de nombres de campo cuyo filtro NO se
     aplica, para que el panel de facetas recunte cada campo ignorando la
@@ -209,7 +210,7 @@ def apply_filters(
     if p.suspicious and not saltar("_suspicious"):
         df = df[df["_suspicious"]]
 
-    # 4. Result con la misma guardia que /rows:813-815, para que un archivo
+    # 4. Result con la misma guardia que aplicaba /rows, para que un archivo
     #    sin columna Result se filtre en silencio en vez de reventar.
     #    Su faceta homónima tiene el canónico `result` como filtro propio
     #    (ver saltar): con ?result=Failure activo la faceta sigue ofreciendo
@@ -230,7 +231,7 @@ def apply_filters(
     # 5. Texto libre solo sobre columnas originales del Excel: las derivadas
     #    (_level, _reason, _suspicious) no son datos del archivo y harían
     #    match con textos que el analista no ve en la tabla (misma regla
-    #    que /rows:816-826).
+    #    que aplicaba /rows).
     if p.q.strip():
         needle = p.q.strip().lower()
         search_cols = [c for c in df.columns if not str(c).startswith("_")]

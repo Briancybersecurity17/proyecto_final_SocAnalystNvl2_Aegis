@@ -888,7 +888,7 @@ async def get_rows(
 
 @app.get("/api/analysis/{analysis_id}/summary")
 async def get_scoped_summary(analysis_id: str, request: Request):
-    """Resumen completo del análisis acotado por los filtros de la URL (spec §4.4).
+    """Resumen completo del análisis acotado por los filtros de la URL (spec §4.3).
 
     Aplica exactamente los mismos filtros que /rows para que los KPI
     coincidan con lo que el analista ve en la tabla: si divergieran, el
