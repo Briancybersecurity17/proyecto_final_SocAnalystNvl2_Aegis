@@ -131,3 +131,23 @@ def test_sin_reserved_la_paginacion_sigue_puediendo_ser_faceta(df_con_columna_pa
     params = parse_filters(_peticion("page=2"), df_con_columna_page)
     assert params.facets == {"page": ["2"]}
 
+
+def test_ventana_to_fin_de_tramo_cubre_el_dia_completo():
+    df = pd.DataFrame({
+        "Log_ID": [1, 2, 3, 4],
+        "Timestamp": pd.to_datetime([
+            "2026-01-12 00:00:00",
+            "2026-01-12 12:00:00",
+            "2026-01-12 23:59:59.999",
+            "2026-01-13 00:00:00",
+        ], format="mixed"),
+    })
+    out = apply_filters(
+        df,
+        FilterParams(
+            from_dt=pd.Timestamp("2026-01-12"),
+            to_dt=pd.Timestamp("2026-01-12 23:59:59.999"),
+        ),
+    )
+    assert sorted(out["Log_ID"].tolist()) == [1, 2, 3]
+
