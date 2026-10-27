@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { SummaryCard } from './SummaryCard'
 import { DashboardSection } from './DashboardSection'
 import { EmptyState } from './EmptyState'
+import { TimelineBrush } from './TimelineBrush'
 import { ChartInsight, selectionCells } from './ChartTools'
 import { useScopedSummary } from '../hooks/useScopedSummary'
 import { selectIsFiltered, useFilterStore } from '../store/filters'
@@ -509,6 +510,9 @@ const Dashboard: React.FC = () => {
               </>
             )}
           </DashboardSection>
+
+          {/* Tira temporal: histograma global (control) sobre la serie */}
+          <TimelineBrush />
 
           {/* Actividad temporal: hora si el backend la aporta, si no día */}
           <DashboardSection title="Actividad temporal por criticidad">
