@@ -97,9 +97,28 @@ const DataTable: React.FC = () => {
 
   // Búsqueda con debounce: una petición por pausa de tecleo, no por tecla.
   useEffect(() => {
-    const timer = window.setTimeout(() => useFilterStore.getState().setQ(qInput), 300)
+    // Época viva al programar el timer: si «Limpiar filtros» o el reset de
+    // análisis la incrementa antes de que el timer dispare, el callback se
+    // abstiene y no reescribe un `q` ya limpiado (cinturón y tiradores).
+    const epochAlProgramar = useFilterStore.getState().clearEpoch
+    const timer = window.setTimeout(() => {
+      if (useFilterStore.getState().clearEpoch !== epochAlProgramar) return
+      useFilterStore.getState().setQ(qInput)
+    }, 300)
     return () => window.clearTimeout(timer)
   }, [qInput])
+
+  // Vaciar el input al CAMBIAR la época («Limpiar filtros» o reset de
+  // análisis): cierra la ventana en la que el texto tecleado queda en el
+  // input con el store ya limpio. El ref evita el disparo inicial al montar:
+  // al volver a la sección el input debe reflejar el `q` vigente.
+  const clearEpoch = useFilterStore(s => s.clearEpoch)
+  const prevClearEpoch = useRef(clearEpoch)
+  useEffect(() => {
+    if (prevClearEpoch.current === clearEpoch) return
+    prevClearEpoch.current = clearEpoch
+    setQInput('')
+  }, [clearEpoch])
 
   // Limpieza externa: cuando el chip «Búsqueda ×» o «Limpiar filtros» vacían
   // el `q` del store, el input también se vacía. Se reacciona solo al paso de

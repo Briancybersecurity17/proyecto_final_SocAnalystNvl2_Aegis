@@ -22,6 +22,13 @@ export type FilterState = {
   q: string
   /** Facetas por campo: 'Hostname' → ['DC-01', 'WS-018'] (OR dentro del campo). */
   facets: Record<string, string[]>
+  /**
+   * Época de limpieza: 0 al arrancar; +1 en cada `clearAll` y `reset`.
+   * Sirve para que los timers pendientes (p. ej. el debounce de `q`)
+   * detecten que fueron invalidados por una limpieza total y no reescriban
+   * un estado ya vaciado.
+   */
+  clearEpoch: number
 }
 
 export type FilterActions = {
@@ -46,6 +53,7 @@ const EMPTY_FILTERS: FilterState = {
   result: '',
   q: '',
   facets: {},
+  clearEpoch: 0,
 }
 
 export const useFilterStore: UseBoundStore<StoreApi<FilterState & FilterActions>> =
@@ -67,8 +75,10 @@ export const useFilterStore: UseBoundStore<StoreApi<FilterState & FilterActions>
     setQ: (q) => set({ q }),
     setResult: (result) => set({ result }),
     setSuspicious: (suspicious) => set({ suspicious }),
-    clearAll: () => set({ ...EMPTY_FILTERS }),
-    reset: () => set({ ...EMPTY_FILTERS }),
+    // La época avanza en ambas limpiezas totales: los timers pendientes
+    // (debounce de `q`) comparan contra el valor vivo y se abstienen.
+    clearAll: () => set((s) => ({ ...EMPTY_FILTERS, clearEpoch: s.clearEpoch + 1 })),
+    reset: () => set((s) => ({ ...EMPTY_FILTERS, clearEpoch: s.clearEpoch + 1 })),
   }))
 
 /**
