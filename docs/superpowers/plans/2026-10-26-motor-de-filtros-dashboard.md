@@ -110,7 +110,7 @@ Ojo con dos trampas que ya están resueltas arriba:
 - Consumes: nada (primer tarea).
 - Produce: `FilterParams(from_dt: datetime | None, to_dt: datetime | None, level: str, suspicious: bool, result: str, q: str, facets: dict[str, list[str]])` y `apply_filters(df: pd.DataFrame, p: FilterParams) -> pd.DataFrame`. Las tareas 4, 5 y 6 las usan tal cual.
 
-- [ ] **Step 1: Crear la infraestructura de tests (una vez)**
+- [x] **Step 1: Crear la infraestructura de tests (una vez)**
 
 Crear `backend/tests/__init__.py` vacío y `backend/tests/conftest.py` con:
 
@@ -125,7 +125,7 @@ Instalar pytest en el venv del backend:
 backend/.venv/Scripts/python.exe -m pip install pytest
 ```
 
-- [ ] **Step 2: Escribir el test fallido**
+- [x] **Step 2: Escribir el test fallido**
 
 `backend/tests/test_filters.py` — fixtures y el primer grupo de tests. El `df` se construye con pandas directamente (sin Excel) para que sea rápido:
 
@@ -198,7 +198,7 @@ def test_valores_de_una_misma_faceta_se_combinan_con_or(df):
     assert sorted(out["Log_ID"]) == [1, 3, 5]
 ```
 
-- [ ] **Step 3: Ejecutar y verificar que falla**
+- [x] **Step 3: Ejecutar y verificar que falla**
 
 ```bash
 backend/.venv/Scripts/python.exe -m pytest backend/tests/test_filters.py -v
@@ -206,7 +206,7 @@ backend/.venv/Scripts/python.exe -m pytest backend/tests/test_filters.py -v
 
 Esperado: `ModuleNotFoundError: No module named 'filters'` (o `ImportError`).
 
-- [ ] **Step 4: Implementar `backend/filters.py`**
+- [x] **Step 4: Implementar `backend/filters.py`**
 
 Firmas exactas:
 
@@ -232,7 +232,7 @@ fuera solo si hay filtro), `_level`, `_suspicious`, `_result_label` insensible a
 **Importante:** importar `_result_label` desde `main` dentro de la función (no a nivel de módulo)
 para evitar el import circular `main ↔ filters`.
 
-- [ ] **Step 5: Ejecutar y verificar que pasa**
+- [x] **Step 5: Ejecutar y verificar que pasa**
 
 ```bash
 backend/.venv/Scripts/python.exe -m pytest backend/tests/test_filters.py -v
@@ -240,7 +240,7 @@ backend/.venv/Scripts/python.exe -m pytest backend/tests/test_filters.py -v
 
 Esperado: todos PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add backend/filters.py backend/tests/
@@ -259,7 +259,7 @@ git commit -m "feat: apply_filters con ventana temporal, facetas y texto libre"
 - Consumes: `FilterParams`, `apply_filters` (Tarea 1).
 - Produce: `FacetField(name: str, label: str, distinct: int, values: list[dict])` y `detect_facets(df: pd.DataFrame) -> list[FacetField]`. La Tarea 5 las usa tal cual.
 
-- [ ] **Step 1: Escribir el test fallido**
+- [x] **Step 1: Escribir el test fallido**
 
 ```python
 def test_detect_facets_incluye_columnas_categoricas(df):
@@ -281,7 +281,7 @@ def test_detect_facets_trae_valores_con_conteo(df):
     assert {"value": "DC-01", "count": 2} in campo.values   # sin depender del desempate
 ```
 
-- [ ] **Step 2: Ejecutar y verificar que falla**
+- [x] **Step 2: Ejecutar y verificar que falla**
 
 ```bash
 backend/.venv/Scripts/python.exe -m pytest backend/tests/test_filters.py -v
@@ -289,7 +289,7 @@ backend/.venv/Scripts/python.exe -m pytest backend/tests/test_filters.py -v
 
 Esperado: `ImportError: cannot import name 'detect_facets'`.
 
-- [ ] **Step 3: Implementar `detect_facets` y `FacetField` en `backend/filters.py`**
+- [x] **Step 3: Implementar `detect_facets` y `FacetField` en `backend/filters.py`**
 
 ```python
 @dataclass
@@ -308,13 +308,13 @@ media de `astype(str)` es ≤ 40. Siempre se añaden `_level` (label «Criticida
 (label «Solo sospechosos»). Orden: primero las columnas del archivo en orden de aparición, luego
 las derivadas.
 
-- [ ] **Step 4: Ejecutar y verificar que pasa**
+- [x] **Step 4: Ejecutar y verificar que pasa**
 
 ```bash
 backend/.venv/Scripts/python.exe -m pytest backend/tests/test_filters.py -v
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/filters.py backend/tests/test_filters.py
@@ -333,14 +333,14 @@ git commit -m "feat: detect_facets descubre columnas categoricas del archivo"
 - Consumes: `normalize_level`, `row_reason`, `_is_suspicious` (ya existen en `main`).
 - Produce: `analysis_store[id]["dataframe"]` con columnas `_level`, `_reason`, `_suspicious` y `Timestamp` en `datetime64`. Las Tareas 4, 5 y 6 dependen de esto.
 
-- [ ] **Step 1: Crear fixtures compartidas de endpoint en `conftest.py`**
+- [x] **Step 1: Crear fixtures compartidas de endpoint en `conftest.py`**
 
 Añadir a `backend/tests/conftest.py`: función `xlsx_bytes()` que construye el dataset sintético
 de 12 filas (tabla de arriba) con pandas y lo devuelve como `BytesIO` de `.xlsx`, más los
 fixtures `client` (`TestClient(app)`) y `analysis_id` (hace `POST /api/analyze` con el archivo,
 pulea `GET /api/analysis/{id}` hasta `done`, y devuelve el id).
 
-- [ ] **Step 2: Escribir el test fallido**
+- [x] **Step 2: Escribir el test fallido**
 
 `backend/tests/test_endpoints.py`:
 
@@ -359,7 +359,7 @@ def test_columnas_derivadas_no_filtran_en_rows(client, analysis_id):
     assert {"risk_level", "risk_reason", "suspicious"} <= set(res["rows"][0])
 ```
 
-- [ ] **Step 3: Ejecutar y verificar que falla**
+- [x] **Step 3: Ejecutar y verificar que falla**
 
 ```bash
 backend/.venv/Scripts/python.exe -m pytest backend/tests/test_endpoints.py -v
@@ -368,7 +368,7 @@ backend/.venv/Scripts/python.exe -m pytest backend/tests/test_endpoints.py -v
 Esperado: FAIL en `test_ingesta_enriquece_el_dataframe` (las columnas `_level` no existen aún y
 `Timestamp` sigue siendo `object`).
 
-- [ ] **Step 4: Implementar el enriquecimiento en `process_analysis`**
+- [x] **Step 4: Implementar el enriquecimiento en `process_analysis`**
 
 En `backend/main.py`, tras `pd.concat` (línea ~690) y **antes** de llamar a `call_ai_service`,
 construir una copia enriquecida (`_level` vía `normalize_level`, `Timestamp` vía
@@ -377,13 +377,13 @@ construir una copia enriquecida (`_level` vía `normalize_level`, `Timestamp` v�
 
 Manejar el caso `len(work) == 0` con `pd.Series([], dtype=...)` igual que hoy en `/rows`.
 
-- [ ] **Step 5: Ejecutar y verificar que pasa**
+- [x] **Step 5: Ejecutar y verificar que pasa**
 
 ```bash
 backend/.venv/Scripts/python.exe -m pytest backend/tests/test_endpoints.py -v
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add backend/main.py backend/tests/
@@ -403,7 +403,7 @@ git commit -m "feat: enriquece el DataFrame una vez al ingerir (nivel, razon, so
 - Consumes: `apply_filters`, `FilterParams` (Tarea 1), DataFrame enriquecido (Tarea 3), `call_ai_service` (`main.py:410`, pura).
 - Produce: `GET /api/analysis/{id}/summary` devolviendo el `AnalysisSummary` completo + `total` + `filtered_total`. Lo consume el frontend en la Tarea 7.
 
-- [ ] **Step 1: Escribir los tests fallidos**
+- [x] **Step 1: Escribir los tests fallidos**
 
 ```python
 def test_summary_sin_filtros_es_identico_al_global(client, analysis_id):
@@ -469,7 +469,7 @@ def test_summary_archivo_minimo_sin_timestamp_ni_severity(client, analysis_id_mi
 Añadir en `conftest.py` los fixtures `analysis_id_na` (2 filas, una con `Timestamp` basura) y
 `analysis_id_minimo` (solo `Log_ID` y `Event_Description`, sin `Timestamp` ni `Severity`).
 
-- [ ] **Step 2: Ejecutar y verificar que fallan**
+- [x] **Step 2: Ejecutar y verificar que fallan**
 
 ```bash
 backend/.venv/Scripts/python.exe -m pytest backend/tests/test_endpoints.py -v -k summary
@@ -477,7 +477,7 @@ backend/.venv/Scripts/python.exe -m pytest backend/tests/test_endpoints.py -v -k
 
 Esperado: `404` en todos (el endpoint no existe).
 
-- [ ] **Step 3: Implementar `parse_filters` y el endpoint**
+- [x] **Step 3: Implementar `parse_filters` y el endpoint**
 
 `parse_filters(request: Request, df: pd.DataFrame) -> FilterParams` en `backend/filters.py`:
 lee `request.query_params`, separa los canónicos (`from`, `to`, `level`, `suspicious`, `result`,
@@ -496,7 +496,7 @@ Flujo: validar análisis (404/409 como `/rows`), `parse_filters` (→ 400 con el
 `ValueError`), `apply_filters`, `call_ai_service(work)`, y añadir `total` (len del DataFrame
 completo) y `filtered_total` (len del filtrado) a la respuesta.
 
-- [ ] **Step 4: Ejecutar y verificar que pasa**
+- [x] **Step 4: Ejecutar y verificar que pasa**
 
 ```bash
 backend/.venv/Scripts/python.exe -m pytest backend/tests/test_endpoints.py -v
@@ -504,7 +504,7 @@ backend/.venv/Scripts/python.exe -m pytest backend/tests/test_endpoints.py -v
 
 Esperado: todos PASS, incluidas las Tareas 1-3.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/filters.py backend/main.py backend/tests/
@@ -523,7 +523,7 @@ git commit -m "feat: GET /summary devuelve el resumen acotado por filtros"
 - Consumes: `detect_facets` (Tarea 2), `apply_filters` (Tarea 1).
 - Produce: `GET /api/analysis/{id}/facets` → `{ total, filtered_total, fields: FacetField[] }` con conteos acotados. Lo consume el frontend en la Tarea 7.
 
-- [ ] **Step 1: Escribir los tests fallidos**
+- [x] **Step 1: Escribir los tests fallidos**
 
 ```python
 def test_facets_detecta_campos_del_archivo(client, analysis_id):
@@ -543,13 +543,13 @@ def test_facets_no_ofrece_event_description(client, analysis_id):
     assert "Event_Description" not in [f["name"] for f in res["fields"]]
 ```
 
-- [ ] **Step 2: Ejecutar y verificar que fallan**
+- [x] **Step 2: Ejecutar y verificar que fallan**
 
 ```bash
 backend/.venv/Scripts/python.exe -m pytest backend/tests/test_endpoints.py -v -k facets
 ```
 
-- [ ] **Step 3: Implementar el endpoint**
+- [x] **Step 3: Implementar el endpoint**
 
 En `main.py`, tras `/summary`:
 
@@ -566,13 +566,13 @@ Para contar por faceta **ignorando el filtro de esa misma faceta** (como hace Sp
 el panel permita cambiar de valor), añadir a `apply_filters` un parámetro opcional
 `skip_fields: set[str] | None = None`.
 
-- [ ] **Step 4: Ejecutar y verificar que pasa**
+- [x] **Step 4: Ejecutar y verificar que pasa**
 
 ```bash
 backend/.venv/Scripts/python.exe -m pytest backend/tests/test_endpoints.py -v
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/filters.py backend/main.py backend/tests/
@@ -591,7 +591,7 @@ git commit -m "feat: GET /facets con campos detectados del archivo y conteos aco
 - Consumes: `parse_filters`, `apply_filters`, `FilterParams` (Tareas 1 y 4).
 - Produce: `/rows` sin cambios observables. Ninguna tarea posterior depende de su implementación interna.
 
-- [ ] **Step 1: Escribir primero la red de regresión (debe pasar sobre el código ACTUAL)**
+- [x] **Step 1: Escribir primero la red de regresión (debe pasar sobre el código ACTUAL)**
 
 ```python
 def test_rows_refactor_es_identico(client, analysis_id):
@@ -617,7 +617,7 @@ def test_q_no_busca_en_columnas_derivadas(client, analysis_id):
     assert res["total"] == 0      # "critico" solo aparece en _level, no en los datos
 ```
 
-- [ ] **Step 2: Ejecutar y verificar que PASAN sobre el código actual (red de seguridad)**
+- [x] **Step 2: Ejecutar y verificar que PASAN sobre el código actual (red de seguridad)**
 
 ```bash
 backend/.venv/Scripts/python.exe -m pytest backend/tests/test_endpoints.py -v -k rows
@@ -626,12 +626,12 @@ backend/.venv/Scripts/python.exe -m pytest backend/tests/test_endpoints.py -v -k
 Esperado: PASS. Si no pasan, el dataset sintético no reproduce el comportamiento real:
 **arreglar el fixture antes de refactorizar**, nunca el test para que pase después.
 
-- [ ] **Step 3: Refactorizar `get_rows`**
+- [x] **Step 3: Refactorizar `get_rows`**
 
 Reemplazar el bloque inline de filtros (`main.py:809-826`) por `parse_filters(request, df)` +
 `apply_filters(work, params)`. Mantener la paginación y el shape de respuesta **tal cual**.
 
-- [ ] **Step 4: Ejecutar la regresión completa**
+- [x] **Step 4: Ejecutar la regresión completa**
 
 ```bash
 backend/.venv/Scripts/python.exe -m pytest backend/tests -v
@@ -640,7 +640,7 @@ backend/.venv/Scripts/python.exe -m pytest backend/tests -v
 Esperado: todo PASS. Este es el paso más delicado del lote: si algo cambia, se revierte el
 refactor y se revisa el spec, no se maquilla el test.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/main.py backend/tests/
@@ -659,7 +659,7 @@ git commit -m "refactor: /rows usa el motor de filtros compartido (sin cambio ob
 - Consumes: `getRows` como plantilla de estilo (`client.ts:54-79`), `useAnalysisStore` (`store/index.ts:132`).
 - Produce: `useFilterStore` con `setRange/toggleFacet/setLevel/setQ/setResult/setSuspicious/clearAll/reset`; `getScopedSummary(analysisId, filters, signal)`; `getFacets(analysisId, filters, signal)`. Las Tareas 8 y 9 las usan tal cual.
 
-- [ ] **Step 1: Crear `frontend/src/store/filters.ts`**
+- [x] **Step 1: Crear `frontend/src/store/filters.ts`**
 
 ```ts
 export type FilterState = {
@@ -677,7 +677,7 @@ export const useFilterStore: UseBoundStore<StoreApi<FilterState & Actions>>
 Incluye el selector `selectIsFiltered` (true si algún campo no vacío) y `reset()` para limpiar
 al cambiar de análisis.
 
-- [ ] **Step 2: Añadir los tipos y llamadas en `client.ts`**
+- [x] **Step 2: Añadir los tipos y llamadas en `client.ts`**
 
 ```ts
 export type FilterParams = {
@@ -695,7 +695,7 @@ export const getFacets = (analysisId: string, f: FilterParams, signal?: AbortSig
 Las facetas se serializan repitiendo el parámetro (`User=a&User=b`), igual que exige el backend.
 Añadir `total?: number` y `filtered_total?: number` a `AnalysisSummary` en `store/index.ts`.
 
-- [ ] **Step 3: Verificar**
+- [x] **Step 3: Verificar**
 
 ```bash
 npx tsc --noEmit
@@ -703,7 +703,7 @@ npx tsc --noEmit
 
 Desde `frontend/`. Esperado: sin errores.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add frontend/src/store/filters.ts frontend/src/api/client.ts frontend/src/store/index.ts
@@ -721,7 +721,7 @@ git commit -m "feat: store de filtros y cliente para /summary y /facets"
 - Consumes: `useFilterStore`, `getScopedSummary` (Tarea 7), `useAnalysisStore`.
 - Produce: `useScopedSummary(): { summary: AnalysisSummary | null; total: number; filteredTotal: number; loading: boolean; error: string | null }`. Lo consume la Tarea 9.
 
-- [ ] **Step 1: Implementar el hook**
+- [x] **Step 1: Implementar el hook**
 
 Sin filtros → devuelve el `summary` global del store, **sin hacer ninguna petición**. Con filtros
 → `getScopedSummary` con debounce de 300 ms y cancelación por `AbortController` al cambiar los
@@ -730,14 +730,14 @@ contador) y `filteredTotal`.
 
 Al cambiar el `analysisId`, llamar a `reset()` del store de filtros.
 
-- [ ] **Step 2: Verificar**
+- [x] **Step 2: Verificar**
 
 ```bash
 npx tsc --noEmit
 npm run build
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add frontend/src/hooks/useScopedSummary.ts
@@ -755,19 +755,19 @@ git commit -m "feat: useScopedSummary con debounce y cancelacion"
 - Consumes: `useScopedSummary` (Tarea 8), `useFilterStore` (Tarea 7).
 - Produce: el dashboard renderiza el resumen acotado y la barra de filtros activos.
 
-- [ ] **Step 1: Cambiar la fuente del resumen**
+- [x] **Step 1: Cambiar la fuente del resumen**
 
 Reemplazar en `Dashboard.tsx:77` la lectura directa del store por `useScopedSummary()`. Los 4
 gráficos **no se modifican**: leen los mismos campos.
 
-- [ ] **Step 2: Añadir la barra de filtros activos**
+- [x] **Step 2: Añadir la barra de filtros activos**
 
 Debajo de las tarjetas KPI, visible solo si `selectIsFiltered`: chips removibles
 (`Hostname: DC-01 ×`, `12/01–15/01 ×`, `Solo sospechosos ×`), contador **«243 de 715 registros»**
 y botón «Limpiar filtros». Estado `loading` → resumen anterior atenuado (opacidad ~0.45); sin
 coincidencias → `EmptyState`; error → aviso discreto + volver al resumen global.
 
-- [ ] **Step 3: Verificar en el navegador**
+- [x] **Step 3: Verificar en el navegador**
 
 ```bash
 npx tsc --noEmit
@@ -778,7 +778,7 @@ Levantar backend y frontend, cargar el Excel de ejemplo y comprobar a mano: filt
 ventana temporal → cambian KPIs, donut, hosts, serie y tabla; contador correcto; «Limpiar
 filtros» restaura todo; sin filtros no hay peticiones extra (pestaña Red del navegador).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add frontend/src/components/Dashboard.tsx
@@ -791,25 +791,25 @@ git commit -m "feat: dashboard con resumen acotado y barra de filtros activos"
 
 **Files:** ninguno nuevo.
 
-- [ ] **Step 1: Suite completa de backend**
+- [x] **Step 1: Suite completa de backend**
 
 ```bash
 backend/.venv/Scripts/python.exe -m pytest backend/tests -v
 ```
 
-- [ ] **Step 2: Verificación de frontend**
+- [x] **Step 2: Verificación de frontend**
 
 ```bash
 npx tsc --noEmit
 npm run build
 ```
 
-- [ ] **Step 3: Recorrido manual contra el criterio de aceptación 3 del spec**
+- [x] **Step 3: Recorrido manual contra el criterio de aceptación 3 del spec**
 
 Cargar un Excel con columnas distintas (sin `Destination`, con `Department` extra) y confirmar
 que `Department` aparece como faceta disponible **sin tocar código**.
 
-- [ ] **Step 4: Commit final**
+- [x] **Step 4: Commit final**
 
 ```bash
 git add -A
