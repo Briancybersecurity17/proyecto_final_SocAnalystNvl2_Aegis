@@ -168,10 +168,6 @@ const DataTable: React.FC = () => {
     }
   }, [analysisId, status, page, q, level, suspicious, result, from, to, facets])
 
-  useEffect(() => {
-    fetchRows()
-  }, [fetchRows])
-
   // Reset to page 1 when filters change. La clave es una serialización estable
   // (facetas ordenadas) para no reiniciar la página en cada render por
   // identidad de objetos.
@@ -189,6 +185,19 @@ const DataTable: React.FC = () => {
   useEffect(() => {
     setPage(1)
   }, [filtersKey])
+
+  // Un solo `/rows` por cambio de filtros: si `filtersKey` cambió en esta
+  // pasada y la tabla está en página >1, el fetch se salta — el efecto de
+  // reset de arriba ya llamó `setPage(1)` y su `fetchRows(page=1)` es el
+  // único `/rows` del cambio. Con filtros intactos (paginación a mano) o en
+  // página 1 el fetch ocurre como siempre.
+  const prevFiltersKey = useRef(filtersKey)
+  useEffect(() => {
+    const filtersCambiaron = prevFiltersKey.current !== filtersKey
+    prevFiltersKey.current = filtersKey
+    if (filtersCambiaron && page !== 1) return
+    fetchRows()
+  }, [fetchRows, filtersKey, page])
 
   if (!analysisId || status !== 'done') {
     return null
