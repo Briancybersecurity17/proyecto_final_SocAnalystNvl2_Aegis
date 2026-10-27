@@ -24,6 +24,9 @@ import {
   fmtCount,
   useChartMotion,
   ChartClickState,
+  TimePoint,
+  dayMonth,
+  buildTimeBuckets,
 } from '../charts'
 import {
   Tooltip,
@@ -48,43 +51,11 @@ import {
 /** Contador animado para las cifras de las tarjetas de criticidad. */
 const Counter: React.FC<{ value: number }> = ({ value }) => <>{fmtCount(useCountUp(value))}</>
 
-/**
- * "2026-10-23 07:00" → "23/10 07:00" (etiqueta corta para el eje).
- * Con `withYear` añade el año: sin él, datos de dos años distintos producían
- * etiquetas idénticas y el total del tooltip se pisaba entre tramos.
- */
-const hourLabel = (stamp: string, withYear = false): string => {
-  const [date, time] = stamp.split(' ')
-  const [year, month, day] = date.split('-')
-  const base = `${Number(day)}/${Number(month)} ${time}`
-  return withYear ? `${base}/${year.slice(2)}` : base
-}
-
-/**
- * "2026-01-12" → "12/01" (chip de la ventana temporal). Si el valor no trae
- * una fecha ISO reconocible se muestra tal cual: el chip nunca rompe el render.
- */
-const dayMonth = (iso: string): string => {
-  const [, month, day] = iso.split('-')
-  return month && day ? `${Number(day)}/${Number(month)}` : iso
-}
-
 /** Un filtro activo de la barra de chips. */
 type ActiveFilterChip = {
   key: string
   label: string
   onRemove: () => void
-}
-
-/** Un punto de la serie temporal, ya por hora ya por día. */
-type TimePoint = {
-  label: string
-  detail: string
-  total: number
-  critico: number
-  alto: number
-  medio: number
-  bajo: number
 }
 
 /** Fila que entrega Recharts al pulsar los gráficos del dashboard. */
@@ -185,59 +156,8 @@ const Dashboard: React.FC = () => {
     ([severity, count]) => ({ severity, count: toCount(count) })
   )
 
-  // Serie horaria real (fecha+hora presentes en los timestamps del archivo).
-  // Si hay varios tramos se usa como eje principal: da mucha más resolución
-  // que la agregación diaria y no se inventa ningún dato.
-  const hourlyStamps = Object.keys(summary.events_per_hour_by_level ?? {})
-  // Con datos de más de un año la etiqueta corta se queda sin año y dos
-  // tramos distintos colisionarían (mismo «23/10 07:00»).
-  const hourlyMultiYear = new Set(hourlyStamps.map(s => s.slice(0, 4))).size > 1
-  const hourlyData: TimePoint[] = Object.entries(summary.events_per_hour_by_level ?? {})
-    .map(([stamp, levels]) => {
-      const critico = toCount(levels.critico)
-      const alto = toCount(levels.alto)
-      const medio = toCount(levels.medio)
-      const bajo = toCount(levels.bajo)
-      return {
-        label: hourLabel(stamp, hourlyMultiYear),
-        detail: stamp,
-        critico,
-        alto,
-        medio,
-        bajo,
-        total: critico + alto + medio + bajo,
-      }
-    })
-    .sort((a, b) => a.detail.localeCompare(b.detail))
-
-  const dailyData: TimePoint[] = Object.entries(summary.events_per_day_by_level ?? {})
-    .map(([date, levels]) => {
-      const critico = toCount(levels.critico)
-      const alto = toCount(levels.alto)
-      const medio = toCount(levels.medio)
-      const bajo = toCount(levels.bajo)
-      return {
-        label: date,
-        detail: date,
-        critico,
-        alto,
-        medio,
-        bajo,
-        total: critico + alto + medio + bajo,
-      }
-    })
-    .sort((a, b) => a.detail.localeCompare(b.detail))
-
-  // Granularidad efectiva: hora si el backend la aporta con varios tramos;
-  // si no, día (y si solo hay un día, se avisa en vez de fingir una tendencia)
-  const HOURLY_MAX_POINTS = 400
-  // Archivos que abarcan cientos de días generan miles de tramos horarios: el
-  // eje deja de ser legible y el gráfico se resiente. Se cae a la serie
-  // DIARIA, que es la misma información agregada por día (dato real del
-  // archivo, calculado por el backend; no se descarta ni se inventa nada).
-  const hourlyTooLong = hourlyData.length > HOURLY_MAX_POINTS
-  const hourly = hourlyData.length > 1 && !hourlyTooLong
-  const timeData = hourly ? hourlyData : dailyData
+  const { hourlyData, dailyData, hourly, hourlyTooLong, points: timeData } =
+    buildTimeBuckets(summary)
   const totalByLabel = new Map(timeData.map(p => [p.label, p.total]))
 
   const hostsData = Object.entries(summary.top_hosts_by_level ?? {})

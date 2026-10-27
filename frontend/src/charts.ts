@@ -18,6 +18,7 @@
 
 import type { CSSProperties, SVGProps } from 'react'
 import { usePrefersReducedMotion } from './motion'
+import type { AnalysisSummary } from './store'
 
 /** Colores fijos por nivel de criticidad (orden: crítico → bajo). */
 export const LEVEL_COLORS: Record<string, string> = {
@@ -146,4 +147,123 @@ export const glowVars = (color: string): CSSProperties =>
 export type ChartClickState<P = Record<string, unknown>> = {
   activeLabel?: string
   activePayload?: Array<{ payload?: P }>
+}
+
+// --- bucketing temporal compartido -----------------------------------------
+
+/**
+ * "2026-10-23 07:00" → "23/10 07:00" (etiqueta corta para el eje).
+ * Con `withYear` añade el año: sin él, datos de dos años distintos producían
+ * etiquetas idénticas y el total del tooltip se pisaba entre tramos.
+ */
+export const hourLabel = (stamp: string, withYear = false): string => {
+  const [date, time] = stamp.split(' ')
+  const [year, month, day] = date.split('-')
+  const base = `${Number(day)}/${Number(month)} ${time}`
+  return withYear ? `${base}/${year.slice(2)}` : base
+}
+
+/**
+ * "2026-01-12" → "12/01" (chip de la ventana temporal). Si el valor no trae
+ * una fecha ISO reconocible se muestra tal cual: el chip nunca rompe el render.
+ */
+export const dayMonth = (iso: string): string => {
+  const [, month, day] = iso.split('-')
+  return month && day ? `${Number(day)}/${Number(month)}` : iso
+}
+
+/** Un punto de la serie temporal, ya por hora ya por día. */
+export type TimePoint = {
+  label: string
+  detail: string
+  total: number
+  critico: number
+  alto: number
+  medio: number
+  bajo: number
+}
+
+/**
+ * Series temporales del resumen (horaria y diaria) junto con la granularidad
+ * elegida para graficar.
+ *
+ * Una sola regla para la serie del dashboard y para la futura tira temporal
+ * (`TimelineBrush`, spec §3.2 D2): ambos consumen `buildTimeBuckets` y, por
+ * lo tanto, ven exactamente los mismos tramos, etiquetas y valores.
+ */
+export type TimeBuckets = {
+  hourlyData: TimePoint[]
+  dailyData: TimePoint[]
+  hourly: boolean
+  hourlyTooLong: boolean
+  points: TimePoint[]
+}
+
+/** Máximo de tramos horarios que se grafican antes de caer a la serie diaria. */
+export const HOURLY_MAX_POINTS = 400
+
+/**
+ * Bucketing temporal del resumen: **una sola regla** para la serie del
+ * dashboard y para la futura tira temporal (spec §3.2 D2).
+ *
+ * Devuelve ambas series más la granularidad efectiva (`hourly`,
+ * `hourlyTooLong`) y `points`, que es la serie que hay que graficar.
+ */
+export const buildTimeBuckets = (
+  summary: Pick<AnalysisSummary, 'events_per_hour_by_level' | 'events_per_day_by_level'>
+): TimeBuckets => {
+  // Serie horaria real (fecha+hora presentes en los timestamps del archivo).
+  // Si hay varios tramos se usa como eje principal: da mucha más resolución
+  // que la agregación diaria y no se inventa ningún dato.
+  const hourlyStamps = Object.keys(summary.events_per_hour_by_level ?? {})
+  // Con datos de más de un año la etiqueta corta se queda sin año y dos
+  // tramos distintos colisionarían (mismo «23/10 07:00»).
+  const hourlyMultiYear = new Set(hourlyStamps.map(s => s.slice(0, 4))).size > 1
+  const hourlyData: TimePoint[] = Object.entries(summary.events_per_hour_by_level ?? {})
+    .map(([stamp, levels]) => {
+      const critico = toCount(levels.critico)
+      const alto = toCount(levels.alto)
+      const medio = toCount(levels.medio)
+      const bajo = toCount(levels.bajo)
+      return {
+        label: hourLabel(stamp, hourlyMultiYear),
+        detail: stamp,
+        critico,
+        alto,
+        medio,
+        bajo,
+        total: critico + alto + medio + bajo,
+      }
+    })
+    .sort((a, b) => a.detail.localeCompare(b.detail))
+
+  const dailyData: TimePoint[] = Object.entries(summary.events_per_day_by_level ?? {})
+    .map(([date, levels]) => {
+      const critico = toCount(levels.critico)
+      const alto = toCount(levels.alto)
+      const medio = toCount(levels.medio)
+      const bajo = toCount(levels.bajo)
+      return {
+        label: date,
+        detail: date,
+        critico,
+        alto,
+        medio,
+        bajo,
+        total: critico + alto + medio + bajo,
+      }
+    })
+    .sort((a, b) => a.detail.localeCompare(b.detail))
+
+  // Granularidad efectiva: hora si el backend la aporta con varios tramos;
+  // si no, día (y si solo hay un día, se avisa en vez de fingir una tendencia)
+  // Archivos que abarcan cientos de días generan miles de tramos horarios: el
+  // eje deja de ser legible y el gráfico se resiente. Se cae a la serie
+  // DIARIA, que es la misma información agregada por día (dato real del
+  // archivo, calculado por el backend; no se descarta ni se inventa nada).
+  const hourlyTooLong = hourlyData.length > HOURLY_MAX_POINTS
+  const hourly = hourlyData.length > 1 && !hourlyTooLong
+  const points = hourly ? hourlyData : dailyData
+
+  return { hourlyData, dailyData, hourly, hourlyTooLong, points }
 }
