@@ -83,7 +83,7 @@ en navegador; checkpoints (commits) por tarea.
 - `UploadSection.tsx`: quita `<DataTable />`; añade `<UploadHistory />` tras `UploadExcel`.
 - `Dashboard.tsx`: reordena paneles (§3.1), instancia los resúmenes omit‑level/omit‑facet, sincroniza clics, elimina el panel Severity y el desplegable de nivel del gráfico de hosts, hace sticky la barra de chips y ajusta paddings de tarjetas (todo className + wiring, sin rediseño).
 - `DashboardSection.tsx`: gana props opcionales `collapsible?: boolean` y `defaultCollapsed?: boolean` (chevron en `panel-head`; solo el panel IA los usa).
-- `DataTable.tsx`: sin cambios de diseño; únicamente el copy de §3.9.1 si aparece en su ámbito.
+- `DataTable.tsx`: sin cambios de diseño; únicamente el copy de §3.7 si aparece en su ámbito.
 
 ### 3.5 Historial de subidas (D10/D11)
 
@@ -108,7 +108,7 @@ en navegador; checkpoints (commits) por tarea.
 
 - **Solo filtro de nivel activo** → la instancia omit‑level ve cero filtros efectivos ⇒ resumen global, sin petición (no se cuelga ni parpadea).
 - **Archivo sin columna Severity** (todo «bajo») → donut/tarjetas con 1 sector; los clics siguen funcionando.
-- **Un solo tramo horario** → no hay brush (sub‑2) y la actividad cae a diario con el copy corregido (§3.9.2).
+- **Un solo tramo horario** → no hay brush (sub‑2) y la actividad cae a diario con el copy corregido (§3.7.2).
 - **Backend reiniciado** → historial vacío (lista con texto amable) e `analysisId` de localStorage inválido (mecanismo de aviso ya existente).
 - **Reabrir un análisis con RAG purgado** (solo los últimos 5 indexados): dashboard, gráficos y tabla funcionan; el chat QA puede no encontrar documentos — limitación aceptada y documentada.
 - **Recarga de página con filtros activos**: el restore existente y el historial conviven sin pisarse (el restore ya setea `analysisId` + summary).
