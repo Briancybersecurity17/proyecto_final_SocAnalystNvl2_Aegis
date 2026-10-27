@@ -153,8 +153,9 @@ la tira emite).
   nuevo).
 - Desde `frontend/`: `npx tsc --noEmit` y `npm run build`.
 - Recorrido manual en navegador (protocolo sub‑1): datasets `soc_sample.xlsx`
-  (3 días, resolución horaria), un Excel de un solo día (tira oculta) y uno con
-  >25 filas (página >1, criterio 5) — generados con pandas, como en sub‑1.
+  (3 días, resolución horaria), un Excel con **un solo tramo de actividad**
+  (tira oculta) y uno con >25 filas (página >1, criterio 5) — generados con
+  pandas, como en sub‑1.
 
 ## 8. Riesgos abiertos
 
