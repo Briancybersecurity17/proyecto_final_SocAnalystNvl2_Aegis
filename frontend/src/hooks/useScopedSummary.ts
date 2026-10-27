@@ -53,7 +53,11 @@ export const useScopedSummary = (): ScopedSummaryResult => {
       .map(([field, values]) => [field, [...values].sort()]),
   ])
 
-  const prevAnalysisId = useRef<string | null>(null)
+  // El ref arranca con el id del primer render: solo se limpia al CAMBIAR de
+  // análisis, no al montar la sección. El dashboard y la tabla viven en
+  // secciones distintas y comparten este store; remontar una de ellas no debe
+  // borrar los filtros del dataset que ambas están mostrando.
+  const prevAnalysisId = useRef<string | null>(analysisId)
 
   // Cambio de análisis: los filtros de un dataset no pueden apuntar a otro,
   // así que se limpian y se descarta el resumen acotado anterior.

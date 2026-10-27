@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { getRows, RowsResponse } from '../api/client'
 import { useAnalysisStore } from '../store'
+import { useFilterStore } from '../store/filters'
 import { LEVEL_LABELS } from '../charts'
 import { DashboardSection } from './DashboardSection'
 
@@ -57,33 +58,58 @@ const DataTable: React.FC = () => {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [page, setPage] = useState(1)
-  const [qInput, setQInput] = useState('') // texto del input (se estabiliza con debounce)
-  const [q, setQ] = useState('') // búsqueda ya estabilizada, la que viaja al backend
-  const [level, setLevel] = useState('')
-  const [result, setResult] = useState('')
-  const [suspicious, setSuspicious] = useState(false)
+  const {
+    from,
+    to,
+    level,
+    suspicious,
+    result,
+    q,
+    facets,
+    setLevel,
+    setResult,
+    setSuspicious,
+  } = useFilterStore()
+  // `qInput` es el texto crudo del input (se estabiliza con debounce); el
+  // resto de filtros vive en el store compartido para que el dashboard
+  // responda a los mismos valores que la tabla. Arranca con el `q` vigente
+  // para que al volver de otra sección el input refleje el filtro activo.
+  const [qInput, setQInput] = useState(q)
   const abortRef = useRef<AbortController | null>(null)
 
-  // Un archivo nuevo arranca de cero: la página, los filtros y las filas del
+  // Un archivo nuevo arranca de cero: la página, el input y las filas del
   // análisis anterior no deben colarse en el nuevo (si la tabla anterior
   // estaba en la página 5 y el archivo nuevo solo tiene 4, se quedaba vacía).
+  // Solo se dispara al CAMBIAR de análisis: la tabla y el dashboard se montan
+  // por secciones y remontar una de ellas no debe borrar los filtros vigentes
+  // del mismo dataset (son el estado compartido que las une).
+  const prevAnalysisId = useRef(analysisId)
   useEffect(() => {
+    if (prevAnalysisId.current === analysisId) return
+    prevAnalysisId.current = analysisId
     abortRef.current?.abort()
     setData(null)
     setError('')
     setPage(1)
-    setQ('')
     setQInput('')
-    setLevel('')
-    setResult('')
-    setSuspicious(false)
+    useFilterStore.getState().reset()
   }, [analysisId])
 
   // Búsqueda con debounce: una petición por pausa de tecleo, no por tecla.
   useEffect(() => {
-    const timer = window.setTimeout(() => setQ(qInput), 300)
+    const timer = window.setTimeout(() => useFilterStore.getState().setQ(qInput), 300)
     return () => window.clearTimeout(timer)
   }, [qInput])
+
+  // Limpieza externa: cuando el chip «Búsqueda ×» o «Limpiar filtros» vacían
+  // el `q` del store, el input también se vacía. Se reacciona solo al paso de
+  // no-vacío a vacío del store (no a cada tecla): copiar `q` en cada cambio
+  // pelearía con el tecleo, que va 300 ms por delante del store.
+  const prevQ = useRef(q)
+  useEffect(() => {
+    if (prevQ.current !== '' && q === '' && qInput !== '') setQInput('')
+    prevQ.current = q
+  }, [q, qInput])
 
   const fetchRows = useCallback(async () => {
     if (!analysisId || status !== 'done') return
@@ -97,7 +123,18 @@ const DataTable: React.FC = () => {
     try {
       const res = await getRows(
         analysisId,
-        { page, pageSize: 25, q, level, suspicious, result, signal: ctrl.signal },
+        {
+          page,
+          pageSize: 25,
+          q,
+          level,
+          suspicious,
+          result,
+          // Ventana y facetas del motor de filtros: los mismos valores que
+          // acotan el resumen del dashboard.
+          filters: { from, to, facets },
+          signal: ctrl.signal,
+        },
       )
       if (ctrl.signal.aborted) return
       setData(res)
@@ -110,16 +147,29 @@ const DataTable: React.FC = () => {
     } finally {
       if (!ctrl.signal.aborted) setLoading(false)
     }
-  }, [analysisId, status, page, q, level, suspicious, result])
+  }, [analysisId, status, page, q, level, suspicious, result, from, to, facets])
 
   useEffect(() => {
     fetchRows()
   }, [fetchRows])
 
-  // Reset to page 1 when filters change
+  // Reset to page 1 when filters change. La clave es una serialización estable
+  // (facetas ordenadas) para no reiniciar la página en cada render por
+  // identidad de objetos.
+  const filtersKey = JSON.stringify([
+    from,
+    to,
+    level,
+    suspicious,
+    result,
+    q,
+    Object.entries(facets)
+      .sort(([a], [b]) => (a < b ? -1 : 1))
+      .map(([field, values]) => [field, [...values].sort()]),
+  ])
   useEffect(() => {
     setPage(1)
-  }, [q, level, suspicious, result])
+  }, [filtersKey])
 
   if (!analysisId || status !== 'done') {
     return null

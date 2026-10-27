@@ -60,19 +60,33 @@ export const getRows = async (
     level?: string
     suspicious?: boolean
     result?: string
+    /**
+     * Ventana temporal y facetas del motor de filtros. Se serializan con el
+     * mismo `buildFilterParams` de /summary, de modo que las facetas viajan
+     * como claves repetidas (`Hostname=DC-01&Hostname=WS-018`). Opcional:
+     * los llamadores que no filtran no cambian de comportamiento.
+     */
+    filters?: {
+      from?: string | null
+      to?: string | null
+      facets?: Record<string, string[]>
+    }
     /** Cancela la petición anterior cuando los filtros cambian a toda velocidad. */
     signal?: AbortSignal
   } = {},
 ) => {
+  // Se parte de los filtros del motor (from/to/facetas) y se completan con
+  // `.set()` los cuatro filtros clásicos. Sin filtros activos la query queda
+  // byte a byte como siempre: page=1&page_size=25&q=&level=&suspicious=false&result=
+  const params = buildFilterParams(opts.filters ?? {})
+  params.set('page', String(opts.page ?? 1))
+  params.set('page_size', String(opts.pageSize ?? 25))
+  params.set('q', opts.q ?? '')
+  params.set('level', opts.level ?? '')
+  params.set('suspicious', opts.suspicious ? 'true' : 'false')
+  params.set('result', opts.result ?? '')
   const response = await API.get(`/analysis/${analysisId}/rows`, {
-    params: {
-      page: opts.page ?? 1,
-      page_size: opts.pageSize ?? 25,
-      q: opts.q ?? '',
-      level: opts.level ?? '',
-      suspicious: opts.suspicious ? 'true' : 'false',
-      result: opts.result ?? '',
-    },
+    params,
     signal: opts.signal,
   })
   return response.data as RowsResponse
