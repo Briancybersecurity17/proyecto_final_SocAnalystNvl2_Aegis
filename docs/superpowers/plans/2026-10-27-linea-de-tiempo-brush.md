@@ -1,6 +1,6 @@
-# Línea de tiempo con brush (sub‑proyecto 2) — Plan de implementación
+﻿# Línea de tiempo con brush (sub‑proyecto 2) — Plan de implementación
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** El analista arrastra un tramo sobre una línea de tiempo y eso fija la ventana temporal `from`/`to` en el store de filtros, recortando todo el análisis con el motor de filtros ya existente.
 
@@ -52,7 +52,7 @@ Estas cinco son las que la spec implica pero que ningún test unitario cubre; ca
 **Interfaces:**
 - Consumes: `FilterParams(from_dt, to_dt, …)` y `apply_filters(df, p)` existentes; fixture/patrón de `df` con pandas directo ya usado en el archivo.
 
-- [ ] **Step 1: Escribir el test de caracterización**
+- [x] **Step 1: Escribir el test de caracterización**
 
 ```python
 def test_ventana_to_fin_de_tramo_cubre_el_dia_completo():
@@ -75,17 +75,17 @@ def test_ventana_to_fin_de_tramo_cubre_el_dia_completo():
     assert sorted(out["Log_ID"].tolist()) == [1, 2, 3]
 ```
 
-- [ ] **Step 2: Ejecutar solo ese test**
+- [x] **Step 2: Ejecutar solo ese test**
 
 Run: `backend\.venv\Scripts\python.exe -m pytest backend\tests\test_filters.py::test_ventana_to_fin_de_tramo_cubre_el_dia_completo -v`
 Expected: **PASS** — es un test de caracterización: fija el comportamiento que `_parse_ventana` (`pd.to_datetime`) ya implementa. Si FALLA, el parseo no acepta datetime con milisegundos: arreglar `_parse_ventana`, nunca el test.
 
-- [ ] **Step 3: Suite completa**
+- [x] **Step 3: Suite completa**
 
 Run: `backend\.venv\Scripts\python.exe -m pytest backend\tests -q`
 Expected: **45 passed** (44 existentes + 1 nuevo), 1 warning starlette preexistente.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add backend/tests/test_filters.py
@@ -112,15 +112,15 @@ Refactor puro: la lógica de serie se muda a `charts.ts` para que la futura tira
   - `export const dayMonth = (iso: string): string`
   - `export const HOURLY_MAX_POINTS = 400`
 
-- [ ] **Step 1: Mover `hourLabel`, `dayMonth` y `TimePoint` a `charts.ts`**
+- [x] **Step 1: Mover `hourLabel`, `dayMonth` y `TimePoint` a `charts.ts`**
 
 Corte literal desde `Dashboard.tsx` (comentarios JSDoc incluidos), con `export` delante. En `Dashboard.tsx` quedan importados de `'../charts'`.
 
-- [ ] **Step 2: Implementar `buildTimeBuckets` en `charts.ts`**
+- [x] **Step 2: Implementar `buildTimeBuckets` en `charts.ts`**
 
 Encapsula el algoritmo actual de `Dashboard.tsx:188-241` **sin cambios**: construye `hourlyData`/`dailyData` (mapeo de niveles con `toCount` + `.sort` por `detail`), calcula `hourlyMultiYear` (años distintos → `hourLabel(stamp, true)`), `hourlyTooLong = hourlyData.length > HOURLY_MAX_POINTS`, `hourly = hourlyData.length > 1 && !hourlyTooLong` y `points = hourly ? hourlyData : dailyData`. El comment del spec (§3.2 D2) va en el JSDoc: una sola regla para serie y tira.
 
-- [ ] **Step 3: `Dashboard.tsx` consume el helper**
+- [x] **Step 3: `Dashboard.tsx` consume el helper**
 
 Reemplazar el bloque 188‑241 por:
 
@@ -131,16 +131,16 @@ const { hourlyData, dailyData, hourly, hourlyTooLong, points: timeData } =
 
 (tras el guard `if (!summary)`), y borrar los helpers/`TimePoint` locales. El resto del componente (`totalByLabel`, avisos, `hourlyTooLong`, renders) no cambia.
 
-- [ ] **Step 4: Verificar gate**
+- [x] **Step 4: Verificar gate**
 
 Run: `npx tsc --noEmit` y `npx vite build` (desde `frontend/`)
 Expected: exit 0 y exit 0 (solo aviso preexistente).
 
-- [ ] **Step 5: Verificar en navegador que la serie no cambió**
+- [x] **Step 5: Verificar en navegador que la serie no cambió**
 
 Recargar `http://localhost:5300/` con `soc_sample.xlsx`: la sección «Actividad temporal por criticidad» muestra **exactamente** las mismas etiquetas y valores que antes (misma granularidad, mismos avisos).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add frontend/src/charts.ts frontend/src/components/Dashboard.tsx
@@ -158,32 +158,32 @@ git commit -m "refactor: bucketing temporal compartido (charts.ts) para serie y 
 **Interfaces:**
 - Produces: `FilterState.clearEpoch: number` — `0` inicial; `+1` en `clearAll` y en `reset` (ambas son limpieza total; `reset` cubre el mismo rescate de `q` pendiente al cambiar de análisis).
 
-- [ ] **Step 1: Añadir `clearEpoch` al store**
+- [x] **Step 1: Añadir `clearEpoch` al store**
 
 Campo con doc en español en `FilterState`; `clearAll` y `reset` incrementan (`set(s => ({ ...EMPTY_FILTERS, clearEpoch: s.clearEpoch + 1 }))`).
 
-- [ ] **Step 2: Guardia en el debounce de `q` (`DataTable.tsx`)**
+- [x] **Step 2: Guardia en el debounce de `q` (`DataTable.tsx`)**
 
 Al programar el timer capturar la época viva (`useFilterStore.getState().clearEpoch`); en el callback, antes de `setQ`, comparar con la época viva y **no hacer nada** si cambió. (Cinturón: el timer no reescribe un `q` ya limpiado.)
 
-- [ ] **Step 3: Vaciar el input al cambiar la época**
+- [x] **Step 3: Vaciar el input al cambiar la época**
 
 Efecto nuevo en `DataTable.tsx`: al cambiar `clearEpoch`, ejecutar
 `setQInput('')` sin condición (solo se dispara en clear/reset, nunca al
 teclear; esto cierra la ventana en la que el texto tecleado se queda en el
 input con el store ya limpio). No tocar el efecto `prevQ` existente.
 
-- [ ] **Step 4: Verificar gate**
+- [x] **Step 4: Verificar gate**
 
 Run: `npx tsc --noEmit` y `npx vite build`
 Expected: exit 0 y exit 0.
 
-- [ ] **Step 5: Recorrido de la carrera**
+- [x] **Step 5: Recorrido de la carrera**
 
 En la tabla: teclear «dc» y **sin esperar los 300 ms** pulsar «Limpiar filtros». Esperar 1 s:
 Expected: input vacío, **sin** chip «Búsqueda», contador «12 de 12 registros»; en la consola, 0 errores.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add frontend/src/store/filters.ts frontend/src/components/DataTable.tsx
@@ -200,26 +200,26 @@ git commit -m "fix: clearEpoch cierra la carrera entre Limpiar filtros y el debo
 **Interfaces:**
 - Consumes: `filtersKey` (serialización estable ya existente en el componente), estado `page`, callback `fetchRows` existente — **`fetchRows` no se toca**.
 
-- [ ] **Step 1: Evitar el fetch huérfano al resetear página**
+- [x] **Step 1: Evitar el fetch huérfano al resetear página**
 
 Comportamiento a implementar (mecanismo a criterio del implementer; ref‑previo de `filtersKey` o bandera de reset pendiente): cuando `filtersKey` cambie y `page !== 1`, **saltar** el fetch de esa pasada — el efecto de reset (`setPage(1)`) dispara el único `fetchRows` con `page=1`. Con `page === 1`, el fetch ocurre como hoy. La paginación a mano (clic en «Página N») debe seguir emitiendo **exactamente un** `/rows`.
 
-- [ ] **Step 2: Verificar gate**
+- [x] **Step 2: Verificar gate**
 
 Run: `npx tsc --noEmit` y `npx vite build`
 Expected: exit 0 y exit 0.
 
-- [ ] **Step 3: Generar dataset de 60 filas y medir con Resource Timing**
+- [x] **Step 3: Generar dataset de 60 filas y medir con Resource Timing**
 
 Script pandas en `%TEMP%` (patrón sub‑1) → `C:\Users\Brian\Desktop\soc_60.xlsx`: 60 filas en varias horas/días. Subirlo, ir a **página 2**, aplicar un filtro (nivel Alto).
 Expected (Resource Timing en consola): **1 sola** petición `/rows` en el cambio, con `page=1`.
 
-- [ ] **Step 4: Verificar que la paginación sigue viva**
+- [x] **Step 4: Verificar que la paginación sigue viva**
 
 Clic en «Página 2» del paginador.
 Expected (Resource Timing): exactamente **1** `/rows` con `page=2`; la tabla muestra la página correcta.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/src/components/DataTable.tsx
@@ -238,7 +238,7 @@ git commit -m "fix: un solo /rows por cambio de filtros en pagina >1"
 - Consumes: `buildTimeBuckets`, `TimePoint` (charts.ts, Task 2); `useAnalysisStore((s) => s.summary)` (resumen **global**); `useFilterStore` con **selectores** (`(s) => s.from`, `(s) => s.to`) — no el store entero.
 - Produces: `export const TimelineBrush: React.FC` — devuelve `null` cuando `points.length < 2`.
 
-- [ ] **Step 1: Crear el componente (sin gestos aún)**
+- [x] **Step 1: Crear el componente (sin gestos aún)**
 
 Lógica: leer el summary global → `buildTimeBuckets` → `if (points.length < 2) return null`. Render: `<DashboardSection title="Línea de tiempo">` + `ResponsiveContainer` (height ~90) con `BarChart data={points}`:
 - 4 `<Bar stackId="tl" dataKey={level} fill={LEVEL_COLORS[level]}>` apilados por
@@ -253,22 +253,22 @@ Lógica: leer el summary global → `buildTimeBuckets` → `if (points.length < 
   `T`) y comparar por `detail`; si ningún punto queda dentro, sin región.
 - Comentarios en español; sin indicación de gestos todavía.
 
-- [ ] **Step 2: Montar en `Dashboard.tsx`**
+- [x] **Step 2: Montar en `Dashboard.tsx`**
 
 Justo antes de `{/* Actividad temporal… */}` (línea ~593): `<TimelineBrush />`.
 
-- [ ] **Step 3: Verificar gate**
+- [x] **Step 3: Verificar gate**
 
 Run: `npx tsc --noEmit` y `npx vite build`
 Expected: exit 0 y exit 0.
 
-- [ ] **Step 4: Recorrido — la tira existe y oculta con <2 tramos**
+- [x] **Step 4: Recorrido — la tira existe y oculta con <2 tramos**
 
 a) `soc_sample.xlsx`: la tira aparece sobre «Actividad temporal», con los mismos tramos que la serie (comparar primera/última etiqueta — **Review Focus 3**).
 b) Generar `soc_un_tramo.xlsx` (12 filas, todas `2026-01-10 09:xx`): subirlo.
 Expected: **la tira no se renderiza** (1 solo punto); el resto del dashboard normal.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/src/components/TimelineBrush.tsx frontend/src/components/Dashboard.tsx
@@ -290,7 +290,7 @@ git commit -m "feat: tira de linea de tiempo con histograma global"
   - horario: `from = detail.replace(' ', 'T')` → `2026-01-10T08:00`; `to = from.slice(0, 13) + ':59:59.999'` → `2026-01-10T08:59:59.999`
   - diario: `from = detail` → `2026-01-12`; `to = detail + 'T23:59:59.999'`
 
-- [ ] **Step 1: `dayMonth` robusta ante datetime (cierra el minor de sub‑1)**
+- [x] **Step 1: `dayMonth` robusta ante datetime (cierra el minor de sub‑1)**
 
 En `charts.ts`, formatos pineados por el comportamiento:
 
@@ -300,11 +300,11 @@ dayMonth('2026-01-10T08:00')  // '10/01 08:00'  (HH:MM, sin segundos)
 dayMonth('basura')            // 'basura'       (sin NaN ni throw)
 ```
 
-- [ ] **Step 2: Doc del store**
+- [x] **Step 2: Doc del store**
 
 `from`/`to`: «ISO con fecha u hora (`YYYY-MM-DD` o `YYYY-MM-DDTHH:mm…`); null = sin filtro» (antes decía solo `YYYY-MM-DD`).
 
-- [ ] **Step 3: Gestos en `TimelineBrush.tsx`**
+- [x] **Step 3: Gestos en `TimelineBrush.tsx`**
 
 - Estado local del arrastre (labels de puntos) + punto de inicio en px; umbral **4 px** para distinguir clic de drag.
 - `pointerdown` sobre el `BarChart`: localizar el punto por `label` (mismo patrón que `pickSlot`: `points.find(p => p.label === …)`).
@@ -314,12 +314,12 @@ dayMonth('basura')            // 'basura'       (sin NaN ni throw)
 - Nota de ayuda (font‑mono, text‑dim, patrón de las notas existentes): «Arrastrá un tramo para acotar el análisis; con un clic seleccionás un solo tramo.»
 - **Cero escrituras durante el drag**: `setRange` solo en `mouseup` (**D6 / criterio «una petición por cambio»**).
 
-- [ ] **Step 4: Verificar gate**
+- [x] **Step 4: Verificar gate**
 
 Run: `npx tsc --noEmit` y `npx vite build`
 Expected: exit 0 y exit 0.
 
-- [ ] **Step 5: Recorrido A — `soc_sample.xlsx` (granularidad horaria)**
+- [x] **Step 5: Recorrido A — `soc_sample.xlsx` (granularidad horaria)**
 
 1. Arrastrar 2 tramos → contador «X de Y», KPIs y donut acotados; chip de rango con hora (p. ej. `10/01 08:00–10/01 11:00`); **la tira conserva el histograma global** con la región sombreada.
 2. Resource Timing: **0** peticiones durante el drag; al soltar, **exactamente 1** `/summary` (**Review Focus 4**).
@@ -329,12 +329,12 @@ Expected: exit 0 y exit 0.
 6. Cambiar de sección y volver → la ventana sobrevive (R21).
 7. **Criterio 2**: arrastrar hasta el **último** tramo del archivo → el contador incluye los eventos de ese tramo (sample: las 18:00 del 12/01).
 
-- [ ] **Step 6: Recorrido B — granularidad diaria**
+- [x] **Step 6: Recorrido B — granularidad diaria**
 
 Generar `soc_largo.xlsx`: 460 filas distribuidas en 19 días × 24 h distintas (>400 tramos horarios → `hourlyTooLong` → cae a diario). Subirlo.
 Expected: la tira es **diaria**; el chip de rango **sin hora**; en Resource Timing el query lleva `to=…T23%3A59%3A59.999`; arrastrar recorta todo correctamente.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add frontend/src/components/TimelineBrush.tsx frontend/src/charts.ts frontend/src/store/filters.ts
@@ -348,11 +348,11 @@ git commit -m "feat: brush de arrastre fija la ventana temporal (gestos y semant
 **Files:**
 - Modify: `docs/superpowers/plans/2026-10-27-linea-de-tiempo-brush.md` (checkboxes)
 
-- [ ] **Step 1: Suites**
+- [x] **Step 1: Suites**
 
 Run: `backend\.venv\Scripts\python.exe -m pytest backend\tests -q` → **45 passed**; `npx tsc --noEmit` → 0; `npx vite build` → 0.
 
-- [ ] **Step 2: Checklist de aceptación (spec §5, recorrido en navegador)**
+- [x] **Step 2: Checklist de aceptación (spec §5, recorrido en navegador)**
 
 | # | Criterio | Dataset |
 |---|---|---|
@@ -366,7 +366,7 @@ Run: `backend\.venv\Scripts\python.exe -m pytest backend\tests -q` → **45 pass
 | 8 | Red de regresión sub‑1 intacta | pytest |
 | 9 | Gate verde (paso 1) | — |
 
-- [ ] **Step 3: Marcar checkboxes del plan y ledger; commit**
+- [x] **Step 3: Marcar checkboxes del plan y ledger; commit**
 
 ```bash
 git add docs/superpowers/plans/2026-10-27-linea-de-tiempo-brush.md
