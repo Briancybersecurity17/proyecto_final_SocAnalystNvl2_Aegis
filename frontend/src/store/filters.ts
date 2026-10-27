@@ -9,7 +9,7 @@ import type { StoreApi, UseBoundStore } from 'zustand'
  * es la de un análisis (reset() al cambiar de dataset).
  */
 export type FilterState = {
-  /** Rango de fechas (YYYY-MM-DD); null = sin filtro. */
+  /** Rango ISO con fecha u hora (YYYY-MM-DD o YYYY-MM-DDTHH:mm…); null = sin filtro. */
   from: string | null
   to: string | null
   /** Nivel de riesgo ('' = todos). */

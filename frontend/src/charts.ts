@@ -164,12 +164,21 @@ export const hourLabel = (stamp: string, withYear = false): string => {
 }
 
 /**
- * "2026-01-12" → "12/01" (chip de la ventana temporal). Si el valor no trae
- * una fecha ISO reconocible se muestra tal cual: el chip nunca rompe el render.
+ * "2026-01-10" → "10/01"; "2026-01-10T08:00" → "10/01 08:00" (HH:MM, sin
+ * segundos) — el chip de la ventana temporal y las etiquetas de extremos de
+ * la tira usan el mismo formato. El cierre inclusivo "…T23:59:59.999" de una
+ * ventana diaria representa el día completo y se muestra sin hora. Si el
+ * valor no trae una fecha ISO reconocible se devuelve tal cual: el chip
+ * nunca rompe el render (sin NaN ni throw).
  */
 export const dayMonth = (iso: string): string => {
-  const [, month, day] = iso.split('-')
-  return month && day ? `${Number(day)}/${Number(month)}` : iso
+  const match = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?)?$/.exec(iso)
+  if (!match) return iso
+  const [, , month, day, time] = match
+  // El ISO ya trae día y mes con dos dígitos: se conservan («10/01», no «10/1»).
+  const base = `${day}/${month}`
+  // «23:59» es el borde del día, no una hora del archivo: no se muestra.
+  return time && time !== '23:59' ? `${base} ${time}` : base
 }
 
 /** Un punto de la serie temporal, ya por hora ya por día. */
