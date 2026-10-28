@@ -210,6 +210,23 @@ const Dashboard: React.FC = () => {
         .slice(0, 4)
     : []
 
+  // --- justificación del riesgo global (metadato del análisis) -------------
+  // El nivel global no se acota por los filtros de nivel: conteos, ejemplos
+  // y hosts salen del resumen que ignora ese filtro, para que el panel no
+  // cambie de discurso al filtrar por otro nivel (mismo criterio que el
+  // donut y las tarjetas de criticidad).
+  const globalRisk = summaryNoLevel.risk
+  const globalRiskBlock = summaryNoLevel.risk_levels?.[globalRisk]
+  const globalRiskExamples = (globalRiskBlock?.examples ?? []).slice(0, 3)
+  // Forma real del backend: { host: { critico: n, alto: n, … } } — se itera
+  // por host y se toma el contador del nivel global (línea 183/206).
+  const riskLevelHosts = Object.entries(summaryNoLevel.top_hosts_by_level ?? {})
+    .map(([host, levels]) => ({ host, value: toCount(levels[globalRisk]) }))
+    .filter(item => item.value > 0)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 5)
+  const riskHostsMax = riskLevelHosts[0]?.value ?? 1
+
   const totalSeries = timeData.reduce((sum, point) => sum + point.total, 0)
   const selectedSlot = focusSlot ? timeData.find(point => point.label === focusSlot) ?? null : null
 
@@ -801,11 +818,169 @@ const Dashboard: React.FC = () => {
               )}
             </DashboardSection>
 
-            {/* Overall risk justification */}
+            {/* Justificación del riesgo global: además del párrafo del
+                backend, el panel recoge el reparto por nivel (interactivo,
+                mismo toggleLevel que el donut), la justificación del nivel
+                global, registros de ejemplo reales y el peso de cada host —
+                así comparte altura con el gráfico temporal hermano en vez de
+                dejar un párrafo suelto en un panel estirado. */}
             <DashboardSection title="Justificación del nivel de riesgo">
-              <p className="font-mono text-[13.5px] leading-relaxed text-[var(--text)]">
-                {summary.risk_justification || 'El backend no incluyó una justificación para este análisis.'}
-              </p>
+              {!globalRiskBlock ? (
+                <p className="font-mono text-[13.5px] leading-relaxed text-[var(--text)]">
+                  {summary.risk_justification ||
+                    'El backend no incluyó una justificación para este análisis.'}
+                </p>
+              ) : (
+                <>
+                  {/* Nivel global asignado + cifras ancla */}
+                  <div className="mb-4 flex flex-wrap items-center gap-3">
+                    <span
+                      className="border px-2.5 py-1 font-mono text-[11px] font-bold uppercase tracking-[0.18em] [clip-path:var(--chamfer-sm)]"
+                      style={{
+                        color: LEVEL_COLORS[globalRisk],
+                        borderColor: LEVEL_COLORS[globalRisk],
+                        background: `${LEVEL_COLORS[globalRisk]}1a`,
+                        boxShadow: `0 0 10px ${LEVEL_COLORS[globalRisk]}55`,
+                      }}
+                    >
+                      Riesgo global · {LEVEL_LABELS[globalRisk] ?? globalRisk}
+                    </span>
+                    <span className="font-mono text-[12.5px] text-[var(--text-dim)]">
+                      {fmtCount(globalRiskBlock.count)} de {fmtCount(rowsNoLevel)} registros (
+                      {globalRiskBlock.percentage}%) clasificados en este nivel
+                    </span>
+                  </div>
+
+                  {/* Reparto por nivel: barra compacta y clicable */}
+                  <p className="hud-label mb-1.5">
+                    Reparto por nivel — pulsá un segmento para filtrar
+                  </p>
+                  <div className="mb-5 flex h-9 gap-px border border-hud-soft bg-[var(--bg-void)]">
+                    {severityData.map(item => {
+                      const active = filters.level === item.level
+                      const dimmed = filters.level !== '' && !active
+                      const share = rowsNoLevel > 0 ? (item.value / rowsNoLevel) * 100 : 0
+                      return (
+                        <button
+                          key={item.level}
+                          type="button"
+                          aria-pressed={active}
+                          aria-label={`${item.name}: ${fmtCount(item.value)} registros`}
+                          title={`${item.name}: ${fmtCount(item.value)} registros (${share.toFixed(
+                            1,
+                          )}%) — ${
+                            active ? 'quitar el filtro de nivel' : 'filtrar por este nivel'
+                          }`}
+                          onClick={() => toggleLevel(item.level)}
+                          style={{
+                            flexGrow: item.value || 0,
+                            flexBasis: 0,
+                            minWidth: item.value === 0 ? 40 : undefined,
+                            background: active
+                              ? LEVEL_COLORS[item.level]
+                              : `${LEVEL_COLORS[item.level]}2e`,
+                            boxShadow: active ? `0 0 12px ${LEVEL_COLORS[item.level]}` : undefined,
+                          }}
+                          className={`overflow-hidden border-r border-[#050212] font-mono text-[10.5px] font-bold uppercase tracking-wide transition-all duration-200 last:border-r-0 hover:opacity-100 ${
+                            dimmed ? 'opacity-40' : 'opacity-100'
+                          } ${active ? 'text-[#050212]' : 'text-[var(--text)]'}`}
+                        >
+                          {item.value > 0
+                            ? `${item.name} ${share < 10 ? share.toFixed(1) : Math.round(share)}%`
+                            : item.name}
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  {/* Por qué este nivel + evidencias | hosts del nivel */}
+                  <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+                    <div>
+                      <p className="hud-label mb-1.5">
+                        Por qué «{LEVEL_LABELS[globalRisk] ?? globalRisk}»
+                      </p>
+                      <p className="mb-4 font-display text-[15px] leading-relaxed text-[var(--text-bright)]">
+                        {globalRiskBlock.justification}
+                      </p>
+
+                      {globalRiskExamples.length > 0 && (
+                        <>
+                          <p className="hud-label mb-2">Registros de ejemplo de este nivel</p>
+                          <ul className="space-y-2">
+                            {globalRiskExamples.map((ex, i) => (
+                              <li
+                                key={`${String(ex.Event_ID ?? 'ev')}-${i}`}
+                                className="border-l-2 bg-inset/50 py-1.5 pl-3 pr-2"
+                                style={{ borderColor: LEVEL_COLORS[globalRisk] }}
+                              >
+                                <div className="flex flex-wrap items-center gap-2 font-mono text-[12px]">
+                                  <span className="font-bold text-[var(--text-bright)]">
+                                    {String(ex.Event_ID ?? 's/Event_ID')}
+                                  </span>
+                                  <span className="text-[var(--text)]">
+                                    {ex.Hostname ?? 'host n/d'}
+                                  </span>
+                                  <span className="text-[var(--text-dim)]">
+                                    {(ex.Timestamp ?? '').replace('T', ' ').slice(0, 16)}
+                                  </span>
+                                </div>
+                                {ex._reason && (
+                                  <p
+                                    className="truncate font-mono text-[12px] text-[var(--text-dim)]"
+                                    title={ex._reason}
+                                  >
+                                    {ex._reason}
+                                  </p>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        </>
+                      )}
+                    </div>
+
+                    <div>
+                      <p className="hud-label mb-2">Hosts con más registros en el nivel</p>
+                      {riskLevelHosts.length === 0 ? (
+                        <p className="font-mono text-[12.5px] text-[var(--text-dim)]">
+                          Sin datos de host para este nivel.
+                        </p>
+                      ) : (
+                        <ul className="space-y-2.5">
+                          {riskLevelHosts.map(host => (
+                            <li key={host.host}>
+                              <div className="mb-1 flex items-baseline justify-between font-mono text-[12.5px]">
+                                <span className="text-[var(--text)]">{host.host}</span>
+                                <span className="text-[var(--text-bright)]">
+                                  {fmtCount(host.value)}{' '}
+                                  <span className="text-[var(--text-dim)]">
+                                    ({pct(host.value, globalRiskBlock.count)}%)
+                                  </span>
+                                </span>
+                              </div>
+                              <div className="h-1.5 border border-hud-soft bg-[var(--bg-void)]">
+                                <div
+                                  className="h-full transition-all duration-500"
+                                  style={{
+                                    width: `${Math.max(4, (host.value / riskHostsMax) * 100)}%`,
+                                    background: LEVEL_COLORS[globalRisk],
+                                    boxShadow: `0 0 6px ${LEVEL_COLORS[globalRisk]}88`,
+                                  }}
+                                />
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      <p className="mt-3 font-mono text-[11.5px] leading-relaxed text-[var(--text-dim)]">
+                        Cada barra es el % de los {fmtCount(globalRiskBlock.count)} registros del
+                        nivel global. Pulsá un segmento del reparto —o una fila de las tarjetas
+                        superiores— para acotar toda la pantalla a ese nivel.
+                      </p>
+                    </div>
+                  </div>
+                </>
+              )}
             </DashboardSection>
           </div>
         </>
