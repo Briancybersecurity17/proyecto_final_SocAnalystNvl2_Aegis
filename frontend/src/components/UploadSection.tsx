@@ -1,7 +1,6 @@
 import React from 'react';
 import UploadExcel from './UploadExcel';
 import UploadHistory from './UploadHistory';
-import DataTable from './DataTable';
 import { useAnalysisStore } from '../store';
 import { EmptyState } from './EmptyState';
 
@@ -29,8 +28,6 @@ const UploadSection: React.FC = () => {
 
       {/* Historial de subidas: siempre visible (con su estado vacío propio). */}
       <UploadHistory />
-
-      <DataTable />
     </section>
   );
 };
