@@ -334,11 +334,13 @@ const Dashboard: React.FC = () => {
           scrollear la pantalla queda arriba con chips, contador «X de Y» y
           limpieza global. Sin ella el usuario no sabría que las cifras están
           acotadas por un filtro. `-mx-6 px-6` compensa el `p-6` de la sección
-          de App para que llegue a los bordes sin scroll horizontal. */}
+          de App para que llegue a los bordes sin scroll horizontal. El fondo
+          es opaco: con Tailwind v3 el `/95` sobre `var()` no compila y dejaba
+          la barra transparente (el contenido asomaba al scrollear). */}
       <div
         role="group"
         aria-label="Filtros activos"
-        className="sticky top-0 z-20 -mx-6 flex flex-wrap items-center gap-2 border-b border-hud-soft bg-[var(--bg-void)]/95 px-6 py-3 backdrop-blur-sm"
+        className="sticky top-0 z-20 -mx-6 flex flex-wrap items-center gap-2 border-b border-hud-soft bg-[var(--bg-void)] px-6 py-3 backdrop-blur-sm"
       >
         {activeChips.map(chip => (
           <span key={chip.key} className="chip normal-case text-hud-line">
