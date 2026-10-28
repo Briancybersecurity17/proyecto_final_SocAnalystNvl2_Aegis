@@ -311,7 +311,7 @@ export const TimelineBrush: React.FC = () => {
       </div>
       {/* Nota de uso del gesto, en el patrón mono de las notas existentes. */}
       <p className="mt-2 font-mono text-xs text-dim">
-        Arrastrá un tramo para acotar el análisis; con un clic seleccionás un solo tramo.
+        Arrastrá un tramo o pulsá una columna: eso filtra el resto del panel.
       </p>
     </DashboardSection>
   )

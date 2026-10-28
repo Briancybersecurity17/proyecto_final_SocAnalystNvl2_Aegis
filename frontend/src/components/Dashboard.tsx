@@ -525,7 +525,7 @@ const Dashboard: React.FC = () => {
                         title={`Nivel ${selectedLevel.name}`}
                         color={LEVEL_COLORS[selectedLevel.level]}
                         value={`${fmtCount(selectedLevel.value)} registros`}
-                        caption={`${pct(selectedLevel.value, rowsNoLevel)}% de los ${rowsNoLevel} registros del archivo`}
+                        caption={`${pct(selectedLevel.value, rowsNoLevel)}% de los ${rowsNoLevel} registros de la selección`}
                         rows={topHostsForLevel.map(host => ({
                           label: host.host,
                           value: `${host.value} eventos`,
@@ -638,15 +638,14 @@ const Dashboard: React.FC = () => {
                     <p className="mb-3 border border-hud-line/50 bg-hud-line/10 px-3 py-2 font-mono text-[12.5px] leading-relaxed text-hud-fg">
                       El archivo abarca {fmtCount(hourlyData.length)} tramos con actividad por hora: para
                       que el eje siga siendo legible y el gráfico no pinte miles de puntos, se muestra la
-                      serie diaria, con los mismos registros del archivo.
+                      serie diaria, con los mismos registros de la selección.
                     </p>
                   )}
 
                   {!hourly && timeData.length === 1 && (
                     <p className="mb-3 border border-[#ffb020]/50 bg-[#ffb020]/10 px-3 py-2 font-mono text-[12.5px] leading-relaxed text-[#ffb020]">
-                      Los datos cubren un solo día ({timeData[0].detail}) y la respuesta no incluye
-                      desglose horario: se muestra el total del día. Con una sola fecha no hay
-                      tendencia que graficar.
+                      Con los filtros actuales los registros quedan en un solo tramo horario ({timeData[0].detail});
+                      se muestra el total del día. Con un solo tramo no hay tendencia que graficar.
                     </p>
                   )}
 
