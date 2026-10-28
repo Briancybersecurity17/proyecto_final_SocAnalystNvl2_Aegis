@@ -309,7 +309,7 @@ const Dashboard: React.FC = () => {
               role="button"
               aria-pressed={active}
               tabIndex={0}
-              className={`cursor-pointer border border-hud-soft bg-inset/80 p-4 shadow-[0_0_12px_rgba(31,200,255,0.14)] transition-shadow duration-200 hover:border-hud-line/50 hover:shadow-[0_0_20px_rgba(31,200,255,0.35)] [clip-path:var(--chamfer-sm)]${active ? ' border-hud-line/70 shadow-[0_0_18px_rgba(31,200,255,0.45)]' : ''}`}
+              className={`cursor-pointer border border-hud-soft bg-inset/80 p-3 shadow-[0_0_12px_rgba(31,200,255,0.14)] transition-shadow duration-200 hover:border-hud-line/50 hover:shadow-[0_0_20px_rgba(31,200,255,0.35)] [clip-path:var(--chamfer-sm)]${active ? ' border-hud-line/70 shadow-[0_0_18px_rgba(31,200,255,0.45)]' : ''}`}
               style={{ borderLeft: `4px solid ${color}` }}
             >
               <div className="flex items-center justify-between">
@@ -330,41 +330,47 @@ const Dashboard: React.FC = () => {
         })}
       </motion.div>
 
-      {/* Filtros activos (spec §5.3): chips removibles, contador y limpieza
-          global. Sin esta barra el usuario no sabría que las cifras están
-          acotadas por un filtro. */}
-      {isFiltered && (
-        <div role="group" aria-label="Filtros activos" className="flex flex-wrap items-center gap-2">
-          {activeChips.map(chip => (
-            <span key={chip.key} className="chip normal-case text-hud-line">
-              {chip.label}
-              <button
-                type="button"
-                onClick={chip.onRemove}
-                aria-label={`Quitar filtro ${chip.label}`}
-                title={`Quitar filtro ${chip.label}`}
-                className="ml-1 leading-none opacity-70 transition-opacity hover:opacity-100"
-              >
-                ×
-              </button>
-            </span>
-          ))}
-
-          <span className="hud-label">
-            {fmtCount(toCount(filteredTotal))} de {fmtCount(toCount(total))} registros
+      {/* Barra de filtros (spec §5.3 / D15): sticky y SIEMPRE visible — al
+          scrollear la pantalla queda arriba con chips, contador «X de Y» y
+          limpieza global. Sin ella el usuario no sabría que las cifras están
+          acotadas por un filtro. `-mx-6 px-6` compensa el `p-6` de la sección
+          de App para que llegue a los bordes sin scroll horizontal. */}
+      <div
+        role="group"
+        aria-label="Filtros activos"
+        className="sticky top-0 z-20 -mx-6 flex flex-wrap items-center gap-2 border-b border-hud-soft bg-[var(--bg-void)]/95 px-6 py-3 backdrop-blur-sm"
+      >
+        {activeChips.map(chip => (
+          <span key={chip.key} className="chip normal-case text-hud-line">
+            {chip.label}
+            <button
+              type="button"
+              onClick={chip.onRemove}
+              aria-label={`Quitar filtro ${chip.label}`}
+              title={`Quitar filtro ${chip.label}`}
+              className="ml-1 leading-none opacity-70 transition-opacity hover:opacity-100"
+            >
+              ×
+            </button>
           </span>
+        ))}
 
+        <span className="hud-label">
+          {fmtCount(toCount(filteredTotal))} de {fmtCount(toCount(total))} registros
+        </span>
+
+        {isFiltered && (
           <button type="button" onClick={filters.clearAll} className="btn-hud">
             Limpiar filtros
           </button>
+        )}
 
-          {error && (
-            <span className="hud-label basis-full text-[#f97316]">
-              No se pudo aplicar el filtro — se muestra el resumen global
-            </span>
-          )}
-        </div>
-      )}
+        {error && (
+          <span className="hud-label basis-full text-[#f97316]">
+            No se pudo aplicar el filtro — se muestra el resumen global
+          </span>
+        )}
+      </div>
 
       {/* AI observations over the imported data */}
       {summary.ai_insights && summary.ai_insights.length > 0 && (

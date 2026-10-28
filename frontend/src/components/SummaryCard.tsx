@@ -15,9 +15,9 @@ export const SummaryCard: React.FC<SummaryCardProps> = ({ label, value }) => (
   <motion.div
     variants={cardIn}
     whileHover={{ y: -3, transition: { duration: 0.18 } }}
-    className="border border-hud-soft bg-inset/80 p-4 text-center shadow-[0_0_12px_rgba(31,200,255,0.14)] transition-shadow duration-200 hover:border-hud-line/60 hover:shadow-[0_0_18px_rgba(31,200,255,0.4)] [clip-path:var(--chamfer-sm)]"
+    className="border border-hud-soft bg-inset/80 p-3 text-center shadow-[0_0_12px_rgba(31,200,255,0.14)] transition-shadow duration-200 hover:border-hud-line/60 hover:shadow-[0_0_18px_rgba(31,200,255,0.4)] [clip-path:var(--chamfer-sm)]"
   >
-    <h3 className="hud-label mb-2">{label}</h3>
+    <h3 className="hud-label mb-1.5">{label}</h3>
     <p className="font-display text-2xl font-bold text-hud-line [text-shadow:0_0_10px_rgba(31,200,255,0.5)]">
       {typeof value === 'number' ? <AnimatedValue value={value} /> : value}
     </p>
