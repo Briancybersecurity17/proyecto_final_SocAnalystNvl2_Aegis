@@ -3,6 +3,7 @@ import { getAnalysis, getRecentAnalyses } from '../api/client'
 import type { RecentAnalysis } from '../api/client'
 import { fmtCount, LEVEL_COLORS, LEVEL_LABELS } from '../charts'
 import { useAnalysisStore, useUiStore } from '../store'
+import { useFilterStore } from '../store/filters'
 import { DashboardSection } from './DashboardSection'
 
 /**
@@ -81,6 +82,10 @@ const UploadHistory: React.FC = () => {
       setStatus('done')
       setAnalysisId(res.analysis_id)
       setSummary(res.summary)
+      // Reabrir es una acción explícita de abrir limpio: si coincide con el
+      // id activo, el reset por cambio de análisis de App no dispararía, así
+      // que se pide acá (idempotente para el caso de id distinto).
+      useFilterStore.getState().reset()
       setSection('dashboard')
     } catch (err) {
       const codigo = (err as { response?: { status?: number } })?.response?.status
