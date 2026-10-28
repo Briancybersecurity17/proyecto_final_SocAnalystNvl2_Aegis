@@ -6,7 +6,7 @@ import DataTable from './DataTable'
 import { EmptyState } from './EmptyState'
 import { TimelineBrush } from './TimelineBrush'
 import { ChartInsight, selectionCells } from './ChartTools'
-import { useScopedSummary } from '../hooks/useScopedSummary'
+import { useScopedSummary, type OmitSpec } from '../hooks/useScopedSummary'
 import { selectIsFiltered, useFilterStore } from '../store/filters'
 import { stagger, cardIn, useCountUp } from '../motion'
 import {
@@ -63,22 +63,41 @@ type ActiveFilterChip = {
 /** Fila que entrega Recharts al pulsar los gráficos del dashboard. */
 type DashboardClick = ChartClickState<TimePoint & { host?: string; severity?: string }>
 
+// Qué filtra ignora cada vista (facet-exclusion, spec sub-3 D2/D3).
+// Constantes de módulo: la identidad del `omit` no cambia entre renders.
+const OMIT_LEVEL: OmitSpec = { level: true }
+const OMIT_HOSTS: OmitSpec = { facets: ['Hostname'] }
+
 const Dashboard: React.FC = () => {
-  // El resumen sale del hook: el global sin filtros (cero peticiones) o el
-  // acotado por el motor de filtros. Los gráficos leen los mismos campos.
+  // Tres vistas, tres resúmenes: el global sin filtros (cero peticiones) o el
+  // acotado por el motor de filtros. KPIs, tabla, IA, actividad, justificación
+  // y chips leen el completo; el donut y las tarjetas ignoran `level` para
+  // seguir viendo los 4 niveles aunque ese filtro esté activo, y las barras
+  // de hosts ignoran la faceta «Hostname» para no colapsar el gráfico.
   const { summary, total, filteredTotal, loading, error } = useScopedSummary()
+  const { summary: summaryNoLevel } = useScopedSummary(OMIT_LEVEL)
+  const { summary: summaryNoHosts } = useScopedSummary(OMIT_HOSTS)
   // El store se lee completo porque la barra de chips necesita todos los
   // filtros activos y sus acciones para poder quitar cada uno.
   const filters = useFilterStore()
   const isFiltered = selectIsFiltered(filters)
-  // Selección persistente: lo que queda marcado (brillo + contorno) y de lo
-  // que la tarjeta de debajo muestra el desglose completo.
-  const [focusLevel, setFocusLevel] = useState<string | null>(null)
-  const [focusSlot, setFocusSlot] = useState<string | null>(null)
-  const [focusHost, setFocusHost] = useState<string | null>(null)
   const chartMotion = useChartMotion()
 
-  if (!summary) {
+  // Selección de la tira temporal: el tramo marcado (brillo + contorno) del
+  // que la tarjeta de debajo muestra el desglose completo. El nivel y el host
+  // ya no guardan estado local: alternan los filtros globales del store (D7).
+  const [focusSlot, setFocusSlot] = useState<string | null>(null)
+  // Nivel activo: lo alternan las tarjetas, los sectores y la leyenda.
+  const activeLevel = filters.level || null
+  const toggleLevel = (nivel: string) => filters.setLevel(filters.level === nivel ? '' : nivel)
+  // Hosts activos: las barras alternan la faceta global «Hostname». Con una
+  // sola selección se resalta la barra y se abre el desglose; con varias, la
+  // selección vive en los chips y el resaltado se apaga (simplificación
+  // aceptada).
+  const activeHosts = filters.facets['Hostname'] ?? []
+  const focusHost = activeHosts.length === 1 ? activeHosts[0] : null
+
+  if (!summary || !summaryNoLevel || !summaryNoHosts) {
     return (
       <EmptyState hint="Sube un archivo Excel para ver las estadísticas y los gráficos por criticidad." />
     )
@@ -143,7 +162,10 @@ const Dashboard: React.FC = () => {
 
   const rows = toCount(summary.rows)
   const suspicious = toCount(summary.suspicious_events)
-  const levelCounts = summary.level_counts ?? {}
+  // Tarjetas y donut: ignoran el filtro de nivel, así que muestran SIEMPRE
+  // los 4 niveles y sus porcentajes dividen sobre los registros sin ese filtro.
+  const rowsNoLevel = toCount(summaryNoLevel.rows)
+  const levelCounts = summaryNoLevel.level_counts ?? {}
 
   // Distribución por criticidad (clasificación derivada del análisis)
   const severityData = LEVEL_ORDER.map(level => ({
@@ -156,7 +178,9 @@ const Dashboard: React.FC = () => {
     buildTimeBuckets(summary)
   const totalByLabel = new Map(timeData.map(p => [p.label, p.total]))
 
-  const hostsData = Object.entries(summary.top_hosts_by_level ?? {})
+  // Barras de hosts: ignoran la faceta «Hostname» para seguir mostrando
+  // todos los hosts aunque ese filtro esté activo.
+  const hostsData = Object.entries(summaryNoHosts.top_hosts_by_level ?? {})
     .map(([host, levels]) => ({
       host,
       critico: toCount(levels.critico),
@@ -171,15 +195,16 @@ const Dashboard: React.FC = () => {
     .sort((a, b) => b.total - a.total)
 
   // --- selección activa (lo que queda marcado en cada gráfico) -------------
-  const selectedIndex = focusLevel ? severityData.findIndex(item => item.level === focusLevel) : -1
+  const selectedIndex = activeLevel ? severityData.findIndex(item => item.level === activeLevel) : -1
   const selectedLevel = selectedIndex >= 0 ? severityData[selectedIndex] : null
-  const riskBlock = focusLevel ? summary.risk_levels?.[focusLevel] : undefined
+  // La justificación del riesgo es metadato del análisis: no se acota.
+  const riskBlock = activeLevel ? summary.risk_levels?.[activeLevel] : undefined
 
-  // Hosts con más eventos en el nivel seleccionado (misma fuente que la
-  // sección de hosts: top_hosts_by_level del resumen).
-  const topHostsForLevel = focusLevel
-    ? Object.entries(summary.top_hosts_by_level ?? {})
-        .map(([host, levels]) => ({ host, value: toCount(levels[focusLevel]) }))
+  // Hosts con más eventos en el nivel seleccionado: salen del resumen que
+  // ignora el filtro de nivel, para no colapsar el desglose con él activo.
+  const topHostsForLevel = activeLevel
+    ? Object.entries(summaryNoLevel.top_hosts_by_level ?? {})
+        .map(([host, levels]) => ({ host, value: toCount(levels[activeLevel]) }))
         .filter(item => item.value > 0)
         .sort((a, b) => b.value - a.value)
         .slice(0, 4)
@@ -214,11 +239,11 @@ const Dashboard: React.FC = () => {
     setFocusSlot(prev => (prev === label ? null : label))
   }
 
-  /** Clic sobre una barra de host: fija o libera ese host. */
+  /** Clic sobre una barra de host: alterna ese host en la faceta global. */
   const pickHost = (state: DashboardClick): void => {
     const host = state.activePayload?.[0]?.payload?.host
     if (typeof host !== 'string') return
-    setFocusHost(prev => (prev === host ? null : host))
+    filters.toggleFacet('Hostname', host)
   }
 
   const totalHostEvents = hostsData.reduce((sum, host) => sum + host.total, 0)
@@ -267,12 +292,24 @@ const Dashboard: React.FC = () => {
         {LEVEL_ORDER.map(level => {
           const count = toCount(levelCounts[level])
           const color = LEVEL_COLORS[level]
+          // Clic (o Enter/Espacio) sobre la tarjeta: alterna el filtro global.
+          const active = filters.level === level
           return (
             <motion.div
               key={level}
               variants={cardIn}
               whileHover={{ y: -3, transition: { duration: 0.18 } }}
-              className="border border-hud-soft bg-inset/80 p-4 shadow-[0_0_12px_rgba(31,200,255,0.14)] transition-shadow duration-200 hover:border-hud-line/50 hover:shadow-[0_0_20px_rgba(31,200,255,0.35)] [clip-path:var(--chamfer-sm)]"
+              onClick={() => toggleLevel(level)}
+              onKeyDown={event => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  toggleLevel(level)
+                }
+              }}
+              role="button"
+              aria-pressed={active}
+              tabIndex={0}
+              className={`cursor-pointer border border-hud-soft bg-inset/80 p-4 shadow-[0_0_12px_rgba(31,200,255,0.14)] transition-shadow duration-200 hover:border-hud-line/50 hover:shadow-[0_0_20px_rgba(31,200,255,0.35)] [clip-path:var(--chamfer-sm)]${active ? ' border-hud-line/70 shadow-[0_0_18px_rgba(31,200,255,0.45)]' : ''}`}
               style={{ borderLeft: `4px solid ${color}` }}
             >
               <div className="flex items-center justify-between">
@@ -286,7 +323,7 @@ const Dashboard: React.FC = () => {
                 <Counter value={count} />
               </p>
               <p className="mt-1 font-mono text-[12px] text-[var(--text-dim)]">
-                {pct(count, rows)}% de {rows} registros
+                {pct(count, rowsNoLevel)}% de {rowsNoLevel} registros
               </p>
             </motion.div>
           )
@@ -374,7 +411,7 @@ const Dashboard: React.FC = () => {
               <p className="mb-4 font-mono text-[12.5px] leading-relaxed text-[var(--text-dim)]">
                 Clasificación calculada por el análisis; no equivale al campo original{' '}
                 <code className="border border-hud-soft bg-[var(--bg-void)] px-1">Severity</code>.
-                <span className="ml-2 text-hud-fg">Pulsá un sector —o su fila— para ver su desglose.</span>
+                <span className="ml-2 text-hud-fg">Pulsá un nivel —o su fila— para filtrar toda la pantalla por él.</span>
               </p>
               {severityData.every(item => item.value === 0) ? (
                 <p className="py-10 text-center font-mono text-[13px] text-[var(--text-dim)]">
@@ -396,7 +433,7 @@ const Dashboard: React.FC = () => {
                           paddingAngle={2}
                           activeIndex={selectedIndex}
                           activeShape={
-                            focusLevel && selectedLevel ? (
+                            activeLevel && selectedLevel ? (
                               <Sector
                                 className="chart-glow"
                                 style={glowVars(LEVEL_COLORS[selectedLevel.level])}
@@ -405,11 +442,9 @@ const Dashboard: React.FC = () => {
                               />
                             ) : undefined
                           }
-                          inactiveShape={focusLevel ? { fillOpacity: 0.32 } : undefined}
+                          inactiveShape={activeLevel ? { fillOpacity: 0.32 } : undefined}
                           onClick={(entry: { level?: string }) =>
-                            setFocusLevel(prev =>
-                              entry?.level && prev === entry.level ? null : entry?.level ?? null
-                            )
+                            entry?.level && toggleLevel(entry.level)
                           }
                           isAnimationActive={chartMotion.isAnimationActive}
                           animationDuration={chartMotion.duration}
@@ -427,7 +462,7 @@ const Dashboard: React.FC = () => {
                           contentStyle={TOOLTIP_STYLE}
                           itemStyle={TOOLTIP_ITEM_STYLE}
                           formatter={(value: number, _name, item) => [
-                            `${fmtCount(value)} registros (${pct(toCount(value), rows)}%)`,
+                            `${fmtCount(value)} registros (${pct(toCount(value), rowsNoLevel)}%)`,
                             item?.payload?.name ?? _name,
                           ]}
                         />
@@ -441,14 +476,14 @@ const Dashboard: React.FC = () => {
                         selecciona el nivel al pulsarla. */}
                     <div className="grid grid-cols-2 gap-x-6 gap-y-3 lg:grid-cols-1">
                       {severityData.map(item => {
-                        const active = focusLevel === item.level
-                        const dimmed = focusLevel !== null && !active
+                        const active = activeLevel === item.level
+                        const dimmed = activeLevel !== null && !active
                         return (
                           <button
                             key={item.level}
                             type="button"
                             aria-pressed={active}
-                            onClick={() => setFocusLevel(prev => (prev === item.level ? null : item.level))}
+                            onClick={() => toggleLevel(item.level)}
                             className={`flex items-center justify-between gap-3 border-b border-hud-soft pb-2 text-left transition-all duration-200 hover:opacity-100 ${
                               dimmed ? 'opacity-50' : 'opacity-100'
                             }`}
@@ -468,7 +503,7 @@ const Dashboard: React.FC = () => {
                                 {fmtCount(item.value)}
                               </strong>
                               <span className="block font-mono text-[12px] text-[var(--text-dim)]">
-                                {pct(item.value, rows)}%
+                                {pct(item.value, rowsNoLevel)}%
                               </span>
                             </span>
                           </button>
@@ -484,7 +519,7 @@ const Dashboard: React.FC = () => {
                         title={`Nivel ${selectedLevel.name}`}
                         color={LEVEL_COLORS[selectedLevel.level]}
                         value={`${fmtCount(selectedLevel.value)} registros`}
-                        caption={`${pct(selectedLevel.value, rows)}% de los ${rows} registros del archivo`}
+                        caption={`${pct(selectedLevel.value, rowsNoLevel)}% de los ${rowsNoLevel} registros del archivo`}
                         rows={topHostsForLevel.map(host => ({
                           label: host.host,
                           value: `${host.value} eventos`,
@@ -494,7 +529,7 @@ const Dashboard: React.FC = () => {
                             ? `Justificación de este nivel: ${riskBlock.justification}`
                             : 'Hosts con más eventos clasificados en este nivel.'
                         }
-                        onClose={() => setFocusLevel(null)}
+                        onClose={() => filters.setLevel('')}
                       />
                     )}
                   </AnimatePresence>
@@ -505,7 +540,7 @@ const Dashboard: React.FC = () => {
             {/* Top hosts con su reparto por criticidad */}
             <DashboardSection title="Hosts con mayor volumen de eventos">
               <p className="mb-3 font-mono text-[12.5px] text-[var(--text-dim)]">
-                Registros por host.
+                Registros por host, repartidos por criticidad.
               </p>
 
               {hostsData.length ? (
@@ -551,7 +586,7 @@ const Dashboard: React.FC = () => {
               )}
 
               <p className="mt-2 font-mono text-[12px] text-[var(--text-dim)]">
-                Pulsá una barra para fijar el host y ver su reparto por criticidad.
+                Pulsá una barra para filtrar por ese host; volvé a pulsar para liberarlo.
               </p>
 
               <AnimatePresence mode="wait">
@@ -571,7 +606,7 @@ const Dashboard: React.FC = () => {
                       value: `${fmtCount(selectedHostData[level])} eventos`,
                     }))}
                     note="Reparto calculado de los registros agrupados por host en el resumen del análisis."
-                    onClose={() => setFocusHost(null)}
+                    onClose={() => activeHosts.forEach(h => filters.toggleFacet('Hostname', h))}
                   />
                 )}
               </AnimatePresence>
