@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { AnimatePresence, MotionConfig, motion } from 'framer-motion';
 import { useAnalysisStore, useUiStore, Section } from './store';
-import { useFilterStore } from './store/filters';
+import { useFilterStore, selectIsFiltered } from './store/filters';
 import { loadAnalysisRef, saveAnalysisRef } from './persist';
 import { restoreAnalysis } from './restore';
 import Dashboard from './components/Dashboard';
@@ -92,6 +92,30 @@ const App: React.FC = () => {
     prevResetAnalysisId.current = analysisId;
     useFilterStore.getState().reset();
   }, [analysisId]);
+
+  // Tecla Esc: salir de la selección/filtro activo por teclado (misma
+  // acción que «Limpiar filtros»: clearAll avanza clearEpoch y también
+  // invalida el debounce de la búsqueda). Si el foco está en un campo
+  // editable se respeta: mientras se escribe, Esc no vacía la pantalla
+  // entera; con el foco suelto, Esc vuelve a filtros neutros.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      const target = e.target as HTMLElement | null;
+      const editable =
+        !!target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable);
+      if (editable) return;
+      const store = useFilterStore.getState();
+      if (!selectIsFiltered(store)) return;
+      store.clearAll();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   // Los avisos de éxito se solan solos; los de problema esperan al analista.
   useEffect(() => {

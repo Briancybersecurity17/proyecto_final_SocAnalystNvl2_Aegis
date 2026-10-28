@@ -362,8 +362,17 @@ const Dashboard: React.FC = () => {
         </span>
 
         {isFiltered && (
-          <button type="button" onClick={filters.clearAll} className="btn-hud">
+          <button
+            type="button"
+            onClick={filters.clearAll}
+            aria-keyshortcuts="Escape"
+            title="También podés pulsar Esc para salir de la selección"
+            className="btn-hud"
+          >
             Limpiar filtros
+            <kbd className="ml-2 rounded border border-hud-line/60 px-1 py-px font-sans text-[10px] opacity-75">
+              Esc
+            </kbd>
           </button>
         )}
 
