@@ -61,7 +61,7 @@ type ActiveFilterChip = {
 }
 
 /** Fila que entrega Recharts al pulsar los gráficos del dashboard. */
-type DashboardClick = ChartClickState<TimePoint & { host?: string; severity?: string }>
+type DashboardClick = ChartClickState<TimePoint & { host?: string }>
 
 // Qué filtra ignora cada vista (facet-exclusion, spec sub-3 D2/D3).
 // Constantes de módulo: la identidad del `omit` no cambia entre renders.

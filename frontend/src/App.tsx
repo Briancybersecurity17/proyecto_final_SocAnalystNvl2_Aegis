@@ -1,6 +1,7 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { AnimatePresence, MotionConfig, motion } from 'framer-motion';
 import { useAnalysisStore, useUiStore, Section } from './store';
+import { useFilterStore } from './store/filters';
 import { loadAnalysisRef, saveAnalysisRef } from './persist';
 import { restoreAnalysis } from './restore';
 import Dashboard from './components/Dashboard';
@@ -78,6 +79,19 @@ const App: React.FC = () => {
   useEffect(() => {
     if (status === 'done' && analysisId) saveAnalysisRef(analysisId, activeSection);
   }, [status, analysisId, activeSection]);
+
+  // Dueño único del reset de filtros por cambio de análisis: App siempre está
+  // montado, a diferencia del Dashboard/DataTable (secciones con render
+  // condicional) cuyo reset no corría al reabrir o subir un archivo con esas
+  // secciones desmontadas. Los resets internos de esos componentes quedan como
+  // refuerzo idempotente. El ref arranca con el id del primer render para no
+  // borrar filtros frescos al montar (React 18 monta dos veces en StrictMode).
+  const prevResetAnalysisId = useRef<string | null>(analysisId);
+  useEffect(() => {
+    if (prevResetAnalysisId.current === analysisId) return;
+    prevResetAnalysisId.current = analysisId;
+    useFilterStore.getState().reset();
+  }, [analysisId]);
 
   // Los avisos de éxito se solan solos; los de problema esperan al analista.
   useEffect(() => {

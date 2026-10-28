@@ -56,14 +56,17 @@ const UploadHistory: React.FC = () => {
   // en StrictMode (desarrollo) React simula desmontar/remontar y sin esta
   // salvedad la primera petición se cancelaría sin relanzarse, dejando la
   // lista vacía. Un cambio de status que no sea a 'done' tampoco recarga.
+  // El abort del desmonte vive en un efecto aparte: si estuviera en el cleanup
+  // de este, una transición a 'error' (o 'processing') abortaría la carga en
+  // vuelo sin relanzarla y la lista quedaría vacía con texto de "sin datos".
   const prevStatusRef = useRef<string | null>(null)
   useEffect(() => {
     const previo = prevStatusRef.current
     prevStatusRef.current = status
     if (previo !== null && previo !== status && status !== 'done') return
     fetchHistory()
-    return () => controllerRef.current?.abort()
   }, [status, fetchHistory])
+  useEffect(() => () => controllerRef.current?.abort(), [])
 
   /** Reabre un análisis del historial en el Dashboard con sus filtros limpios. */
   const reopen = async (id: string) => {
