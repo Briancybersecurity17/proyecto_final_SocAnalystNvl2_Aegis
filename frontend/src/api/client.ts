@@ -161,6 +161,21 @@ export const getScopedSummary = async (
   return response.data
 }
 
+/** Fila del historial de subidas (GET /analyses, spec sub-3 §3.5). */
+export type RecentAnalysis = {
+  analysis_id: string
+  file_name: string
+  generated_at: string | null
+  rows: number
+  risk: string
+}
+
+/** Últimos análisis completados en el backend, lo más reciente primero. */
+export const getRecentAnalyses = async (signal?: AbortSignal): Promise<RecentAnalysis[]> => {
+  const response = await API.get<RecentAnalysis[]>('/analyses', { signal })
+  return response.data
+}
+
 /**
  * Campos detectados en el archivo con sus valores y conteos acotados
  * (GET /analysis/{id}/facets). Ignora el filtro del propio campo al contar.

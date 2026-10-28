@@ -1,12 +1,14 @@
 import React from 'react';
 import UploadExcel from './UploadExcel';
+import UploadHistory from './UploadHistory';
 import DataTable from './DataTable';
 import { useAnalysisStore } from '../store';
 import { EmptyState } from './EmptyState';
 
 /**
- * Sección de ingesta de archivo Excel: selector de archivo + visualización
- * de los registros importados. El título de página lo pinta la cabecera.
+ * Sección de ingesta de archivo Excel: drop-zone + resultado + historial.
+ * Los registros se ven en el Dashboard (se mudan en el Task 5). El título
+ * de página lo pinta la cabecera.
  */
 const UploadSection: React.FC = () => {
   const status = useAnalysisStore(state => state.status);
@@ -24,6 +26,9 @@ const UploadSection: React.FC = () => {
           hint={<>Seleccioná un archivo <strong>.xlsx</strong> —o arrastralo aquí— para importarlo y ver sus registros.</>}
         />
       )}
+
+      {/* Historial de subidas: siempre visible (con su estado vacío propio). */}
+      <UploadHistory />
 
       <DataTable />
     </section>
