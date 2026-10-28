@@ -278,6 +278,11 @@ def test_analyses_orden_inverso_y_limite_8(client):
         assert len(items) == 8
         assert items[0]["analysis_id"] == "synth-9"
         assert items[-1]["analysis_id"] == "synth-2"
+        # limit fuera de rango es error del cliente: 0 dispararía el
+        # gotcha de done[-0:] == done[0:] (devolvería TODO) y 9 excedería
+        # el contrato de «últimos 8».
+        assert client.get("/api/analyses", params={"limit": 0}).status_code == 422
+        assert client.get("/api/analyses", params={"limit": 9}).status_code == 422
     finally:
         for key in sinteticos:
             analysis_store.pop(key, None)

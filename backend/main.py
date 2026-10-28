@@ -822,7 +822,7 @@ async def get_analysis(analysis_id: str):
 
 
 @app.get("/api/analyses")
-async def list_analyses(limit: int = 8):
+async def list_analyses(limit: int = Query(8, ge=1, le=8)):
     """Historial de subidas (spec sub-3 §3.5): últimos análisis completados.
 
     Solo `status == 'done'`: un análisis pending/error no se puede reabrir.
