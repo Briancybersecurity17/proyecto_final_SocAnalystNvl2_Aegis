@@ -821,6 +821,33 @@ async def get_analysis(analysis_id: str):
     )
 
 
+@app.get("/api/analyses")
+async def list_analyses(limit: int = 8):
+    """Historial de subidas (spec sub-3 §3.5): últimos análisis completados.
+
+    Solo `status == 'done'`: un análisis pending/error no se puede reabrir.
+    El orden de inserción del dict es cronológico, así que se invierte para
+    mostrar lo más reciente primero. No depende de RAG: el dashboard y la
+    tabla se alimentan del `analysis_store`, no del índice.
+    """
+    done = [
+        (key, value)
+        for key, value in analysis_store.items()
+        if value.get("status") == "done"
+    ]
+    out = []
+    for key, value in reversed(done[-limit:]):
+        summary = value.get("summary") or {}
+        out.append({
+            "analysis_id": key,
+            "file_name": summary.get("file_name") or "archivo importado",
+            "generated_at": summary.get("generated_at"),
+            "rows": summary.get("rows", 0),
+            "risk": summary.get("risk") or "—",
+        })
+    return out
+
+
 @app.get("/api/analysis/{analysis_id}/rows")
 async def get_rows(
     analysis_id: str,

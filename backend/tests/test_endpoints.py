@@ -235,3 +235,63 @@ def test_facets_criticidad_conserva_otros_filtros_activos(client, analysis_id):
     assert res["filtered_total"] == 1             # DC-01 ∩ critico = Log_ID 4
     assert campo["distinct"] == 2
     assert conteos == {"bajo": 3, "critico": 1}
+
+
+# --- Historial de subidas (spec sub-3 §3.5) --------------------------------
+
+def test_analyses_lista_solo_done_con_campos(client, analysis_id, analysis_id_minimo):
+    """Los análisis completados aparecen con los 5 campos del contrato."""
+    r = client.get("/api/analyses")
+    assert r.status_code == 200
+    items = r.json()
+    assert isinstance(items, list) and items
+    ids = [item["analysis_id"] for item in items]
+    assert analysis_id in ids
+    assert analysis_id_minimo in ids
+    for item in items:
+        assert set(item) == {"analysis_id", "file_name", "generated_at", "rows", "risk"}
+        assert item["file_name"]
+        assert item["generated_at"]
+        assert item["rows"] > 0
+
+
+def test_analyses_orden_inverso_y_limite_8(client):
+    """Lo más reciente primero y nunca más de 8 entradas."""
+    from main import analysis_store
+
+    sinteticos = {
+        f"synth-{n}": {
+            "status": "done",
+            "summary": {
+                "file_name": f"f{n}.xlsx",
+                "generated_at": "2026-10-27T00:00:00",
+                "rows": n + 1,
+                "risk": "bajo",
+            },
+            "error": None,
+        }
+        for n in range(10)
+    }
+    analysis_store.update(sinteticos)
+    try:
+        items = client.get("/api/analyses").json()
+        assert len(items) == 8
+        assert items[0]["analysis_id"] == "synth-9"
+        assert items[-1]["analysis_id"] == "synth-2"
+    finally:
+        for key in sinteticos:
+            analysis_store.pop(key, None)
+
+
+def test_analyses_store_vacio_devuelve_lista_vacia(client):
+    """Reinicio del backend: lista vacía, nunca un 500."""
+    from main import analysis_store
+
+    backup = dict(analysis_store)
+    analysis_store.clear()
+    try:
+        r = client.get("/api/analyses")
+        assert r.status_code == 200
+        assert r.json() == []
+    finally:
+        analysis_store.update(backup)
