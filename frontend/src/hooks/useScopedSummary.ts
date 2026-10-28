@@ -4,9 +4,32 @@ import type { ScopedSummary } from '../api/client'
 import type { AnalysisSummary } from '../store'
 import { useAnalysisStore } from '../store'
 import { selectIsFiltered, useFilterStore } from '../store/filters'
+import type { FilterState } from '../store/filters'
 
 /** Retardo para agrupar cambios de filtro a toda velocidad antes de pedir. */
 const DEBOUNCE_MS = 300
+
+/**
+ * Filtros que una vista ignora (facet‑exclusion, spec sub‑3 D2/D3):
+ * un gráfico omite el filtro de SU dimensión y respeta el resto.
+ */
+export type OmitSpec = {
+  /** Ignora el filtro de nivel (donut y tarjetas de nivel). */
+  level?: boolean
+  /** Ignora estas facetas (gráfico de hosts: ['Hostname']). */
+  facets?: readonly string[]
+}
+
+/** Copia de los filtros quitando los que la vista decide ignorar. */
+const applyOmit = (f: FilterState, omit?: OmitSpec): FilterState => {
+  if (!omit) return f
+  let facets = f.facets
+  if (omit.facets?.length) {
+    const fuera = omit.facets
+    facets = Object.fromEntries(Object.entries(f.facets).filter(([campo]) => !fuera.includes(campo)))
+  }
+  return { ...f, level: omit.level ? '' : f.level, facets }
+}
 
 export type ScopedSummaryResult = {
   /** Resumen a pintar: el acotado si lo hay; nunca un dashboard en blanco. */
@@ -27,12 +50,19 @@ export type ScopedSummaryResult = {
  * - Con filtros: pide `/summary` con debounce de 300 ms y cancelación por
  *   `AbortController`; mientras carga muestra el último resumen conocido y,
  *   en error de red, vuelve al global con el mensaje en `error` (spec §5.4).
+ *
+ * @param omit Facetas/nivel que esta vista ignora (facet‑exclusion, D2/D3):
+ *   con `omit`, `isFiltered` y la petición se calculan sobre los filtros
+ *   efectivos (tras quitar los omitidos), así una vista sin SU filtro activo
+ *   devuelve el resumen global con 0 peticiones.
  */
-export const useScopedSummary = (): ScopedSummaryResult => {
+export const useScopedSummary = (omit?: OmitSpec): ScopedSummaryResult => {
   const analysisId = useAnalysisStore((s) => s.analysisId)
   const globalSummary = useAnalysisStore((s) => s.summary)
   const filters = useFilterStore()
-  const isFiltered = selectIsFiltered(filters)
+  // Snapshot efectivo: los filtros que esta vista sí tiene en cuenta.
+  const effective = applyOmit(filters, omit)
+  const isFiltered = selectIsFiltered(effective)
 
   const [scoped, setScoped] = useState<ScopedSummary | null>(null)
   const [loading, setLoading] = useState(false)
@@ -42,13 +72,13 @@ export const useScopedSummary = (): ScopedSummaryResult => {
   // solo cuando cambia su contenido (claves y valores ordenados), no con la
   // identidad de los objetos, para no disparar peticiones en bucle.
   const filtersKey = JSON.stringify([
-    filters.from,
-    filters.to,
-    filters.level,
-    filters.suspicious,
-    filters.result,
-    filters.q,
-    Object.entries(filters.facets)
+    effective.from,
+    effective.to,
+    effective.level,
+    effective.suspicious,
+    effective.result,
+    effective.q,
+    Object.entries(effective.facets)
       .sort(([a], [b]) => (a < b ? -1 : 1))
       .map(([field, values]) => [field, [...values].sort()]),
   ])
@@ -84,8 +114,9 @@ export const useScopedSummary = (): ScopedSummaryResult => {
     const timer = window.setTimeout(() => {
       // Se leen los filtros VIVOS al disparar (no el closure del render):
       // si mientras corría el debounce se limpiaron (p. ej. por el reset al
-      // cambiar de análisis), no se pide nada.
-      const f = useFilterStore.getState()
+      // cambiar de análisis), no se pide nada. Luego se aplican los que esta
+      // vista decide ignorar (facet‑exclusion): `level` omitido ya llega ''.
+      const f = applyOmit(useFilterStore.getState(), omit)
       if (!selectIsFiltered(f)) {
         setLoading(false)
         return
