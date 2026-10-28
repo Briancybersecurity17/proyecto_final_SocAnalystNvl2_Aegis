@@ -66,7 +66,15 @@ type DashboardClick = ChartClickState<TimePoint & { host?: string }>
 // Qué filtra ignora cada vista (facet-exclusion, spec sub-3 D2/D3).
 // Constantes de módulo: la identidad del `omit` no cambia entre renders.
 const OMIT_LEVEL: OmitSpec = { level: true }
-const OMIT_HOSTS: OmitSpec = { facets: ['Hostname'] }
+// Las barras de hosts ignoran SU faceta (Hostname) y también el filtro de
+// nivel: el reparto apilado por criticidad no se desmonta al elegir un nivel
+// (antes, al filtrar, el backend devolvía el resto de series a cero y Recharts
+// animaba el colapso con stagger mientras la serie superviviente se deslizaba
+// hasta el eje — un baile raro; solo Crítico se veía bien por ser la primera
+// serie del apilado, anclada en el eje). Ahora el nivel activo se resalta
+// atenuando el resto, igual que el donut, y el ranking del nivel seleccionado
+// sigue disponible en la tarjeta «Nivel X» del panel de criticidad.
+const OMIT_HOSTS: OmitSpec = { facets: ['Hostname'], level: true }
 
 const Dashboard: React.FC = () => {
   // Tres vistas, tres resúmenes: el global sin filtros (cero peticiones) o el
@@ -594,23 +602,43 @@ const Dashboard: React.FC = () => {
                       formatter={(value: number, name) => [`${fmtCount(value)} eventos`, name]}
                     />
                     <Legend />
-                    {LEVEL_ORDER.map((level, index) => (
-                      <Bar
-                        key={level}
-                        dataKey={level}
-                        name={LEVEL_LABELS[level]}
-                        stackId="hosts"
-                        fill={LEVEL_COLORS[level]}
-                        isAnimationActive={chartMotion.isAnimationActive}
-                        animationDuration={chartMotion.duration}
-                        animationBegin={index * CHART_STAGGER}
-                        label={{ position: 'right', fontSize: 10, fill: '#bfefff', formatter: (value: number) => (value > 0 ? value : '') }}
-                      >
-                        {/* Las celdas viven dentro de <Bar>: Recharts las lee como
-                            hijos de la serie y aplica el marcado a cada host. */}
-                        {selectionCells(hostsData, focusHost, h => h.host, '#3b82f6', true, LEVEL_COLORS[level])}
-                      </Bar>
-                    ))}
+                    {LEVEL_ORDER.map((level, index) => {
+                      // Nivel no activo: la serie se atenúa (mismo 0.32 que el
+                      // donut) en vez de desmontarse, y su etiqueta se apaga
+                      // con ella. La geometría no cambia, así que no hay
+                      // colapso animado que se vea raro.
+                      const seriesDimmed = activeLevel !== null && activeLevel !== level
+                      return (
+                        <Bar
+                          key={level}
+                          dataKey={level}
+                          name={LEVEL_LABELS[level]}
+                          stackId="hosts"
+                          fill={LEVEL_COLORS[level]}
+                          isAnimationActive={chartMotion.isAnimationActive}
+                          animationDuration={chartMotion.duration}
+                          animationBegin={index * CHART_STAGGER}
+                          label={{
+                            position: 'right',
+                            fontSize: 10,
+                            fill: seriesDimmed ? '#4d6b85' : '#bfefff',
+                            formatter: (value: number) => (value > 0 ? value : ''),
+                          }}
+                        >
+                          {/* Las celdas viven dentro de <Bar>: Recharts las lee como
+                              hijos de la serie y aplica el marcado a cada host. */}
+                          {selectionCells(
+                            hostsData,
+                            focusHost,
+                            h => h.host,
+                            '#3b82f6',
+                            true,
+                            LEVEL_COLORS[level],
+                            seriesDimmed ? 0.32 : 1,
+                          )}
+                        </Bar>
+                      )
+                    })}
                   </BarChart>
                 </ResponsiveContainer>
               ) : (
@@ -620,7 +648,9 @@ const Dashboard: React.FC = () => {
               )}
 
               <p className="mt-2 font-mono text-[12px] text-[var(--text-dim)]">
-                Pulsá una barra para filtrar por ese host; volvé a pulsar para liberarlo.
+                Pulsá una barra para filtrar por ese host; volvé a pulsar para liberarlo. Con un
+                nivel activo, sus segmentos se resaltan y el resto queda atenuado —el reparto por
+                criticidad nunca se oculta—.
               </p>
 
               <AnimatePresence mode="wait">

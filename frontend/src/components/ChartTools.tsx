@@ -32,7 +32,9 @@ export function selectionCells<T extends Record<string, unknown>>(
   getKey: (item: T) => string,
   color: string,
   keepSeriesFill = false,
-  seriesFill?: string
+  seriesFill?: string,
+  /** Atenuación propia de la serie (p. ej. nivel no activo): 1 = color pleno. */
+  seriesOpacity = 1,
 ): React.ReactNode[] {
   return items.map(item => {
     const key = getKey(item)
@@ -42,7 +44,7 @@ export function selectionCells<T extends Record<string, unknown>>(
       <Cell
         key={key}
         fill={keepSeriesFill ? seriesFill ?? color : color}
-        fillOpacity={dimmed ? 0.3 : 1}
+        fillOpacity={(dimmed ? 0.3 : 1) * seriesOpacity}
         stroke={
           active
             ? keepSeriesFill
@@ -52,7 +54,11 @@ export function selectionCells<T extends Record<string, unknown>>(
         }
         strokeWidth={active ? 2 : 0}
         className={active ? 'chart-glow' : undefined}
-        style={active ? glowVars(color) : undefined}
+        // La transición de fill-opacity convierte el cambio de atenuación en
+        // un fundido en vez de un salto (selección de nivel en barras y
+        // apagado de hosts): es un cambio de color, no de movimiento, así que
+        // no necesita entrar en la excepción de prefers-reduced-motion.
+        style={{ transition: 'fill-opacity 200ms ease', ...(active ? glowVars(color) : {}) }}
       />
     )
   })
