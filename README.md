@@ -40,20 +40,24 @@ sospechosos, clasifica el riesgo en cuatro niveles con justificación, y genera 
 
 ```
 proyecto_final_bootcamp_ComunidadDojo_SocAnalystNvl2/
-├─ .gitignore                 # node_modules, .venv, .env, logs, editores, cachés RAG/KB
+├─ .gitignore                 # node_modules, .venv, .env, logs, editores, cachés RAG/KB/IA
 ├─ README.md
 ├─ test_backend.py            # prueba end-to-end del backend
 ├─ test_rag.py                # prueba del índice semántico (RAG)
 ├─ test_kb.py                 # prueba de la base de conocimiento (ATT&CK + Event IDs)
 ├─ backend/
-│  ├─ main.py                 # FastAPI: /analyze, /rows, /report, /ask, /kb/status, SSE (8500)
+│  ├─ main.py                 # FastAPI: /analyze, /rows, /report, /ask, SSE, feedback (8500)
 │  ├─ ai_service.py           # IA de redacción con grounding estricto + fallback local
+│  ├─ ai_config.py            # config del LLM en caliente (modelo, num_ctx, keep_alive…)
+│  ├─ feedback_store.py       # criterio aprendido del analista (RAG few-shot)
+│  ├─ rerank.py               # reranker cross-encoder sobre los candidatos del RAG
 │  ├─ rag_store.py            # índice semántico de los eventos (ChromaDB, colección soc_events)
 │  ├─ kb_store.py             # base de conocimiento: ATT&CK + glosario (colección soc_kb)
 │  ├─ knowledge/
 │  │  ├─ mitre_attack.json    # 79 técnicas (generada por scripts/build_kb.py)
 │  │  └─ event_ids.json       # 44 Event IDs de Windows (curado a mano)
-│  ├─ scripts/build_kb.py     # descarga el bundle STIX oficial y regenera la KB
+│  ├─ scripts/                # build_kb.py + benches de latencia, contexto y recuperación
+│  ├─ tests/                  # pytest: 106 tests (config, streaming SSE, few-shot…)
 │  └─ requirements.txt
 └─ frontend/                  # React + Vite + TypeScript (puerto 5300)
    ├─ index.html
@@ -72,7 +76,9 @@ proyecto_final_bootcamp_ComunidadDojo_SocAnalystNvl2/
          ├─ SecurityAnalysis.tsx
          ├─ RiskClassification.tsx
          ├─ ReportGenerator.tsx
-         ├─ AssistantChat.tsx / ReferenceBlock (tarjetas ATT&CK + Event IDs)
+         ├─ AssistantChat.tsx / ReferenceBlock + FeedbackControl (corrección del analista)
+         ├─ AttackCorrelations.tsx  # técnicas ATT&CK ancladas a Event_ID observados
+         ├─ AiOptions.tsx           # panel del LLM + memoria de criterio aprendido
          └─ SummaryCard.tsx / DashboardSection.tsx
 ```
 
@@ -106,26 +112,35 @@ No se usan puertos adicionales: backend **8500**, frontend **5300**.
 
 ---
 
-## IA integrada
+## IA integrada (Ollama local + panel «Opciones IA»)
 
-`backend/ai_service.py` redacta el informe a partir de un contexto que contiene
-**únicamente datos calculados** de los registros (estadísticas + evidencias).
+`backend/ai_service.py` redacta el informe y las respuestas del asistente a
+partir de un contexto que contiene **únicamente datos calculados** de los
+registros (estadísticas + evidencias).
 
-- **Modo local (por defecto):** generador determinista con plantillas basadas en los
-  mismos números → siempre entrega un informe completo y verificable.
-- **Modo remoto (opcional):** definí estas variables de entorno para usar un modelo
-  compatible con la API de OpenAI (`/v1/chat/completions`):
+- **Modo local determinista (siempre disponible):** generador con plantillas
+  basadas en los mismos números → nunca falta informe ni respuesta.
+- **Modo LLM (por defecto):** Ollama local en `localhost:11434` con
+  **qwen2.5:3b** (Q4_K_M, ≈1.9 GB → GTX 1060 de 6 GB holgada). Se configura
+  desde la sección **Opciones IA** del sidebar (modelo, `num_ctx`,
+  `temperature`, `keep_alive`, `num_predict`, on/off) y **aplica al instante,
+  sin reiniciar**: Ollama recibe las opciones en cada petición y el backend
+  relee `backend/data/ai_config.json` en la próxima llamada. El botón
+  **Probar conexión** mide latencia real y muestra la VRAM en uso.
+- **Configuración por entorno (opcional):** las variables siguen aportando
+  los valores por defecto si preferís configurar por entorno:
 
 ```bash
-export AI_API_URL="https://<tu-servidor>/v1/chat/completions"   # requerido para modo remoto
+export AI_API_URL="http://localhost:11434/api/chat"  # u otro compatible OpenAI
 export AI_API_KEY="sk-..."          # opcional
-export AI_MODEL="gpt-4o-mini"       # opcional
+export AI_MODEL="qwen2.5:3b"        # opcional
+export AI_ENABLED=0                 # opcional: 0 desactiva el LLM
 export AI_TIMEOUT=60                # opcional (segundos)
 ```
 
-Si la llamada falla o la respuesta no es JSON válido, el servicio **cae
-automáticamente al modo local**: el informe nunca queda vacío.
-La interfaz muestra en todo momento la fuente utilizada (IA remota / IA local grounded).
+Si el LLM está apagado, no responde o la respuesta no es JSON válido, el
+servicio **cae automáticamente al modo local**: el informe nunca queda vacío.
+La interfaz muestra en todo momento la fuente utilizada (LLM / motor determinista).
 
 ---
 
@@ -235,6 +250,52 @@ léxica sobre los propios JSON y la referencia sigue disponible
 
 ---
 
+## Criterio aprendido del analista (RAG few-shot, sin reentrenar)
+
+La KB explica *qué significan* los eventos. Este módulo aprende **cómo quiere
+que se respondan**, y lo hace sin tocar los pesos del modelo.
+
+| Pieza | Archivo | Qué hace |
+|---|---|---|
+| Memoria | `backend/feedback_store.py` | captura, persiste y recupera los ejemplos de criterio |
+| Inyección | `backend/ai_service.py` → `_feedback_note()` | inserta los ejemplos afines en el prompt, presupuestados contra `num_ctx` |
+| Endpoints | `backend/main.py` | `POST /api/analysis/{id}/feedback`, `GET/DELETE /api/feedback` |
+| UI | `AssistantChat.tsx` (botón «Corregir») · `AiOptions.tsx` (panel) | captura explícita y estado de la memoria |
+
+**Dos vías de captura, ambas asíncronas y nunca bloqueantes:**
+
+- **Implícita** — el analista vuelve a preguntar sobre el mismo tema tras
+  recibir una respuesta del LLM ⇒ esa respuesta funcionó ⇒ ejemplo positivo.
+  Cero fricción.
+- **Explícita** — el botón «Corregir» de cada respuesta, donde el analista
+  escribe la respuesta **buena** ⇒ ejemplo negativo con la versión corregida.
+  Es el dato más valioso porque trae el criterio humano literal.
+
+**Persistencia:** JSON espejo en `backend/data/feedback.json` (fuente de
+verdad, legible y editable a mano) + índice semántico en ChromaDB
+(colección `soc_feedback`, reutiliza el cliente y el modelo de embeddings
+del RAG). Sin Chroma la recuperación cae a léxica. El JSON está en
+`.gitignore` porque es aprendizaje propio de cada máquina.
+
+**Prioridad deliberada del presupuesto:** el bloque few-shot se inyecta
+**antes** de la evidencia, pero se ajusta al espacio libre de `num_ctx`. Si
+la memoria de turnos ya llenó la ventana, se inyectan **cero ejemplos**.
+Perder el few-shot cuesta estilo; perder el system prompt cuesta las reglas
+de no inventar Log_ID. Un plus nunca puede ser lo que rompa las
+instrucciones.
+
+**Anti-bucles:** una respuesta no se autovalida a sí misma, no se repite un
+ejemplo ya guardado, y se exige solape de términos ≥ 0,34 entre la consulta
+y la siguiente para considerar que el tema continuó.
+
+```bash
+GET  /api/feedback            # estado: total, positivos, correcciones, índice
+POST /api/analysis/{id}/feedback   # {question, corrected_answer, bad_answer?}
+DELETE /api/feedback          # vacía la memoria (no toca el modelo ni los datos)
+```
+
+---
+
 ## Pruebas
 
 ```bash
@@ -271,6 +332,13 @@ semántica («fuerza bruta» → T1110, «ransomware» → T1486) → alias renu
 citados en la pregunta → bloque «Referencia técnica» en la respuesta →
 degradación sin Chroma.
 
+Suite unitaria (106 tests: configuración del LLM, streaming SSE, memoria de
+criterio few-shot, presupuesto de ventana):
+
+```bash
+cd backend && python -m pytest -q
+```
+
 Verificación de tipos en el frontend:
 
 ```bash
@@ -284,6 +352,7 @@ cd frontend && npx tsc --noEmit
 - **Frontend:** React, TypeScript, Vite, Tailwind CSS, Zustand, Recharts, Framer Motion, SheetJS, `@react-pdf/renderer`, `file-saver`.
 - **Backend:** FastAPI, pandas, openpyxl, httpx, sse-starlette.
 - **RAG (opcional):** ChromaDB, sentence-transformers (multilingüe, local y gratuito).
+- **LLM (opcional):** Ollama + `qwen2.5:3b` (Q4_K_M, ≈1,9 GB). Un reranker cross-encoder (`ms-marco-MiniLM-L6-v2`) reordena los candidatos antes de armar el prompt.
 
 ---
 
