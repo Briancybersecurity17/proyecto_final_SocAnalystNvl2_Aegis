@@ -21,7 +21,7 @@ export interface AnalysisRef {
   savedAt: string
 }
 
-const SECTIONS: Section[] = ['upload', 'dashboard', 'security', 'assistant', 'risk', 'report']
+const SECTIONS: Section[] = ['upload', 'dashboard', 'security', 'assistant', 'attack', 'ai', 'risk', 'report']
 
 /** Guarda la referencia. Si localStorage no está disponible (modo privado,
  *  cuota agotada) la app sigue funcionando, solo que sin restaurar. */

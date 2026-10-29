@@ -10,6 +10,8 @@ import RiskClassification from './components/RiskClassification';
 import UploadSection from './components/UploadSection';
 import ReportGenerator from './components/ReportGenerator';
 import AssistantChat from './components/AssistantChat';
+import AttackCorrelationsPanel from './components/AttackCorrelations';
+import AiOptions from './components/AiOptions';
 import TypingTitle from './components/TypingTitle';
 import { Sidebar } from './components/Sidebar';
 import BackendStatus from './components/BackendStatus';
@@ -27,6 +29,14 @@ const SECTION_META: Record<Section, { title: string; subtitle: string }> = {
   assistant: {
     title: 'Asistente IA',
     subtitle: 'Consulta en lenguaje natural sobre los registros con recuperación RAG',
+  },
+  attack: {
+    title: 'Correlaciones ATT&CK',
+    subtitle: 'Técnicas MITRE ancladas a los Event_ID realmente observados en el dataset',
+  },
+  ai: {
+    title: 'Opciones IA',
+    subtitle: 'Conexión con Ollama, modelo local y parámetros de generación',
   },
   risk: {
     title: 'Clasificación de riesgos',
@@ -201,6 +211,8 @@ const App: React.FC = () => {
                 {activeSection === 'dashboard' && <Dashboard />}
                 {activeSection === 'security' && <SecurityAnalysis />}
                 {activeSection === 'assistant' && <AssistantChat />}
+                {activeSection === 'attack' && <AttackCorrelationsPanel />}
+                {activeSection === 'ai' && <AiOptions />}
                 {activeSection === 'risk' && <RiskClassification />}
                 {activeSection === 'report' && <ReportGenerator />}
               </motion.div>

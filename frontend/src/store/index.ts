@@ -150,7 +150,7 @@ export const useAnalysisStore = create<AnalysisStore>()(
 )
 
 /** Secciones de la aplicación (navegación). */
-export type Section = 'upload' | 'dashboard' | 'security' | 'assistant' | 'risk' | 'report'
+export type Section = 'upload' | 'dashboard' | 'security' | 'assistant' | 'attack' | 'ai' | 'risk' | 'report'
 
 interface UiStore {
   section: Section

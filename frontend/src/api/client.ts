@@ -250,6 +250,8 @@ export interface KbTechnique {
   se_detecta: string
   eventos: string[]
   aliases: string[]
+  /** false = completada desde la fuente oficial: usar description_en. */
+  curated?: boolean
   description_en: string
   match: 'eventos' | 'consulta'
   score?: number
@@ -287,7 +289,7 @@ export interface AskResponse {
   reference?: KbReference
   summary_line: string
   confidence: 'alta' | 'media' | 'baja' | 'ninguna'
-  /** 'deterministic' = motor local; 'llm' = modelo remoto (con grounding validado). */
+  /** 'deterministic' = motor local; 'llm' = modelo remoto (con grounding validado); 'streaming' = el texto aún se genera (evento meta). */
   engine: string
   model: string | null
   warnings: string[]
@@ -319,6 +321,148 @@ export const askQuestion = async (
     n_results: opts.nResults ?? 8,
   })
   return response.data as AskResponse
+}
+
+/** Conteo de la memoria de criterio aprendido (panel «Opciones IA»). */
+export interface FeedbackStats {
+  available: boolean
+  total: number
+  positive: number
+  negative: number
+  indexed: boolean
+  path?: string
+}
+
+/**
+ * Corrección del analista sobre una respuesta del asistente (few-shot).
+ *
+ * Enseña al modelo la respuesta BUANA para esa consulta; el backend la guarda
+ * como criterio y la inyecta en consultas futuras afines. No reentrena nada:
+ * es el RAG potenciando el criterio con feedback humano.
+ */
+export const sendFeedback = async (
+  analysisId: string,
+  question: string,
+  correctedAnswer: string,
+  badAnswer = '',
+) => {
+  const response = await API.post(`/analysis/${analysisId}/feedback`, {
+    question,
+    corrected_answer: correctedAnswer,
+    bad_answer: badAnswer,
+  })
+  return response.data as { ok: boolean; stats: FeedbackStats }
+}
+
+/** Estado de la memoria de criterio para el panel de Opciones IA. */
+export const getFeedbackStatus = async () => {
+  const response = await API.get('/feedback')
+  return response.data as FeedbackStats
+}
+
+/** Vacía la memoria de criterio aprendido (ejemplos few-shot). */
+export const clearFeedback = async () => {
+  const response = await API.delete('/feedback')
+  return response.data as { ok: boolean; removed: number; stats: FeedbackStats }
+}
+
+/**
+ * Evento del flujo SSE de `askQuestionStream`:
+ * `meta` → 0..n `token` → `final` | `fallback`.
+ *
+ * `meta` trae evidencias y referencia antes de que el modelo escriba (la UI
+ * pinta las tarjetas mientras llegan los tokens); `final` cierra con la
+ * respuesta validada y `fallback` la sustituye por la determinista avisando
+ * del motivo (`warning`).
+ */
+export type AskStreamEvent =
+  | { kind: 'meta'; data: Partial<AskResponse> & { engine: string } }
+  | { kind: 'token'; text: string }
+  | { kind: 'final'; data: AskResponse }
+  | { kind: 'fallback'; data: AskResponse & { warning?: string } }
+
+/**
+ * Consulta en streaming sobre los eventos importados (SSE vía POST).
+ *
+ * EventSource solo admite GET, así que se usa fetch + ReadableStream y se
+ * parsean los eventos con nombre (`meta`, `token`, `final`, `fallback`) que
+ * emite el backend. La promesa se resuelve al cerrarse el flujo; si el
+ * transporte falla se propaga el error con el mismo formato que
+ * `askQuestion`, para que el caller pueda reintentar sin streaming.
+ */
+export const askQuestionStream = async (
+  analysisId: string,
+  question: string,
+  opts: { level?: string; suspicious?: boolean; nResults?: number } = {},
+  onEvent: (event: AskStreamEvent) => void,
+): Promise<void> => {
+  const response = await fetch(`${API.defaults.baseURL}/analysis/${analysisId}/ask/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      question,
+      level: opts.level ?? '',
+      suspicious: opts.suspicious ?? false,
+      n_results: opts.nResults ?? 8,
+    }),
+  })
+
+  if (!response.ok || !response.body) {
+    let detail = ''
+    try {
+      const data = (await response.json()) as { detail?: string }
+      detail = data?.detail ?? ''
+    } catch {
+      // Cuerpo no JSON (p. ej. 502 de un proxy): se conserva solo el código.
+    }
+    throw Object.assign(new Error(detail || `HTTP ${response.status}`), {
+      response: { status: response.status, data: { detail } },
+    })
+  }
+
+  const emit = (block: string) => {
+    const name = /^event:\s*(.+)$/m.exec(block)?.[1]?.trim()
+    const dataLine = /^data:\s*([\s\S]*)$/m.exec(block)?.[1]
+    if (!name || dataLine === undefined) return
+    let payload: Record<string, unknown>
+    try {
+      payload = JSON.parse(dataLine) as Record<string, unknown>
+    } catch {
+      return
+    }
+    if (name === 'token') onEvent({ kind: 'token', text: String(payload.text ?? '') })
+    else if (name === 'meta')
+      onEvent({ kind: 'meta', data: payload as Partial<AskResponse> & { engine: string } })
+    else if (name === 'final') onEvent({ kind: 'final', data: payload as unknown as AskResponse })
+    else if (name === 'fallback')
+      onEvent({
+        kind: 'fallback',
+        data: payload as unknown as AskResponse & { warning?: string },
+      })
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    // sse-starlette separa los eventos con CRLF: se normaliza a LF para parsear.
+    buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
+    let sep = buffer.indexOf('\n\n')
+    while (sep !== -1) {
+      emit(buffer.slice(0, sep))
+      buffer = buffer.slice(sep + 2)
+      sep = buffer.indexOf('\n\n')
+    }
+  }
+  if (buffer.trim()) emit(buffer)
+}
+
+/** Olvida la memoria de conversación (turnos) que el backend guardó en RAM. */
+export const clearChatHistory = async (analysisId: string) => {
+  const response = await API.delete(`/analysis/${analysisId}/chat`)
+  return response.data as { ok: boolean }
 }
 
 /**
@@ -360,6 +504,102 @@ export const getRagStatus = async (analysisId?: string) => {
 export const getKbStatus = async () => {
   const response = await API.get('/kb/status')
   return response.data as KbStatus
+}
+
+/** Recuentos de un Event_ID observado en el dataset (panel de correlaciones). */
+export interface ObservedEventStats {
+  event_id: string
+  count: number
+  suspicious: number
+  levels: Record<string, number>
+  hosts?: string[]
+  first_seen?: string
+  last_seen?: string
+}
+
+/** Recuentos comunes que el backend añade a cada entrada del glosario. */
+interface EventStatsFields {
+  count: number
+  suspicious: number
+  levels: Record<string, number>
+  hosts?: string[]
+  first_seen?: string
+  last_seen?: string
+}
+
+/** Entrada del glosario con los recuentos reales de los registros. */
+export interface CorrelationEventEntry extends EventStatsFields {
+  kind: string
+  /** Event ID (clave en el glosario). */
+  id: string
+  titulo: string
+  descripcion: string
+  por_que_importa: string
+  logon_types?: string
+  relacionados: string[]
+  fuente: string
+}
+
+/** Técnica ATT&CK con su evidencia observada en este análisis. */
+export interface CorrelationTechnique {
+  id: string
+  name: string
+  tactic: string
+  tactic_es: string
+  url: string
+  descripcion_es: string
+  se_detecta: string
+  eventos: string[]
+  aliases: string[]
+  /** false = completada desde la fuente oficial (usar description_en). */
+  curated: boolean
+  description_en: string
+  matched_events: { event_id: string; count: number; suspicious: number }[]
+  matched_rows: number
+  matched_suspicious: number
+}
+
+/** Táctico con sus técnicas observadas (agregación para la cabecera). */
+export interface CorrelationTactic {
+  id: string
+  name_es: string
+  techniques: number
+  rows: number
+  suspicious: number
+  ids: string[]
+}
+
+/** GET /api/analysis/{id}/attack/correlations — JOIN determinista con la KB. */
+export interface AttackCorrelations {
+  analysis_id: string
+  rows: number
+  observed_events: number
+  observed_rows: number
+  available: boolean
+  note: string
+  event_ids: CorrelationEventEntry[]
+  unmapped: ObservedEventStats[]
+  techniques: CorrelationTechnique[]
+  tactics: CorrelationTactic[]
+}
+
+/**
+ * Correlaciones ATT&CK de los registros de un análisis.
+ *
+ * Es una consulta al marco (glosario + técnicas), no inferencia: cada técnica
+ * llega porque un Event_ID presente en el dataset la referencia. Los Event_ID
+ * sin entrada en el glosario vuelven en `unmapped` en lugar de inventarles
+ * una correlación.
+ */
+export const getAttackCorrelations = async (
+  analysisId: string,
+  signal?: AbortSignal,
+): Promise<AttackCorrelations> => {
+  const response = await API.get<AttackCorrelations>(
+    `/analysis/${analysisId}/attack/correlations`,
+    { signal },
+  )
+  return response.data
 }
 
 /**
@@ -442,4 +682,89 @@ export const listenAnalysisEvents = (analysisId: string, onStatus: (status: stri
     eventSource.removeEventListener('status', handle)
     eventSource.close()
   }
+}
+
+/* ===========================================================================
+   Panel «Opciones IA» — configuración del LLM (Ollama local por defecto)
+   =========================================================================== */
+
+/** Configuración persistida en el backend (JSON en disco, aplica al instante). */
+export interface AiConfig {
+  /** LLM apagado ⇒ el asistente y el informe usan el motor determinista. */
+  enabled: boolean
+  /** Ollama nativo (`http://localhost:11434/api/chat`) u otro compatible OpenAI. */
+  api_url: string
+  api_key: string
+  model: string
+  /** Ventana de contexto: cada token consume KV cache en VRAM. */
+  num_ctx: number
+  /** Creatividad: en SOC, evidencia y no ficción ⇒ 0–0.2 lo habitual. */
+  temperature: number
+  /** Cuánto sigue el modelo cargado en VRAM («-1» eterno, «30m», «0» ya). */
+  keep_alive: string
+  /** Tope de tokens generados (−1 = sin límite). */
+  num_predict: number
+  /** Segundos de espera máxima por llamada al LLM. */
+  timeout: number
+}
+
+/** Modelo listado por Ollama (`/api/tags` / `/api/ps`). */
+export interface OllamaModel {
+  name: string
+  size?: number
+  details?: {
+    parameter_size?: string
+    quantization_level?: string
+    family?: string
+    [key: string]: unknown
+  }
+  [key: string]: unknown
+}
+
+/** Sonda de estado del motor de IA. */
+export interface AiStatus {
+  kind: 'ollama' | 'remote' | 'none'
+  /** true/false si es Ollama inspeccionado; null si la URL es remota. */
+  reachable: boolean | null
+  reason?: string | null
+  base?: string
+  latency_ms?: number
+  models: OllamaModel[]
+  /** Modelos residentes en VRAM en este momento. */
+  loaded: OllamaModel[]
+}
+
+export interface AiConfigResponse {
+  config: AiConfig
+  status: AiStatus
+  /** ¿El modelo configurado está instalado? null si no se pudo inspeccionar. */
+  model_installed: boolean | null
+}
+
+/** Resultado del botón «Probar conexión» (ping real al modelo). */
+export interface AiTestResponse {
+  ok: boolean
+  error?: string | null
+  latency_ms?: number
+  reply?: string
+  model?: string
+  status?: AiStatus | null
+}
+
+/** Configuración vigente + estado real de Ollama (modelos, VRAM, latencia). */
+export const getAiConfig = async (): Promise<AiConfigResponse> => {
+  const response = await API.get<AiConfigResponse>('/ai/config')
+  return response.data
+}
+
+/** Guarda la configuración (parcial o completa). 400 con `detail` si es inválida. */
+export const updateAiConfig = async (patch: Partial<AiConfig>): Promise<AiConfigResponse> => {
+  const response = await API.put<AiConfigResponse>('/ai/config', patch)
+  return response.data
+}
+
+/** Prueba real: sonda de estado + ping al modelo midiendo latencia. */
+export const testAiConnection = async (patch: Partial<AiConfig> = {}): Promise<AiTestResponse> => {
+  const response = await API.post<AiTestResponse>('/ai/test', patch)
+  return response.data
 }

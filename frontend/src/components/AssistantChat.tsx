@@ -3,8 +3,11 @@ import { motion } from 'framer-motion'
 import { useAnalysisStore } from '../store'
 import {
   askQuestion,
+  askQuestionStream,
+  clearChatHistory,
   getRagStatus,
   getKbStatus,
+  sendFeedback,
   AskResponse,
   RagStatusResponse,
   KbStatus,
@@ -34,11 +37,26 @@ const SUGGESTIONS = [
   'Muéstrame los eventos sospechosos de nivel alto',
 ]
 
+/** Motivos por los que se sustituye la respuesta del LLM por la determinista. */
+const WARNING_LABEL: Record<string, string> = {
+  grounding_rechazado: 'respuesta sustituida: el modelo citó Log_ID inexistentes',
+  stream_interrumpido: 'respuesta sustituida: el modelo se interrumpió a mitad',
+  llm_sin_respuesta: 'respuesta local: el modelo no devolvió texto',
+}
+
 interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
   text: string
+  /** Consulta que originó esta respuesta: se reenvía al corregirla (few-shot). */
+  question?: string
   response?: AskResponse
+  /** true mientras llegan tokens del LLM (se muestra el cursor de escritura). */
+  streaming?: boolean
+  /** Motivo de sustitución (evento `fallback`): se muestra como aviso ámbar. */
+  warning?: string
+  /** 'saved' = la corrección alimentó la memoria de criterio del analista. */
+  feedback?: 'saved' | 'error'
 }
 
 type RagStatus = RagStatusResponse
@@ -115,6 +133,107 @@ const AnswerBody: React.FC<{ text: string }> = ({ text }) => {
  * qué técnicas MITRE ATT&CK se asocian. Es MATERIAL DEL MARCO, separado de la
  * evidencia, y así se etiqueta explícitamente (nunca es un hallazgo del archivo).
  */
+/**
+ * Botón «Corregir» de una respuesta del asistente.
+ *
+ * Es la vía EXPLÍCITA de aprendizaje: el analista escribe la respuesta buena
+ * y el backend la guarda como criterio few-shot para consultas futuras afines
+ * (sin reentrenar el modelo). Tras guardar muestra la confirmación para que
+ * quede claro que la corrección quedó aprendida.
+ */
+const FeedbackControl: React.FC<{
+  analysisId: string
+  question: string
+  badAnswer: string
+  saved?: boolean
+  onSaved: () => void
+  onError: (msg: string) => void
+}> = ({ analysisId, question, badAnswer, saved, onSaved, onError }) => {
+  const [open, setOpen] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [sending, setSending] = useState(false)
+
+  const submit = async () => {
+    const text = draft.trim()
+    if (!text || sending) return
+    setSending(true)
+    try {
+      const res = await sendFeedback(analysisId, question, text, badAnswer)
+      setDraft('')
+      setOpen(false)
+      if (res.ok) onSaved()
+      else onError('No se pudo guardar la corrección.')
+    } catch {
+      onError('No se pudo guardar la corrección. Revisa el backend.')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  if (saved) {
+    return (
+      <div className="mt-3 border border-[#10b981]/45 bg-[#10b981]/10 px-3 py-2 font-mono text-[11.5px] text-[#34d399]">
+        ✓ Corrección aprendida: el asistente la usará como criterio en consultas
+        similares.
+      </div>
+    )
+  }
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="mt-3 font-mono text-[11.5px] text-[var(--text-dim)] underline decoration-dotted hover:text-[var(--text-bright)]"
+      >
+        ¿Está mal? Corregir esta respuesta
+      </button>
+    )
+  }
+
+  return (
+    <div className="mt-3 border border-hud-soft bg-[var(--bg-void)] p-3">
+      <label className="hud-label" htmlFor="feedback-correction">
+        Respuesta correcta (así debería haber respondido)
+      </label>
+      <textarea
+        id="feedback-correction"
+        className="hud-input mt-2 w-full resize-y font-mono text-[12.5px]"
+        rows={4}
+        value={draft}
+        autoFocus
+        placeholder='Ej.: SRV-DC01 concentra 12 intentos fallidos (Log_ID "EVT-10432").'
+        onChange={e => setDraft(e.target.value)}
+      />
+      <div className="mt-2 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={submit}
+          disabled={!draft.trim() || sending}
+          className="btn-hud btn-primary-hud disabled:opacity-50"
+        >
+          {sending ? 'guardando…' : 'Aprender corrección'}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setDraft('')
+            setOpen(false)
+          }}
+          className="btn-hud"
+        >
+          Cancelar
+        </button>
+      </div>
+      <p className="mt-2 font-mono text-[10.5px] text-[var(--text-dim)]">
+        Se guarda como criterio del analista: no cambia el modelo, solo enseña a
+        este asistente a responder como vos.
+      </p>
+    </div>
+  )
+}
+
+
 const ReferenceBlock: React.FC<{ reference?: AskResponse['reference'] }> = ({ reference }) => {
   if (!reference?.available) return null
   const { event_ids: events, techniques } = reference
@@ -172,10 +291,17 @@ const ReferenceBlock: React.FC<{ reference?: AskResponse['reference'] }> = ({ re
                   antes: {tech.aliases.join(', ')}
                 </div>
               )}
-              <p className="mt-1 text-[11.5px] text-[var(--text-dim)]">{tech.descripcion_es}</p>
-              <p className="mt-1 text-[11px] text-[var(--text-dim)]">
-                <span className="font-semibold text-[var(--text)]">Detección:</span> {tech.se_detecta}
+              {/* Las técnicas no curadas llegan de la fuente oficial sin
+                  traducción: se muestra el texto original antes que dejar la
+                  tarjeta en blanco. */}
+              <p className="mt-1 text-[11.5px] text-[var(--text-dim)]">
+                {tech.descripcion_es || tech.description_en}
               </p>
+              {tech.se_detecta && (
+                <p className="mt-1 text-[11px] text-[var(--text-dim)]">
+                  <span className="font-semibold text-[var(--text)]">Detección:</span> {tech.se_detecta}
+                </p>
+              )}
               <div className="mt-1.5 flex items-center justify-between">
                 <div className="flex flex-wrap gap-1">
                   {tech.eventos.slice(0, 4).map(ev => (
@@ -291,25 +417,135 @@ export const AssistantChat: React.FC = () => {
       if (!text || !analysisId || loading) return
       setError(null)
       setInput('')
-      setMessages(prev => [...prev, { id: `u${++msgSeq.current}`, role: 'user', text }])
+      const assistantId = `a${++msgSeq.current}`
+      setMessages(prev => [
+        ...prev,
+        { id: `u${++msgSeq.current}`, role: 'user', text },
+        { id: assistantId, role: 'assistant', text: '', streaming: true, question: text },
+      ])
       setLoading(true)
+
+      // Acumula tokens y los vuelca al estado cada ~80 ms: repintar por cada
+      // fragmento del modelo saturaba React (qwen emite trozos de 1-3 letras).
+      let buffer = ''
+      let timer: number | null = null
+      const flush = () => {
+        if (!buffer) return
+        const chunk = buffer
+        buffer = ''
+        setMessages(prev =>
+          prev.map(m => (m.id === assistantId ? { ...m, text: m.text + chunk } : m)),
+        )
+      }
+      const push = (token: string) => {
+        buffer += token
+        if (timer === null) {
+          timer = window.setTimeout(() => {
+            timer = null
+            flush()
+          }, 80)
+        }
+      }
+
       try {
-        const res = await askQuestion(analysisId, text, {
-          level: level || undefined,
-          suspicious,
-          nResults: 8,
+        await askQuestionStream(
+          analysisId,
+          text,
+          { level: level || undefined, suspicious, nResults: 8 },
+          event => {
+            if (event.kind === 'meta') {
+              // Evidencias y referencia llegan antes que el texto: se pintan ya.
+              setMessages(prev =>
+                prev.map(m =>
+                  m.id === assistantId ? { ...m, response: event.data as AskResponse } : m,
+                ),
+              )
+            } else if (event.kind === 'token') {
+              push(event.text)
+            } else if (event.kind === 'final') {
+              flush()
+              setMessages(prev =>
+                prev.map(m =>
+                  m.id === assistantId
+                    ? { ...m, text: event.data.answer, response: event.data, streaming: false, warning: undefined }
+                    : m,
+                ),
+              )
+            } else if (event.kind === 'fallback') {
+              // El LLM falló o citó Log_ID inventados: se muestra el determinista.
+              flush()
+              setMessages(prev =>
+                prev.map(m =>
+                  m.id === assistantId
+                    ? {
+                        ...m,
+                        text: event.data.answer,
+                        response: event.data,
+                        streaming: false,
+                        warning: event.data.warning ?? 'llm_sin_respuesta',
+                      }
+                    : m,
+                ),
+              )
+            }
+          },
+        )
+        // El stream cerró sin `final` (p. ej. corte del proxy): no se queda el
+        // cursor de escritura clavado y el mensaje vacío se retira.
+        setMessages(prev => {
+          const target = prev.find(m => m.id === assistantId)
+          if (target && !target.text.trim()) return prev.filter(m => m.id !== assistantId)
+          return prev.map(m => (m.id === assistantId ? { ...m, streaming: false } : m))
         })
-        setMessages(prev => [...prev, { id: `a${++msgSeq.current}`, role: 'assistant', text: res.answer, response: res }])
-      } catch (err) {
-        const detail =
-          (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ??
-          'No se pudo consultar el asistente. Revisa que el backend esté activo en el puerto 8500.'
-        setError(detail)
+      } catch {
+        // El transporte SSE falló antes de emitir nada: se reintenta con la
+        // consulta normal (sin streaming) para no perder la pregunta.
+        try {
+          const res = await askQuestion(analysisId, text, {
+            level: level || undefined,
+            suspicious,
+            nResults: 8,
+          })
+          flush()
+          setMessages(prev =>
+            prev.map(m =>
+              m.id === assistantId
+                ? { ...m, text: res.answer, response: res, streaming: false }
+                : m,
+            ),
+          )
+        } catch (fallbackErr) {
+          const detail =
+            (fallbackErr as { response?: { data?: { detail?: string } } })?.response?.data?.detail ??
+            'No se pudo consultar el asistente. Revisa que el backend esté activo en el puerto 8500.'
+          setError(detail)
+          // Sin respuesta utilizable se retira el mensaje del asistente.
+          setMessages(prev => prev.filter(m => m.id !== assistantId))
+        }
       } finally {
+        if (timer !== null) window.clearTimeout(timer)
+        flush()
         setLoading(false)
       }
     },
     [analysisId, loading, level, suspicious],
+  )
+
+  /** Borra la conversación en pantalla y la memoria multi-turno del backend. */
+  const clearConversation = useCallback(async () => {
+    if (!analysisId) return
+    setMessages([])
+    try {
+      await clearChatHistory(analysisId)
+    } catch {
+      // El backend puede estar caído: la memoria en RAM morirá al reiniciarse.
+    }
+  }, [analysisId])
+
+  // True cuando la burbuja del streaming ya se pinta (llegó el `meta` con las
+  // evidencias o el primer token): mientras tanto se muestra «recuperando…».
+  const streamingVisible = messages.some(
+    m => m.role === 'assistant' && m.streaming && (!!m.response || !!m.text),
   )
 
   const ragNote = useMemo(() => {
@@ -378,8 +614,12 @@ export const AssistantChat: React.FC = () => {
             </p>
           )}
 
-          {messages.map(message =>
-            message.role === 'user' ? (
+          {messages.map(message => {
+            // La burbuja del streaming se muestra desde el `meta` (evidencias):
+            // hasta entonces se ve el indicador de «recuperando…».
+            if (message.role === 'assistant' && message.streaming && !message.response && !message.text)
+              return null
+            return message.role === 'user' ? (
               <motion.div
                 key={message.id}
                 initial={{ opacity: 0, y: 8 }}
@@ -398,7 +638,8 @@ export const AssistantChat: React.FC = () => {
                 className="flex justify-start"
               >
                 <div className="max-w-[92%] border border-hud-soft bg-[var(--bg-panel)] px-4 py-3 shadow-[0_0_12px_rgba(31,200,255,0.12)]">
-                  <AnswerBody text={message.text} />
+                  {/* Cursor de escritura (▍) mientras llegan tokens del modelo. */}
+                  <AnswerBody text={message.streaming ? `${message.text}▍` : message.text} />
 
                   {message.response && (
                     <div className="mt-3 space-y-2 border-t border-hud-soft pt-3">
@@ -414,11 +655,18 @@ export const AssistantChat: React.FC = () => {
                         <span className="chip whitespace-normal normal-case text-[var(--text-dim)]">
                           {message.response.engine === 'llm'
                             ? `modelo ${message.response.model}`
-                            : 'motor local determinista'}
+                            : message.response.engine === 'streaming'
+                              ? 'generando respuesta…'
+                              : 'motor local determinista'}
                         </span>
                         {message.response.warnings.includes('baja_confianza') && (
                           <span className="chip whitespace-normal normal-case text-[#ffb020]">
                             baja similitud
+                          </span>
+                        )}
+                        {message.warning && (
+                          <span className="chip whitespace-normal normal-case text-[#ffb020]">
+                            {WARNING_LABEL[message.warning] ?? message.warning}
                           </span>
                         )}
                       </div>
@@ -478,14 +726,39 @@ export const AssistantChat: React.FC = () => {
                       )}
 
                       <ReferenceBlock reference={message.response.reference} />
+
+                      {/* Vía explícita de aprendizaje: solo con la respuesta ya
+                          cerrada (no durante el streaming) y si hay pregunta. */}
+                      {!message.streaming &&
+                        message.question &&
+                        message.text.trim() && (
+                          <FeedbackControl
+                            analysisId={analysisId}
+                            question={message.question}
+                            // Si hubo `warning`, el texto visible es el del motor
+                            // determinista: no es un error del modelo que archivar.
+                            badAnswer={message.warning ? '' : message.text}
+                            saved={message.feedback === 'saved'}
+                            onSaved={() =>
+                              setMessages(prev =>
+                                prev.map(m =>
+                                  m.id === message.id
+                                    ? { ...m, feedback: 'saved' as const }
+                                    : m,
+                                ),
+                              )
+                            }
+                            onError={setError}
+                          />
+                        )}
                     </div>
                   )}
                 </div>
               </motion.div>
-            ),
-          )}
+            )
+          })}
 
-          {loading && (
+          {loading && !streamingVisible && (
             <div className="flex justify-start">
               <div className="border border-hud-soft bg-[var(--bg-panel)] px-4 py-3 shadow-[0_0_12px_rgba(31,200,255,0.12)]">
                 <div className="flex items-center gap-1.5 text-hud-line">
@@ -532,6 +805,17 @@ export const AssistantChat: React.FC = () => {
               />
               <span>Solo sospechosos</span>
             </label>
+            {messages.length > 0 && (
+              <button
+                type="button"
+                onClick={() => void clearConversation()}
+                disabled={loading}
+                className="btn-hud ml-auto"
+                title="Borra la conversación y la memoria multi-turno del asistente"
+              >
+                Limpiar conversación
+              </button>
+            )}
           </div>
 
           <form
