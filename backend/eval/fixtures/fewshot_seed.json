@@ -1,0 +1,54 @@
+[
+  {
+    "id": "fb-seed-neg-agregado",
+    "kind": "negative",
+    "question": "¿Cuántos eventos críticos hay en el host DC-01?",
+    "answer": "Los agregados se contestan con el número y nada más: «hay N eventos críticos en DC-01». No se citan Log_ID ni se listan eventos: el analista pidió un conteo, no una evidencia.",
+    "source": "explicit",
+    "analysis_id": "fewshot-seed",
+    "created_at": 1792000000,
+    "document": "CONSULTA: ¿Cuántos eventos críticos hay en el host DC-01?\nRESPUESTA: Los agregados se contestan con el número y nada más: «hay N eventos críticos en DC-01». No se citan Log_ID ni se listan eventos: el analista pidió un conteo, no una evidencia.",
+    "bad_answer": "Hay 9 eventos críticos en DC-01 (EVT-00012, EVT-00045, EVT-00102): 4 de Process Creation, 3 de logon fallido y 2 del planificador."
+  },
+  {
+    "id": "fb-seed-pos-evidencia",
+    "kind": "positive",
+    "question": "¿Qué incidentes hay en el host FS-SRV01?",
+    "answer": "Respuesta por host: primero el total de eventos del sitio, luego el reparto por severidad mencionando los Log_ID de los más graves, y cierre con el evento de mayor prioridad. Cita siempre los Log_ID entre comillas simples.",
+    "source": "implicit",
+    "analysis_id": "fewshot-seed",
+    "created_at": 1792000000,
+    "document": "CONSULTA: ¿Qué incidentes hay en el host FS-SRV01?\nRESPUESTA: Respuesta por host: primero el total de eventos del sitio, luego el reparto por severidad mencionando los Log_ID de los más graves, y cierre con el evento de mayor prioridad. Cita siempre los Log_ID entre comillas simples."
+  },
+  {
+    "id": "fb-seed-pos-filas",
+    "kind": "positive",
+    "question": "Muéstrame los eventos fallidos en WS-018",
+    "answer": "Cuando piden «muéstrame» los eventos que cumplen un filtro, se lista cada Log_ID citado con su Event ID y host, y se cierra con el total. Solo los IDs que realmente cumplen el filtro; nada de IDs de contexto.",
+    "source": "implicit",
+    "analysis_id": "fewshot-seed",
+    "created_at": 1792000000,
+    "document": "CONSULTA: Muéstrame los eventos fallidos en WS-018\nRESPUESTA: Cuando piden «muéstrame» los eventos que cumplen un filtro, se lista cada Log_ID citado con su Event ID y host, y se cierra con el total. Solo los IDs que realmente cumplen el filtro; nada de IDs de contexto."
+  },
+  {
+    "id": "fb-seed-pos-ip",
+    "kind": "positive",
+    "question": "¿Qué hizo la IP externa 203.0.113.74?",
+    "answer": "Respuesta por IP: primero qué actividad disparó, luego los hosts a los que se dirigió, y al final los Log_ID relevantes. Si la IP no aparece en los datos cargados, se dice que no hay registros de esa IP.",
+    "source": "implicit",
+    "analysis_id": "fewshot-seed",
+    "created_at": 1792000000,
+    "document": "CONSULTA: ¿Qué hizo la IP externa 203.0.113.74?\nRESPUESTA: Respuesta por IP: primero qué actividad disparó, luego los hosts a los que se dirigió, y al final los Log_ID relevantes. Si la IP no aparece en los datos cargados, se dice que no hay registros de esa IP."
+  },
+  {
+    "id": "fb-seed-neg-negativa",
+    "kind": "negative",
+    "question": "¿Hay indicios de ransomware en los registros?",
+    "answer": "Si los datos cargados no contienen lo que se pregunta, se responde que no hay evidencia de ransomware en estas cargas. No se inventan eventos ni se citan Log_ID que no estén en la evidencia.",
+    "source": "explicit",
+    "analysis_id": "fewshot-seed",
+    "created_at": 1792000000,
+    "document": "CONSULTA: ¿Hay indicios de ransomware en los registros?\nRESPUESTA: Si los datos cargados no contienen lo que se pregunta, se responde que no hay evidencia de ransomware en estas cargas. No se inventan eventos ni se citan Log_ID que no estén en la evidencia.",
+    "bad_answer": "Sí, hay cifrado masivo detectado en EVT-00200 y EVT-00201, comportamiento típico de ransomware."
+  }
+]

@@ -16,6 +16,7 @@ import textwrap
 from pathlib import Path
 
 BACKEND = Path(__file__).resolve().parents[1]
+SEED = BACKEND / "eval" / "fixtures" / "fewshot_seed.json"
 
 # Orden idéntico al de `_una` en runner.py: eval.runner + ai_config cargados,
 # `main` NO. Luego se entra en _isolated_store y recién ahí se importa main
@@ -54,8 +55,12 @@ _SCRIPT = textwrap.dedent(
                 f"{{mod.__name__}} apunta a {{mod.FEEDBACK_PATH}}: el aislamiento "
                 "NO alcanzó a esta instancia"
             )
-        # La memoria real NO se lee dentro del bloque.
-        assert feedback_store._load() == [], "leyó la memoria real"
+        # La memoria real NO se lee dentro del bloque: el store arranca con
+        # el SNAPSHOT VERSIONADO (ruling issue 5), nunca vacío ni real.
+        import json
+        seed_ids = {{e["id"] for e in json.loads(Path({seed!r}).read_text(encoding="utf-8"))}}
+        cargados = {{e["id"] for e in feedback_store._load()}}
+        assert cargados == seed_ids, "el store aislado no cargó SOLO el seed"
         # Y main, que es quien la usaría, ve la ruta aislada.
         assert main.feedback_store.FEEDBACK_PATH == tmp / "feedback.json"
         real_antes = feedback_store.FEEDBACK_PATH
@@ -74,7 +79,7 @@ def test_aislamiento_en_proceso_fresco_con_orden_del_cli(tmp_path):
     """El escaneo de _patched_modules debe GARANTIZAR la carga antes de parchear:
     si el módulo aún no existe en sys.modules, un import tardío (main dentro del
     bloque) crearia una instancia que ignora la redirección."""
-    code = _SCRIPT.format(backend=str(BACKEND), tmp=str(tmp_path))
+    code = _SCRIPT.format(backend=str(BACKEND), tmp=str(tmp_path), seed=str(SEED))
     proc = subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True, text=True, encoding="utf-8", errors="replace",

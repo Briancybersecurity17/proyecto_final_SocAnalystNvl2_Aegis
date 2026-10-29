@@ -3,10 +3,17 @@
 Sin app, sin red, sin LLM: solo las funciones de orquestación que se pueden
 verificar sin subir el Excel (la corrida real es la validación de Task 7).
 """
+import json
+
 import pytest
 
 from eval import runner
 from eval.runner import build_report, compare_reports, motor_guard
+
+# Ids del snapshot few-shot versionado: el store aislado arranca con él
+# (ruling del issue 5), nunca vacío ni con la memoria real.
+_SEED_IDS = {e["id"] for e in
+             json.loads(runner.SEED_PATH.read_text(encoding="utf-8"))}
 
 
 def _informe(scores):
@@ -322,7 +329,7 @@ def test_aislamiento_redirige_las_dos_instancias_de_feedback(tmp_path):
         for mod in mods:
             assert mod.FEEDBACK_PATH == tmp_path / "feedback.json", \
                 f"{mod.__name__} sigue apuntando al JSON real"
-            assert mod._load() == []
+            assert {e["id"] for e in mod._load()} == _SEED_IDS
     for mod, real in reales.items():
         assert mod.FEEDBACK_PATH == real
 
@@ -331,12 +338,14 @@ def test_aislamiento_no_lee_ni_escribe_la_memoria_real(tmp_path):
     import feedback_store
 
     real = feedback_store.FEEDBACK_PATH
-    # La memoria real tiene ejemplos (o no), pero el aislamiento debe ignorarla.
+    # El store aislado arranca con el SNAPSHOT VERSIONADO (ruling issue 5),
+    # nunca con la memoria real del analista: la siembra es lo que permite
+    # que §6 discrimine sin romper el aislamiento.
     with runner._isolated_store(tmp_path):
         assert feedback_store.FEEDBACK_PATH != real
-        assert feedback_store._load() == []
+        assert {e["id"] for e in feedback_store._load()} == _SEED_IDS
         feedback_store.add_correction("¿Qué pasó en DC-01?", "Criterio de prueba.")
-        assert feedback_store.status()["total"] == 1
+        assert feedback_store.status()["total"] == len(_SEED_IDS) + 1
     assert feedback_store.FEEDBACK_PATH == real
     assert feedback_store._cache is None        # caché invalidada al salir
 

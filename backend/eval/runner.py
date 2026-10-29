@@ -5,8 +5,9 @@ Sube la muestra fija, puntuá los 24 casos con la verdad calculable de
 (spec §4 y §9):
 
 1. **Aislamiento**: la memoria real del analista (`feedback.json`) no se lee
-   ni se escribe; `_isolated_store` la redirige a un temporal y limpia la
-   caché en RAM antes y después.
+   ni se escribe; `_isolated_store` la redirige a un temporal (junto a su
+   colección semántica), la siembra con el snapshot versionado
+   `fixtures/fewshot_seed.json` y limpia la caché en RAM antes y después.
 2. **Índice listo**: espera activa a `rag_store.has_index()`; sin índice la
    recuperación sería solo léxica y la corrida engañosa → RuntimeError.
 3. **Motor verificado**: `--motor determinista` apaga el LLM parcheando
@@ -34,6 +35,21 @@ from eval.cases import CASES, FIXTURE, K, load_fixture
 # % máximo de casos de evidencia que pueden responder con el determinista en
 # una corrida «llm»: por encima, la puntuación mide el fallback, no el modelo.
 MOTOR_GUARD_PCT = 30.0
+
+# Snapshot few-shot versionado (ruling del issue 5, spec §6): el aislamiento
+# (store temporal + DELETE /chat por caso) impide que remember_implicit
+# acumule ejemplos durante la corrida, así que SIN siembra rag_examples_used
+# es 0 por construcción y el diagnóstico de cobertura no discrimina nada.
+SEED_PATH = Path(__file__).parent / "fixtures" / "fewshot_seed.json"
+
+# Colección semántica TEMPORAL del feedback aislado. La real (soc_feedback)
+# vive en el mismo Chroma que el RAG y NO sigue la redirección del JSON:
+# con la colección real intacta, similar() recibiría hits cuyos ids no están
+# en el JSON sembrado y los descartaría sin caer a léxico (el seed sería
+# muerto); y un _reindex contra la colección real BORRARÍA los ejemplos
+# indexados del analista. Nombre fijo (corrida única por diseño) y se borra
+# al salir.
+EVAL_FEEDBACK_COLLECTION = "eval-feedback"
 
 
 # ---------------------------------------------------------------------------
@@ -81,26 +97,76 @@ def _patched_modules(nombre: str, attr: str, valor: Any) -> Iterator[List[Any]]:
             setattr(mod, attr, original)
 
 
+def _sembrar_store(mods: List[Any], tmp: Path) -> None:
+    """Copia el snapshot versionado al store temporal y lo indexa.
+
+    El JSON sembrado es la fuente de verdad; `_reindex` sincroniza la
+    colección TEMPORAL (ya parcheada) con él. Si el snapshot no existiera,
+    el store queda vacío como antes (fail-open: §6 reportará 0%, no tumba
+    la corrida).
+    """
+    seed: List[Dict[str, Any]] = []
+    if SEED_PATH.exists():
+        seed = json.loads(SEED_PATH.read_text(encoding="utf-8"))
+    destino = tmp / "feedback.json"
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    destino.write_text(
+        json.dumps(seed, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    for mod in mods:
+        mod._cache = None
+    if seed:
+        # Una sola instancia indexa: ambas apuntan a la misma colección
+        # temporal y el writer único evita carreras sobre el mismo Chroma.
+        with contextlib.suppress(Exception):
+            mods[0]._reindex(seed)
+
+
+def _limpiar_coleccion_temp(mods: List[Any]) -> None:
+    """Borra la colección temporal del feedback aislado (autolimpieza).
+
+    Corridas anteriores que crashearon dejan la colección en disco; sin
+    esta limpieza se acumularían documentos de seeds viejos.
+    """
+    if not mods:
+        return
+    with contextlib.suppress(Exception):
+        client = mods[0].rag_store.get_client()
+        if client is not None:
+            client.delete_collection(name=EVAL_FEEDBACK_COLLECTION)
+
+
 @contextlib.contextmanager
 def _isolated_store(tmp: Path) -> Iterator[None]:
-    """Redirige el feedback del analista a un JSON temporal.
+    """Redirige el feedback del analista a un JSON temporal, lo siembra con
+    el snapshot versionado y aísla también su colección semántica.
 
     La caché en RAM (`_cache`) se invalida antes y después: redirigir el path
     sin limpiarla haría que la corrida leyera la memoria real del analista.
     `ai_config.json` NO se toca (el motor se conmuta parcheando `get`).
+
+    La siembra (spec §6, ruling del issue 5) es lo que permite al diagnóstico
+    few-shot discriminar: con store vacío, rag_examples_used es 0 siempre.
+    La colección semántica se parchea a un nombre temporal porque comparte
+    cliente con el RAG (ver EVAL_FEEDBACK_COLLECTION); al salir se restaura
+    y la temporal se elimina.
     """
     def _redirect(mod: Any) -> Path:
         mod._cache = None                      # invalidar ANTES de redirigir
         return tmp / "feedback.json"
 
     with _patched_modules("feedback_store", "FEEDBACK_PATH", _redirect) as mods:
-        for mod in mods:
-            mod._cache = None
-        try:
-            yield
-        finally:
-            for mod in mods:
+        with _patched_modules("feedback_store", "FEEDBACK_COLLECTION",
+                              EVAL_FEEDBACK_COLLECTION) as col_mods:
+            for mod in col_mods:
                 mod._cache = None
+            _sembrar_store(mods, tmp)
+            try:
+                yield
+            finally:
+                for mod in mods:
+                    mod._cache = None
+                _limpiar_coleccion_temp(col_mods)
 
 
 @contextlib.contextmanager

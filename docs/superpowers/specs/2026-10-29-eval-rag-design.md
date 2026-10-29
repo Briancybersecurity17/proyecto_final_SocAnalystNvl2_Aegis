@@ -162,6 +162,8 @@ Cambios necesarios en el código existente:
 - `ai_service.py` — `_qa_messages()` ya construye el bloque few-shot; pasa a contar los ejemplos inyectados y devolver `rag_examples_used` junto al resto de campos. `main.py` solo lo reenvía en la respuesta (no-stream y el `final`/`meta` del stream).
 - `feedback_store.prompt_block()` — pasa a **bloques separados** para `negative` y `positive` en vez de intercalarlos, como hace `query_similar()` del proyecto de referencia. Cubierto por los tests existentes de `test_feedback_store.py`.
 
+**Ruling (issue 5, fix pass de la segunda revisión): siembra desde snapshot versionado.** El aislamiento (store temporal + `DELETE /chat` por caso) impide que `remember_implicit` acumule ejemplos durante la corrida — condición necesaria para la garantía §4.1, pero suficiente para que `rag_examples_used` sea 0 por construcción y esta sección no discriminara nada. Decisión: `_isolated_store` siembra el store aislado desde el snapshot versionado `eval/fixtures/fewshot_seed.json` (criterios curados del analista, sin Log_ID concretos para no contaminar el scoring) y aísla también la **colección semántica** del feedback (`soc_feedback` comparte cliente con el RAG: con la colección real intacta, `similar()` recibiría hits cuyos ids no están en el JSON sembrado y los descartaría sin caer a léxico — el seed sería muerto; y un `_reindex` contra la colección real borraría los ejemplos indexados del analista). La colección temporal se elimina al salir. Con el seed, el diagnóstico recupera el sentido original: cobertura > 0 ⇒ los fallos son de calidad del criterio; 0% ⇒ de recall.
+
 ## 7. Motor determinista como línea base
 
 `--motor {llm,determinista,ambos}`, default `llm`.
