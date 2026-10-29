@@ -332,8 +332,8 @@ semántica («fuerza bruta» → T1110, «ransomware» → T1486) → alias renu
 citados en la pregunta → bloque «Referencia técnica» en la respuesta →
 degradación sin Chroma.
 
-Suite unitaria (106 tests: configuración del LLM, streaming SSE, memoria de
-criterio few-shot, presupuesto de ventana):
+Suite unitaria (144 tests: configuración del LLM, streaming SSE, memoria de
+criterio few-shot, presupuesto de ventana, scoring/casos/runner del eval):
 
 ```bash
 cd backend && python -m pytest -q
@@ -344,6 +344,35 @@ Verificación de tipos en el frontend:
 ```bash
 cd frontend && npx tsc --noEmit
 ```
+
+---
+
+## Evaluación del asistente (RAG+LLM)
+
+Harness reproducible que puntúa el asistente contra una muestra fija
+versionada (`backend/eval/fixtures/sample.xlsx`, 715 filas) con **verdad
+calculable por pandas** — sin juez LLM y sin respuestas doradas escritas a
+mano: los 24 casos de `backend/eval/cases.py` (agregados, conjuntos de
+eventos, negativas, recuperación y QA sobre evidencia) se calculan contra el
+propio Excel.
+
+```bash
+# desde la raíz del proyecto
+backend\.venv\Scripts\python.exe backend\scripts\eval_rag.py --motor determinista   # línea base barata (sin Ollama)
+backend\.venv\Scripts\python.exe backend\scripts\eval_rag.py --motor ambos          # determinista + LLM y delta entre ambos
+backend\.venv\Scripts\python.exe backend\scripts\eval_rag.py --motor llm --contra backend\eval\runs\baseline.json
+```
+
+Garantías: entrada por `TestClient` al endpoint real `/ask`; la memoria del
+analista (`feedback.json`) se redirige a un temporal (jamás se lee ni se
+escribe la real); el índice RAG se espera o se reconstruye antes de puntuar
+(sin él la corrida mediría solo léxica); un caso que lance excepción se
+registra visible y no contamina el score; el guard del motor aborta si, con
+`--motor llm`, más del 30 % de los casos quedaron en el determinista.
+Resultados por corrida en `backend/eval/runs/` (ignorado por git).
+
+Línea base medida (motor determinista): **26.1 % macro**; con `qwen2.5:3b`:
+**29.9 %** (Δ +3.8).
 
 ---
 

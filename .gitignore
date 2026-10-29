@@ -42,3 +42,6 @@ bocetos_graficos_test/
 
 # ----- Logs -----
 *.log
+
+# ----- Corridas del harness de evaluación (local, regenerable) -----
+backend/eval/runs/

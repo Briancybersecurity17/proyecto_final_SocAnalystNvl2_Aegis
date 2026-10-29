@@ -95,6 +95,51 @@ def _wait_for_index(ready: Callable[[], bool], timeout: float = 120.0,
         time.sleep(poll)
 
 
+def _asegurar_indice(analysis_id: str) -> None:
+    """Garantiza el índice RAG antes de puntuar; RuntimeError si no aparece.
+
+    Dos causas reales que esta función cubre (ambas medidas en este repo):
+
+    1. `rag_store._get_collection` marca `_initialized = True` ANTES de cargar
+       el modelo de embeddings: otro hilo que llegue durante la carga ve
+       «inicializado» con la colección aún en None y la indexación del
+       background task se rinde en silencio (`available: False`). Mismo motivo
+       por el que `is_available()` es False mientras carga.
+    2. El índice persiste en disco y las suites de prueba lo purgan.
+
+    El reindex de `index_events` es idempotente; sin esta garantía la corrida
+    mediría recuperación puramente léxica sin que nadie lo notara (spec §4).
+    """
+    from main import _enrich_records, analysis_store
+
+    import rag_store
+
+    try:
+        _wait_for_index(lambda: rag_store.has_index(analysis_id),
+                        timeout=30.0, poll=0.5)
+        return
+    except RuntimeError:
+        pass
+
+    # El motor puede seguir cargando el modelo: se espera a que esté listo.
+    deadline = time.monotonic() + 120.0
+    while not rag_store.is_available():
+        if time.monotonic() >= deadline:
+            raise RuntimeError("el índice RAG no indexó («no index») y el motor "
+                               "semántico no está disponible: la corrida mediría "
+                               "solo léxica")
+        time.sleep(0.5)
+
+    entry = analysis_store.get(analysis_id) or {}
+    df = entry.get("dataframe")
+    if df is None or df.empty:
+        raise RuntimeError("el índice RAG no indexó («no index») y no hay datos "
+                           "para reindexar: la corrida mediría solo léxica")
+    rag_store.index_events(analysis_id, _enrich_records(df))
+    _wait_for_index(lambda: rag_store.has_index(analysis_id),
+                    timeout=120.0, poll=0.5)
+
+
 # ---------------------------------------------------------------------------
 # Informe y comparación (funciones puras)
 # ---------------------------------------------------------------------------
@@ -252,8 +297,7 @@ def _run_pasada(dataset_ids: set) -> Dict[str, Any]:
                 raise RuntimeError(f"el análisis terminó en «{state}»: no hay índice "
                                    "RAG confiable para evaluar")
             time.sleep(0.2)
-        _wait_for_index(lambda: rag_store.has_index(analysis_id),
-                        timeout=120.0, poll=0.5)
+        _asegurar_indice(analysis_id)
 
         try:
             for case in CASES:

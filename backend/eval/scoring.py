@@ -46,8 +46,18 @@ def cited_ids(text: str) -> list[str]:
 
 
 def invented_ids(cited: list[str], dataset_ids: set[str]) -> list[str]:
-    """De los IDs citados, los que NO existen en el dataset (esperado: 0)."""
-    return [token for token in cited if token not in dataset_ids]
+    """De los IDs citados, los que NO existen en el dataset (esperado: 0).
+
+    Solo cuentan los tokens de la MISMA familia (prefijo antes del guion o
+    del guion bajo) que los IDs reales del dataset, igual que filtra el guard
+    `_grounding_ok` de producción: la regex de extracción también casa hosts
+    como «WS-018», y contarlos como Log_ID inventado daría falsos positivos.
+    """
+    prefixes = {token.split("-")[0].split("_")[0] for token in dataset_ids}
+    return [
+        token for token in cited
+        if token.split("-")[0].split("_")[0] in prefixes and token not in dataset_ids
+    ]
 
 
 def _number_value(raw: str) -> int:

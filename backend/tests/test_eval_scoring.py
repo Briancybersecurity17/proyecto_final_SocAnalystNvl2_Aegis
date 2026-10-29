@@ -16,6 +16,15 @@ def test_invented_ids_marca_lo_que_no_esta_en_el_dataset():
     assert scoring.invented_ids(["EVT-00002", "EVT-99999"], dataset) == ["EVT-99999"]
 
 
+def test_invented_ids_ignora_tokens_de_otra_familia():
+    """La regex casa «WS-018» (host) igual que «EVT-018» (Log_ID): solo
+    cuentan los tokens de la MISMA familia que los IDs reales del dataset,
+    igual que filtra el guard _grounding_ok de producción."""
+    dataset = {"EVT-00001", "EVT-00002"}
+    assert scoring.invented_ids(["WS-018", "EVT-00002"], dataset) == []
+    assert scoring.invented_ids(["WS-018"], dataset) == []
+
+
 def test_numero_por_frontera_de_token_no_subcadena():
     assert scoring.number_in_answer("Hay 97 eventos críticos", 97, "eventos")
     assert not scoring.number_in_answer("Hay 1977 eventos", 97, "eventos")
