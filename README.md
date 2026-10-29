@@ -57,7 +57,7 @@ proyecto_final_bootcamp_ComunidadDojo_SocAnalystNvl2/
 │  │  ├─ mitre_attack.json    # 79 técnicas (generada por scripts/build_kb.py)
 │  │  └─ event_ids.json       # 44 Event IDs de Windows (curado a mano)
 │  ├─ scripts/                # build_kb.py + benches de latencia, contexto y recuperación
-│  ├─ tests/                  # pytest: 106 tests (config, streaming SSE, few-shot…)
+│  ├─ tests/                  # pytest: 173 tests (config, streaming SSE, few-shot…)
 │  └─ requirements.txt
 └─ frontend/                  # React + Vite + TypeScript (puerto 5300)
    ├─ index.html
@@ -332,7 +332,7 @@ semántica («fuerza bruta» → T1110, «ransomware» → T1486) → alias renu
 citados en la pregunta → bloque «Referencia técnica» en la respuesta →
 degradación sin Chroma.
 
-Suite unitaria (144 tests: configuración del LLM, streaming SSE, memoria de
+Suite unitaria (173 tests: configuración del LLM, streaming SSE, memoria de
 criterio few-shot, presupuesto de ventana, scoring/casos/runner del eval):
 
 ```bash
@@ -364,24 +364,32 @@ backend\.venv\Scripts\python.exe backend\scripts\eval_rag.py --motor llm --contr
 ```
 
 Garantías: entrada por `TestClient` al endpoint real `/ask`; la memoria del
-analista (`feedback.json`) se redirige a un temporal (jamás se lee ni se
-escribe la real); el índice RAG se espera o se reconstruye antes de puntuar
+analista (`feedback.json`) y su colección semántica se redirigen a un
+temporal (jamás se lee ni se escribe la real) y el store aislado se **siembra
+desde un snapshot versionado** (`backend/eval/fixtures/fewshot_seed.json`),
+para que el diagnóstico de cobertura few-shot pueda discriminar sin romper el
+aislamiento; el índice RAG se espera o se reconstruye antes de puntuar
 (sin él la corrida mediría solo léxica); un caso que lance excepción se
 registra visible y no contamina el score; el guard del motor aborta si, con
-`--motor llm`, más del 30 % de los casos quedaron en el determinista.
+`--motor llm`, más del 30 % de los casos quedaron en el determinista (o si
+ningún caso de evidencia puntuó: el guard es fail-closed).
 Resultados por corrida en `backend/eval/runs/` (ignorado por git).
 
-Medida (muestra de 715 filas, `qwen2.5:3b`, temp 0.15): **determinista 38.5 %
-macro · LLM 32.8 %** (Δ −5.7). El modelo pierde contra la línea base en
-`filter_set` (−28.6) y `evidence_qa` (−33.3), y gana solo en `refusal` (+33.3):
-con qwen2.5:3b el motor determinista —anclado a la evidencia recuperada— es
-mejor número que el LLM. Corridas completas en `backend/eval/runs/`.
+Medida (muestra de 715 filas, `qwen2.5:3b`, temp 0.15, con el seed few-shot
+versionado activo): **determinista 38.5 % macro · LLM 46.1 %** (Δ **+7.6**).
+El modelo gana en `refusal` (+66.7), empata en `aggregate`, `retrieval` y
+`evidence_qa`, y sigue perdiendo en `filter_set` (−28.6) — con el LLM, la
+cobertura few-shot es 100 % de los casos elegibles (§6: los 6 fallos del
+modelo tuvieron ejemplos inyectados, o sea fallo de CALIDAD del criterio, no
+de recall). La línea base determinista (38.5) no cambia con el seed: el
+determinista no lee few-shot. Corridas completas en `backend/eval/runs/`.
 
 > La comparación entre `--motor determinista` y `--motor llm` se sostiene
 > porque el aislamiento garantiza que ambas pasadas parten del mismo estado
-> (memoria del analista redirigida a un temporal, índice RAG reconstruido,
-> `ai_config` nunca escrita) y de la misma muestra (hash SHA-256 en el
-> informe). El guard del motor aborta si el LLM no se usó de verdad.
+> (memoria del analista redirigida a un temporal con el mismo snapshot
+> sembrado, índice RAG reconstruido, `ai_config` nunca escrita) y de la misma
+> muestra (hash SHA-256 en el informe). El guard del motor aborta si el LLM
+> no se usó de verdad.
 
 ---
 
