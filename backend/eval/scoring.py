@@ -22,7 +22,7 @@ LOG_ID_RE = re.compile(r"\b[A-Za-z]{2,12}[-_]\d{2,}\b")
 # lookahead de [\d.-] descarta lo pegado a un punto o a un guion: los trozos
 # de una IP («10.10.97.1») y los de una fecha («2026-01-10») — un «2026»
 # solto en una fecha NO es un conteo. Un «1234» sin separador también vale.
-_NUMBER_RE = re.compile(r"(?<![\d.-])\d+(?:[.,]\d{3})*(?![\d.-])")
+_NUMBER_RE = re.compile(r"(?<![\d./-])\d+(?:[.,]\d{3})*(?![\d./-])")
 
 # Negaciones fuertes: con cualquiera de estas la respuesta está negando algo.
 _DENIAL_MARKERS = (
@@ -91,7 +91,8 @@ def number_in_answer(text: str, expected: int, unidades: str | None = None) -> b
     - Frontera de token: esperar 97 no acepta «1977».
     - Formatos ES/EN: «1.234», «1,234», «1234» son el mismo 1234.
     - IPs y fechas no cuentan como números (el lookaround descarta lo pegado
-      a un punto o a un guion: «10.10.97.1», «2026-01-10»).
+      a un punto, un guion o una barra: «10.10.97.1», «2026-01-10»,
+      «31/12/2025»).
     - Con `unidades`, el número debe ser el MÁS CERCANO a la unidad declarada:
       «La IP 10.10.97.1 originó 68 eventos» prueba 68 (no 97 ni 18), porque
       68 es lo más próximo a «eventos». Sin unidad, cualquier coincidencia vale.

@@ -70,6 +70,15 @@ def test_fecha_no_cuenta_como_numero():
     assert scoring.number_in_answer("Ocurrieron 2026 eventos", 2026)
 
 
+def test_fecha_con_barra_no_cuenta_como_numero():
+    """Mismo caso con el separador «/» (formato dd/mm/aaaa): sin el / en el
+    lookaround, «31/12/2025» casaba el 31 como número suelto y un agregado
+    esperando 31 acertaba por una fecha (minor 9)."""
+    assert not scoring.number_in_answer("Ocurrió el 31/12/2025", 31)
+    assert not scoring.number_in_answer("Rango: 12/07/2025 al 31/12/2025", 12)
+    assert scoring.number_in_answer("Ocurrieron 31 eventos", 31)
+
+
 def test_precision_sin_citados_es_cero():
     assert scoring.precision_at_k([], {"EVT-A"}) == 0.0
 

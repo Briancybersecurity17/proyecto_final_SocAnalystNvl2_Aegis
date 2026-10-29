@@ -67,22 +67,30 @@ def test_motor_guard_falla_si_el_llm_no_se_uso():
     assert motor_guard(resultados, forzar=True) is True     # --forzar
 
 
-def test_motor_guard_ignora_los_errores():
-    # Un caso con excepción no prueba nada sobre el motor: si todos los de
-    # evidencia revientan, el guard no juzga (no aborta) y build_report los
-    # muestra aparte como `errores`.
+def test_motor_guard_sin_casos_elegibles_no_aprueba():
+    # Guard fail-closed: si NINGÚN caso de evidencia puntuó (todos con
+    # excepción), el guard no puede verificar que el modelo se usó — con
+    # True vacío, una corrida «llm» con 0 uso real del LLM se publicaría
+    # como del modelo (spec §7: mejor fallar ruidosamente que publicar
+    # sin verificar). --forzar sigue siendo la salida explícita.
     rotos = [{"categoria": "filter_set", "ok": None, "engine": None,
               "mode": None, "error": "boom"}] * 12
-    assert motor_guard(rotos, forzar=False) is True
-    # Con un solo elegible determinista (100 %) sí debe fallar.
+    assert motor_guard(rotos, forzar=False) is False
+    assert motor_guard(rotos, forzar=True) is True
+    # Con un solo elegible determinista (100 %) también falla.
     assert motor_guard(rotos + [{"categoria": "filter_set", "ok": True,
                                  "engine": "deterministic",
                                  "mode": "evidence"}], forzar=False) is False
 
 
 def test_motor_guard_con_llm_en_uso_pasa():
-    resultados = [{"categoria": "filter_set", "engine": "llm", "mode": "evidence"}] * 7
-    resultados += [{"categoria": "filter_set", "engine": "deterministic", "mode": "evidence"}] * 3
+    # Con "ok" presente los 10 son elegibles: 3/10 en determinista (30 %)
+    # no supera el umbral → pasa. (Sin "ok" ninguno era elegible y, con el
+    # antiguo True vacío, este test pasaba sin probar nada.)
+    resultados = [{"categoria": "filter_set", "ok": True, "engine": "llm",
+                   "mode": "evidence"}] * 7
+    resultados += [{"categoria": "filter_set", "ok": True,
+                    "engine": "deterministic", "mode": "evidence"}] * 3
     assert motor_guard(resultados, forzar=False) is True    # 30 % no supera 30 %
 
 
@@ -188,6 +196,116 @@ def test_determinista_guard_detecta_rechazo_de_grounding():
     assert runner.determinista_guard(sano) is True
 
 
+# --- Impresión: lo que el docstring promete debe verse en la salida -----------
+def _comparacion(presente_en_actual: bool):
+    actual = _informe([("filter_set", False)])
+    baseline = _informe([("filter_set", True)])
+    if not presente_en_actual:
+        actual["por_categoria"] = {}
+        actual["global"] = 0.0
+    if presente_en_actual:
+        baseline["por_categoria"] = {}
+        baseline["global"] = 0.0
+    return compare_reports(actual, baseline)
+
+
+def test_print_comparison_marca_la_categoria_solo_en_baseline(capsys):
+    # compare_reports documenta (en presente) «se muestra «— → 0»» y calcula
+    # el flag `presente` para eso, pero print_comparison lo ignoraba: la
+    # categoría ausente en la corrida actual se imprimía como un 0 medido
+    # cualquiera. La promesa del docstring debe verse en la salida.
+    cmp = _comparacion(presente_en_actual=False)
+    assert cmp["por_categoria"]["filter_set"]["presente"] is False
+    runner.print_comparison(cmp)
+    out = capsys.readouterr().out
+    assert "—" in out and "0.0" in out, \
+        f"la categoría solo-en-baseline no se marcó con «—»:\n{out}"
+
+
+def test_print_report_imprime_el_conteo_por_engine(capsys):
+    # Spec §8: «Motor — cuántos casos usaron LLM vs determinista» está en los
+    # diagnósticos de salida, pero print_report no lo imprimía: una corrida
+    # «llm» se leía sin poder ver cuántos casos respondió el modelo.
+    resultados = [{"categoria": "evidence_qa", "ok": True, "engine": "llm",
+                   "mode": "evidence"},
+                  {"categoria": "evidence_qa", "ok": True,
+                   "engine": "deterministic", "mode": "evidence"},
+                  {"categoria": "retrieval", "ok": True, "engine": "retrieval",
+                   "mode": "evidence"},
+                  {"categoria": "filter_set", "ok": None, "error": "boom",
+                   "id": "fs-roto"}]
+    rep = build_report(resultados=resultados,
+                       grounding={"rechazo_pct": 0.0, "inventados": 0},
+                       fewshot={"cobertura_pct": 0.0}, motor="llm",
+                       hash_muestra="abc", modelo="qwen2.5:3b",
+                       num_ctx=4096, temperatura=0.2)
+    runner.print_report(rep)
+    out = capsys.readouterr().out
+    assert "1 llm" in out and "1 determinista" in out and "1 retrieval" in out, \
+        f"el conteo por engine no se imprime:\n{out}"
+
+
+# --- Cableado de los guards en run() ------------------------------------------
+# Los guards ya estaban implementados, pero NADA verificaba que run() los
+# invocara en el momento correcto: si alguien quitara la llamada, la suite
+# entera seguiría verde y las corridas publicarían sin verificar el motor.
+
+def _pasada(resultados):
+    return {"resultados": resultados, "grounding": {"rechazo_pct": 0.0,
+                                                    "inventados": 0},
+            "fewshot": {"cobertura_pct": 0.0}, "rutados_a_agregacion": []}
+
+
+def test_run_aborta_cuando_en_llm_no_se_uso(monkeypatch, tmp_path):
+    # motor=llm con TODOS los casos de evidencia en el determinista (100% >
+    # 30%) → SystemExit ruidoso, no un informe silencioso.
+    pasada_llm_falla = [{"categoria": "filter_set", "ok": True,
+                         "engine": "deterministic", "mode": "evidence"}] * 10
+    monkeypatch.setattr(runner, "_probe_ollama", lambda: None)
+    monkeypatch.setattr(runner, "_run_pasada", lambda ids: _pasada(pasada_llm_falla))
+    with pytest.raises(SystemExit, match="GUARD"):
+        runner.run(motor="llm", tmp=tmp_path)
+    # --forzar es la salida explícita: la corrida completa devuelve informe.
+    informe = runner.run(motor="llm", forzar=True, tmp=tmp_path)
+    assert informe["motor"] == "llm"
+
+
+def test_run_aborta_si_en_determinista_responde_el_llm(monkeypatch, tmp_path):
+    # El backstop inverso: pasada «determinista» con engine=llm significa que
+    # LLM_OFF no alcanzó a la instancia real → la línea base mediría al modelo.
+    pasada_contaminada = [{"categoria": "filter_set", "ok": True,
+                           "engine": "llm", "mode": "evidence"}] * 3
+    monkeypatch.setattr(runner, "_run_pasada",
+                        lambda ids: _pasada(pasada_contaminada))
+    with pytest.raises(SystemExit, match="determinista"):
+        runner.run(motor="determinista", tmp=tmp_path)
+
+
+def test_run_pasa_con_los_guards_en_verde(monkeypatch, tmp_path):
+    # Camino feliz: la pasada determinista responde sin engine=llm (backstop
+    # en verde) y la pasada llm deja ≤30% de evidencia en el determinista
+    # (motor_guard en verde) → devuelve el informe sin abortar. El fake
+    # distingue las pasadas por ORDEN (los tests no dependen de la config
+    # real de la máquina ni de Ollama).
+    det = [{"categoria": "evidence_qa", "ok": True, "engine": "deterministic",
+            "mode": "evidence"}] * 10
+    llm = [{"categoria": "evidence_qa", "ok": True, "engine": "llm",
+            "mode": "evidence"}] * 7
+    llm += [{"categoria": "evidence_qa", "ok": True, "engine": "deterministic",
+             "mode": "evidence"}] * 3
+    orden = {"n": 0}
+
+    def _fake(ids):
+        orden["n"] += 1
+        return _pasada(det if orden["n"] == 1 else llm)
+
+    monkeypatch.setattr(runner, "_probe_ollama", lambda: None)
+    monkeypatch.setattr(runner, "_run_pasada", _fake)
+    informe = runner.run(motor="ambos", tmp=tmp_path)
+    assert isinstance(informe, list) and len(informe) == 2
+    assert [i["motor"] for i in informe] == ["determinista", "llm"]
+
+
 def test_fewshot_global_excluye_retrieval():
     """El denominador global few-shot debe excluir `retrieval` (nunca pasan por
     el LLM), usando el MISMO exclusor que la cobertura por categoría: si no,
@@ -274,53 +392,78 @@ def _instancias(nombre: str):
             if name == nombre or name == f"backend.{nombre}"]
 
 
-def _forzar_doble_carga(nombre: str):
-    """Carga también la forma `backend.<nombre>` para reproducir el entorno de
-    producción (`uvicorn backend.main:app`, raíz del proyecto en sys.path).
+@pytest.fixture
+def doble_carga():
+    """Carga la forma `backend.<nombre>` (entorno de `uvicorn backend.main:app`).
 
     La suite corre desde `backend/` con solo esa raíz en sys.path, así que sin
     este empujón solo existiría la instancia top-level y el test no probaría
     nada. Si el paquete no es importable se omite (el runner igual debe
     parchear lo que haya).
+
+    Limpia tras de sí (minor 11): quita de sys.path la raíz que agregó y
+    descarga de sys.modules los módulos que ESTE helper cargó — sin eso, el
+    estado de doble carga se filtra al resto de la suite y los tests quedan
+    orden-dependientes. Los módulos que ya existían no se tocan (no son suyos).
     """
+    import contextlib
     import importlib
     import sys
     from pathlib import Path
 
-    raiz = str(Path(__file__).resolve().parents[2])
-    if raiz not in sys.path:
-        sys.path.insert(0, raiz)
-    try:
-        importlib.import_module(f"backend.{nombre}")
-    except ImportError:
-        pass
+    estado = {"raiz": None, "nuevos": set()}
+
+    def _forzar(nombre: str) -> None:
+        raiz = str(Path(__file__).resolve().parents[2])
+        if raiz not in sys.path:
+            sys.path.insert(0, raiz)
+            estado["raiz"] = raiz
+        antes = set(sys.modules)
+        try:
+            importlib.import_module(f"backend.{nombre}")
+        except ImportError:
+            pass
+        estado["nuevos"] |= set(sys.modules) - antes
+
+    yield _forzar
+
+    for n in estado["nuevos"]:
+        sys.modules.pop(n, None)
+    if estado["raiz"] is not None:
+        with contextlib.suppress(ValueError):
+            sys.path.remove(estado["raiz"])
 
 
-def test_llm_off_alcanza_las_dos_instancias_de_ai_config():
+def test_llm_off_alcanza_las_dos_instancias_de_ai_config(doble_carga):
     # La app en producción corre como `uvicorn backend.main:app` (raíz del
     # proyecto en sys.path): allí `main.ai_config` es la instancia
     # `backend.ai_config`, NO la top-level. Parchear solo la top-level deja
     # el LLM encendido y la «línea base» publicaría puntuación del modelo.
     import ai_config
 
-    _forzar_doble_carga("ai_config")
+    doble_carga("ai_config")
     mods = _instancias("ai_config")
     if len(mods) < 2:
         pytest.skip("paquete backend no importable en este entorno")
+    # Lo que se exige es RESTAURACIÓN (el get original vuelto a poner), no
+    # leer ai_config.json real: «enabled is not False» pasaba trivialmente
+    # con la config real de la máquina y además se rompe en una máquina con
+    # enabled=false (minor 6). La snapshot es independiente del entorno.
+    antes = {mod: mod.get() for mod in mods}
     with runner.LLM_OFF():
         for mod in mods:
             assert mod.get()["enabled"] is False, f"{mod.__name__} quedó encendido"
     for mod in mods:
-        assert mod.get()["enabled"] is not False
+        assert mod.get() == antes[mod], f"{mod.__name__} no restauró su get()"
 
 
-def test_aislamiento_redirige_las_dos_instancias_de_feedback(tmp_path):
+def test_aislamiento_redirige_las_dos_instancias_de_feedback(tmp_path, doble_carga):
     # Mismo motivo que el test anterior: si solo se redirige la instancia
     # top-level, la corrida ESCRIBE en el feedback.json real del analista y
     # contamina su memoria few-shot (spec §4.1, la garantía nº 1).
     import feedback_store
 
-    _forzar_doble_carga("feedback_store")
+    doble_carga("feedback_store")
     mods = _instancias("feedback_store")
     if len(mods) < 2:
         pytest.skip("paquete backend no importable en este entorno")

@@ -387,9 +387,12 @@ def motor_guard(resultados: List[Dict[str, Any]], forzar: bool) -> bool:
     retriever solo, sin modelo). Contar los retrieval diluiría el umbral —
     con 6 de ellos el 30 % efectivo subía a 38 % sobre los 13 casos reales.
 
-    Un caso con excepción tampoco cuenta: no prueba nada sobre el motor, y si
-    todos los de evidencia revientan el guard no puede juzgar (build_report
-    los muestra aparte como `errores`).
+    Un caso con excepción tampoco cuenta: no prueba nada sobre el motor. Si
+    NINGÚN caso de evidencia puntuó, el guard no puede verificar que el
+    modelo se usó y devuelve False (fail-closed): una corrida «llm» con cero
+    uso real del LLM no se publica como del modelo sin --forzar (spec §7,
+    mejor fallar ruidosamente que publicar sin verificar). Los errores se
+    muestran aparte como `errores` en build_report.
     """
     if forzar:
         return True
@@ -397,7 +400,7 @@ def motor_guard(resultados: List[Dict[str, Any]], forzar: bool) -> bool:
                  if r.get("mode") == "evidence" and r.get("engine") != "retrieval"
                  and r.get("ok") is not None]
     if not elegibles:
-        return True
+        return False
     det = sum(1 for r in elegibles if r.get("engine") == "deterministic")
     return (100.0 * det / len(elegibles)) <= MOTOR_GUARD_PCT
 
@@ -464,6 +467,22 @@ def print_report(report: dict) -> None:
     g = report["grounding"]
     print(f"grounding: {g['rechazo_pct']:.1f}% de respuestas rechazadas por el guard · "
           f"{g['inventados']} ID(s) inventados (esperado 0)")
+    # Spec §8: «Motor — cuántos casos usaron LLM vs determinista». Sin esta
+    # línea, una corrida «llm» se leía sin ver cuánto respondió el modelo.
+    _orden_engine = ("llm", "deterministic", "retrieval")
+    _etiqueta = {"llm": "llm", "deterministic": "determinista",
+                 "retrieval": "retrieval"}
+    conteo: Dict[str, int] = {}
+    for r in report["casos"]:
+        eng = r.get("engine")
+        if eng:
+            conteo[eng] = conteo.get(eng, 0) + 1
+    if conteo:
+        partes = [f"{conteo[e]} {_etiqueta.get(e, e)}"
+                  for e in sorted(conteo,
+                                  key=lambda x: (_orden_engine.index(x)
+                                                 if x in _orden_engine else 99))]
+        print(f"motor: {' · '.join(partes)}")
     f = report["fewshot"]
     print(f"few-shot:  {f['cobertura_pct']:.1f}% de los casos con ≥1 ejemplo inyectado")
     for cat, info in (f.get("por_categoria") or {}).items():
@@ -484,7 +503,10 @@ def print_comparison(cmp: dict) -> None:
         print("  los deltas NO son directamente comparables.")
     for cat, d in cmp["por_categoria"].items():
         signo = "+" if d["delta"] >= 0 else ""
-        print(f"  {cat:<12} {d['antes']:>5.1f} → {d['despues']:>5.1f}  ({signo}{d['delta']:.1f})")
+        # Categoría ausente en la corrida actual: se marca «—» (la promesa
+        # documentada de compare_reports) en vez de fingir un 0 medido.
+        antes = f"{d['antes']:>5.1f}" if d.get("presente", True) else "    —"
+        print(f"  {cat:<12} {antes} → {d['despues']:>5.1f}  ({signo}{d['delta']:.1f})")
     signo = "+" if cmp["delta_global"] >= 0 else ""
     print(f"  {'GLOBAL':<12} delta {signo}{cmp['delta_global']:.1f}")
 
@@ -653,9 +675,10 @@ def run(motor: str = "llm", forzar: bool = False, tmp: Optional[Path] = None) ->
             )
         if p == "llm" and not motor_guard(parcial["resultados"], forzar):
             raise SystemExit(
-                f"GUARD: con motor=llm, el {MOTOR_GUARD_PCT:.0f}% máximo de casos de "
-                "evidencia quedó en el determinista — la puntuación mediría el "
-                "fallback, no el modelo. Revisa Ollama (--forzar para ignorar)."
+                f"GUARD: con motor=llm no se pudo verificar que el modelo se "
+                f"usó — más del {MOTOR_GUARD_PCT:.0f}% de los casos de evidencia "
+                "quedó en el determinista, o NINGUNO puntuó (corrida sin "
+                "elegibles). Revisa Ollama y los errores (--forzar para ignorar)."
             )
         return build_report(
             resultados=parcial["resultados"], grounding=parcial["grounding"],
