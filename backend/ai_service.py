@@ -1544,17 +1544,27 @@ def _qa_messages(
 
 async def _remote_answer(
     ctx: Dict[str, Any], history: Optional[List[Dict[str, Any]]] = None
-) -> Optional[str]:
-    """LLM para la respuesta del asistente. None si está apagado o falla."""
-    cfg = ai_config.get()
-    if not cfg["enabled"] or not cfg["api_url"] or not ctx["evidence"]:
-        return None
+) -> Tuple[Optional[str], Dict[str, Any]]:
+    """LLM para la respuesta del asistente: (texto o None, info de auditoría).
 
-    messages, _used = _qa_messages(ctx, history)   # el conteo lo expone Task 4
+    El dict informa `grounding_rechazado` (el guard descartó el texto porque
+    citaba Log_ID inexistentes — distinto de «el LLM ni siquiera se usó», que
+    es lo que antes se confundía en no-stream) y `rag_examples_used` (cuántos
+    ejemplos few-shot viajaron en el prompt). None solo si no hubo texto
+    utilizable.
+    """
+    cfg = ai_config.get()
+    messages, used = _qa_messages(ctx, history)
+    info: Dict[str, Any] = {"grounding_rechazado": False, "rag_examples_used": used}
+    if not cfg["enabled"] or not cfg["api_url"] or not ctx["evidence"]:
+        return None, info
+
     text = await ai_config.chat(messages, cfg=cfg)
     if not text:
-        return None
-    return text if _grounding_ok(text, ctx["evidence"]) else None
+        return None, info
+    if not _grounding_ok(text, ctx["evidence"]):
+        return None, {**info, "grounding_rechazado": True}
+    return text, info
 
 
 async def answer_question(
@@ -1584,13 +1594,13 @@ async def answer_question(
     # ni por filas recuperadas (rigor analítico: cero cifras generadas).
     aggregate = _aggregate_answer(ctx)
     if aggregate is not None:
-        return aggregate
+        return {**aggregate, "rag_examples_used": 0}
 
     fallback = _qa_fallback(ctx)
     if not ctx["evidence"]:
-        return fallback
+        return {**fallback, "rag_examples_used": 0}
 
-    remote = await _remote_answer(ctx, history)
+    remote, info = await _remote_answer(ctx, history)
     if remote:
         return {
             **fallback,
@@ -1598,8 +1608,16 @@ async def answer_question(
             "engine": "llm",
             "model": ai_config.get()["model"],
             "confidence": fallback["confidence"],
+            "rag_examples_used": info["rag_examples_used"],
         }
-    return fallback
+    # El modelo no se usó o su texto fue descartado: se entrega el determinista
+    # pero dejando constancia del rechazo del guard (auditoría; en stream ya
+    # existía el evento fallback con este warning, aquí estaba invisible).
+    warnings = list(fallback.get("warnings") or [])
+    if info["grounding_rechazado"] and "grounding_rechazado" not in warnings:
+        warnings.append("grounding_rechazado")
+    return {**fallback, "warnings": warnings,
+            "rag_examples_used": info["rag_examples_used"]}
 
 
 async def stream_question(
@@ -1630,10 +1648,21 @@ async def stream_question(
 
     aggregate = _aggregate_answer(ctx)
     if aggregate is not None:
-        yield {"type": "final", **aggregate}
+        yield {"type": "final", **aggregate, "rag_examples_used": 0}
         return
 
     fallback = _qa_fallback(ctx)
+
+    # El prompt se construye ANTES del meta: así el conteo de ejemplos
+    # few-shot viaja ya en el primer evento (la UI puede auditar cuánto
+    # criterio del analista se inyectó sin esperar al final).
+    used = 0
+    messages: Optional[List[Dict[str, str]]] = None
+    if ctx["evidence"]:
+        cfg_check = ai_config.get()
+        if cfg_check["enabled"] and cfg_check["api_url"]:
+            messages, used = _qa_messages(ctx, history)
+
     yield {
         "type": "meta",
         "evidence": ctx["evidence"],
@@ -1643,21 +1672,21 @@ async def stream_question(
         "warnings": fallback["warnings"],
         "mode": fallback["mode"],
         "dataset_rows": ctx["dataset_rows"],
+        "rag_examples_used": used,
     }
 
     if not ctx["evidence"]:
-        yield {"type": "final", **fallback}
+        yield {"type": "final", **fallback, "rag_examples_used": 0}
         return
 
     cfg = ai_config.get()
     if not cfg["enabled"] or not cfg["api_url"]:
-        yield {"type": "final", **fallback}
+        yield {"type": "final", **fallback, "rag_examples_used": used}
         return
 
     pieces: List[str] = []
     interrupted = False
     try:
-        messages, _used = _qa_messages(ctx, history)   # el conteo lo expone Task 4
         async for piece in ai_config.chat_stream(messages, cfg=cfg):
             pieces.append(piece)
             yield {"type": "token", "text": piece}
@@ -1681,12 +1710,14 @@ async def stream_question(
             "type": "fallback",
             **fallback,
             "warning": warning,
+            "rag_examples_used": used,
         }
         return
     if not _grounding_ok(text, ctx["evidence"]):
         # Un solo Log_ID inventado invalida TODO el texto transmitido:
         # se descarta y se muestra la respuesta determinista con aviso.
-        yield {"type": "fallback", **fallback, "warning": "grounding_rechazado"}
+        yield {"type": "fallback", **fallback, "warning": "grounding_rechazado",
+               "rag_examples_used": used}
         return
     yield {
         "type": "final",
@@ -1694,4 +1725,5 @@ async def stream_question(
         "answer": text,
         "engine": "llm",
         "model": cfg["model"],
+        "rag_examples_used": used,
     }

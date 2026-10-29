@@ -1,5 +1,10 @@
+import io
+
 import pandas as pd
+import pytest
+
 from main import analysis_store
+from tests.conftest import COLUMNAS, DATASET_12_FILAS, _subir_y_esperar
 
 
 def test_ingesta_enriquece_el_dataframe(client, analysis_id):
@@ -300,3 +305,106 @@ def test_analyses_store_vacio_devuelve_lista_vacia(client):
         assert r.json() == []
     finally:
         analysis_store.update(backup)
+
+
+# ---------------------------------------------------------------------------
+# Auditoria del RAG en no-stream: grounding_rechazado y rag_examples_used
+# (Task 4 del harness de evaluacion: el runner lee estos campos para medir
+# cuantas respuestas caen al determinista por rechazo del guard y cuantos
+# ejemplos few-shot viajan de verdad.)
+# ---------------------------------------------------------------------------
+_Q_DC01 = "¿Qué pasó en el host DC-01?"
+
+
+@pytest.fixture(scope="module")
+def analysis_evt(client):
+    """Análisis con Log_ID con forma «EVT-00001» (el dataset sintético usa
+    IDs numéricos: con ellos el guard no encuentra familia «EVT» que validar
+    y no hay nada que rechazar)."""
+    df = pd.DataFrame(
+        [(f"EVT-{n:05d}",) + tuple(fila[1:]) for n, fila in enumerate(DATASET_12_FILAS, 1)],
+        columns=COLUMNAS,
+    )
+    buffer = io.BytesIO()
+    df.to_excel(buffer, index=False, engine="openpyxl")
+    buffer.seek(0)
+    return _subir_y_esperar(client, "evt-ids.xlsx", buffer)
+
+
+@pytest.fixture(autouse=True)
+def _aislamiento_ask(tmp_path, monkeypatch):
+    """La memoria del analista y la config de IA jamás se tocan en tests.
+
+    - feedback_store: JSON temporal + caché invalidada (mismo patron que
+      test_feedback_store).
+    - ai_config: CONFIG_PATH en tmp (patron del fixture `ai` de
+      test_chat_stream) para no escribir backend/data/ai_config.json.
+    """
+    import feedback_store
+    from main import ai_config
+
+    monkeypatch.setattr(feedback_store, "FEEDBACK_PATH", tmp_path / "fb.json")
+    monkeypatch.setattr(feedback_store, "_cache", None)
+    monkeypatch.setattr(ai_config, "CONFIG_PATH", tmp_path / "ai_config.json")
+    yield
+    monkeypatch.setattr(feedback_store, "_cache", None)
+
+
+def _llm_activo(monkeypatch, respuesta):
+    """Activa el LLM (config aislada) con `chat` falso que devuelve `respuesta`."""
+    from main import ai_config
+
+    ai_config.update({"enabled": True})
+
+    async def fake_chat(messages, cfg=None):
+        return respuesta
+
+    monkeypatch.setattr(ai_config, "chat", fake_chat)
+
+
+def test_ask_no_stream_avisa_cuando_el_guard_rechaza(client, analysis_evt, monkeypatch):
+    """Respuesta con un Log_ID inventado → se descarta y se entrega el
+    determinista, con `grounding_rechazado` en warnings (antes invisible)."""
+    client.delete(f"/api/analysis/{analysis_evt}/chat")
+    _llm_activo(monkeypatch, "El host fue comprometido; revise EVT-99999 inmediatamente.")
+
+    res = client.post(f"/api/analysis/{analysis_evt}/ask", json={"question": _Q_DC01})
+    body = res.json()
+
+    assert res.status_code == 200
+    assert "grounding_rechazado" in body["warnings"]
+    assert body["engine"] == "deterministic"
+    # El guard entregó la respuesta determinista: el ID inventado NO aparece.
+    assert "EVT-99999" not in body["answer"]
+
+
+def test_ask_no_stream_expone_rag_examples_used(client, analysis_id, monkeypatch):
+    """Con criterio previo del analista, el bloque few-shot se inyecta y el
+    número de ejemplos queda expuesto en la respuesta (auditoría)."""
+    import feedback_store
+
+    feedback_store.add_correction(_Q_DC01, "Cita los EVT- recuperados y su host.")
+    _llm_activo(monkeypatch, "Los eventos recuperados de DC-01 muestran intentos de sesión.")
+
+    body = client.post(f"/api/analysis/{analysis_id}/ask", json={"question": _Q_DC01}).json()
+
+    assert body["rag_examples_used"] >= 1
+
+
+def test_ask_con_llm_ok_no_marca_rechazo(client, analysis_id, monkeypatch):
+    """Camino sano: engine llm, sin rechazo y sin ejemplos (memoria vacía)."""
+    _llm_activo(monkeypatch, "Los eventos recuperados muestran intentos fallidos de cuenta.")
+
+    body = client.post(f"/api/analysis/{analysis_id}/ask", json={"question": _Q_DC01}).json()
+
+    assert body["engine"] == "llm"
+    assert "grounding_rechazado" not in body["warnings"]
+    assert body["rag_examples_used"] == 0
+
+
+def test_ask_agregado_expone_rag_examples_cero(client, analysis_id):
+    """La rama aggregate no pasa por el modelo: el conteo es 0, explícito."""
+    body = client.post(f"/api/analysis/{analysis_id}/ask",
+                       json={"question": "¿Cuántos eventos hay en total?"}).json()
+    assert body["mode"] == "aggregate"
+    assert body["rag_examples_used"] == 0
