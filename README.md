@@ -371,8 +371,17 @@ registra visible y no contamina el score; el guard del motor aborta si, con
 `--motor llm`, más del 30 % de los casos quedaron en el determinista.
 Resultados por corrida en `backend/eval/runs/` (ignorado por git).
 
-Línea base medida (motor determinista): **26.1 % macro**; con `qwen2.5:3b`:
-**29.9 %** (Δ +3.8).
+Medida (muestra de 715 filas, `qwen2.5:3b`, temp 0.15): **determinista 38.5 %
+macro · LLM 32.8 %** (Δ −5.7). El modelo pierde contra la línea base en
+`filter_set` (−28.6) y `evidence_qa` (−33.3), y gana solo en `refusal` (+33.3):
+con qwen2.5:3b el motor determinista —anclado a la evidencia recuperada— es
+mejor número que el LLM. Corridas completas en `backend/eval/runs/`.
+
+> La comparación entre `--motor determinista` y `--motor llm` se sostiene
+> porque el aislamiento garantiza que ambas pasadas parten del mismo estado
+> (memoria del analista redirigida a un temporal, índice RAG reconstruido,
+> `ai_config` nunca escrita) y de la misma muestra (hash SHA-256 en el
+> informe). El guard del motor aborta si el LLM no se usó de verdad.
 
 ---
 
