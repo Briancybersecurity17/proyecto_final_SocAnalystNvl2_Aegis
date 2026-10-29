@@ -69,7 +69,12 @@ CASES: list[Case] = [
     Case("agg-http500", "aggregate", "¿Cuántas peticiones devolvieron error 500?",
          lambda df: int(df["Result"].astype(str).eq("500").sum()), unidades="peticiones"),
     # --- filter_set: verdad = conjunto de Log_ID del dataset -----------------
-    Case("fs-fail-ws018", "filter_set", "¿Qué eventos fallidos hay en WS-018?",
+    # Nota: las dos primeras llevan «muéstrame…/listar» a propósito. Sin ese
+    # marcador de petición de filas (ROW_REQUEST_MARKERS) el enrutador clasifica
+    # «fallidos/fallido» (RESULT_MARKERS) como agregación y el caso NUNCA llega
+    # al LLM: su hit@k sería False por construcción y caparía filter_set para
+    # siempre. Lo fija test_ningun_caso_no_agregado_enruta_a_agregacion.
+    Case("fs-fail-ws018", "filter_set", "Muéstrame los eventos fallidos en WS-018",
          lambda df: _ids(df, df["Result"].astype(str).eq("Failure")
                          & df["Hostname"].astype(str).eq("WS-018"))),
     Case("fs-tarea-4698", "filter_set", "¿Se creó alguna tarea programada?",
@@ -77,7 +82,7 @@ CASES: list[Case] = [
     Case("fs-svc-7045", "filter_set", "¿Se instaló algún servicio nuevo en APP-SRV01?",
          lambda df: _ids(df, df["Event_ID"].eq(7045)
                          & df["Hostname"].astype(str).eq("APP-SRV01"))),
-    Case("fs-admin-4625", "filter_set", "Intentos de logon fallido del usuario admin",
+    Case("fs-admin-4625", "filter_set", "Listar intentos de logon fallido del usuario admin",
          lambda df: _ids(df, df["Event_ID"].eq(4625)
                          & df["User"].astype(str).eq(r"CORP\admin"))),
     Case("fs-crit-externos", "filter_set", "Eventos críticos desde IPs externas",

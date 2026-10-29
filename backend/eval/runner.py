@@ -40,6 +40,33 @@ MOTOR_GUARD_PCT = 30.0
 # Aislamiento del estado real
 # ---------------------------------------------------------------------------
 @contextlib.contextmanager
+def _patched_modules(nombre: str, attr: str, valor: Any) -> Iterator[List[Any]]:
+    """Parchea `attr` en TODAS las instancias del módulo cargadas en el proceso.
+
+    El backend importa con el patrón dual `try: from backend import X except
+    ImportError: import X` (ai_service.py:42-47, main.py:61-71): si la raíz del
+    proyecto está en `sys.path` —como en `uvicorn backend.main:app`— conviven
+    `feedback_store` y `backend.feedback_store` como objetos DISTINTOS, y
+    `main`/`ai_service` usan la del paquete. Parchear solo la top-level
+    redirige un módulo que nadie lee: la corrida tocaría el feedback.json real
+    del analista y el LLM seguiría encendido en la pasada «determinista».
+    Devuelve las instancias parcheadas (para inspección en tests).
+    """
+    import sys
+
+    mods = [m for name, m in sys.modules.items()
+            if (name == nombre or name == f"backend.{nombre}") and m is not None]
+    originals = [(mod, getattr(mod, attr)) for mod in mods]
+    try:
+        for mod in mods:
+            setattr(mod, attr, valor(mod) if callable(valor) else valor)
+        yield mods
+    finally:
+        for mod, original in originals:
+            setattr(mod, attr, original)
+
+
+@contextlib.contextmanager
 def _isolated_store(tmp: Path) -> Iterator[None]:
     """Redirige el feedback del analista a un JSON temporal.
 
@@ -47,16 +74,18 @@ def _isolated_store(tmp: Path) -> Iterator[None]:
     sin limpiarla haría que la corrida leyera la memoria real del analista.
     `ai_config.json` NO se toca (el motor se conmuta parcheando `get`).
     """
-    import feedback_store
+    def _redirect(mod: Any) -> Path:
+        mod._cache = None                      # invalidar ANTES de redirigir
+        return tmp / "feedback.json"
 
-    original = feedback_store.FEEDBACK_PATH
-    feedback_store.FEEDBACK_PATH = tmp / "feedback.json"
-    feedback_store._cache = None
-    try:
-        yield
-    finally:
-        feedback_store.FEEDBACK_PATH = original
-        feedback_store._cache = None
+    with _patched_modules("feedback_store", "FEEDBACK_PATH", _redirect) as mods:
+        for mod in mods:
+            mod._cache = None
+        try:
+            yield
+        finally:
+            for mod in mods:
+                mod._cache = None
 
 
 @contextlib.contextmanager
@@ -65,16 +94,28 @@ def LLM_OFF() -> Iterator[None]:
 
     `answer_question` decide el motor leyendo `ai_config.get()`: envolviendo
     el original con `enabled: False` la rama remota ni se intenta y toda la
-    respuesta sale del determinista — sin escribir ai_config.json.
+    respuesta sale del determinista — sin escribir ai_config.json. El wrapper
+    se construye POR INSTANCIA desde su propio `get` original, porque las dos
+    cargas del módulo pueden tener estado independiente.
     """
-    import ai_config
+    originals: Dict[Any, Any] = {}
 
-    original_get = ai_config.get
-    ai_config.get = lambda: {**original_get(), "enabled": False}
-    try:
-        yield
-    finally:
-        ai_config.get = original_get
+    def _wrap(mod: Any):
+        originals[mod] = mod.get
+        original_get = mod.get
+
+        def _off():
+            return {**original_get(), "enabled": False}
+
+        return _off
+
+    with _patched_modules("ai_config", "get", _wrap) as mods:
+        assert len(originals) == len(mods)
+        try:
+            yield
+        finally:
+            for mod, original_get in originals.items():
+                mod.get = original_get
 
 
 def _wait_for_index(ready: Callable[[], bool], timeout: float = 120.0,
@@ -145,7 +186,8 @@ def _asegurar_indice(analysis_id: str) -> None:
 # ---------------------------------------------------------------------------
 def build_report(resultados: List[Dict[str, Any]], grounding: Dict[str, Any],
                  fewshot: Dict[str, Any], motor: str, hash_muestra: str,
-                 modelo: str, num_ctx: int, temperatura: float) -> Dict[str, Any]:
+                 modelo: str, num_ctx: int, temperatura: float,
+                 rutados_a_agregacion: Optional[List[str]] = None) -> Dict[str, Any]:
     """Informe a partir de los resultados por caso (media macro por categoría).
 
     Un caso con `ok: None` (excepción) se cuenta en `errores` y NO entra al
@@ -170,6 +212,7 @@ def build_report(resultados: List[Dict[str, Any]], grounding: Dict[str, Any],
         "errores": errores,
         "grounding": grounding,
         "fewshot": fewshot,
+        "rutados_a_agregacion": rutados_a_agregacion or [],
         "motor": motor,
         "hash_muestra": hash_muestra,
         "modelo": modelo,
@@ -210,6 +253,21 @@ def motor_guard(resultados: List[Dict[str, Any]], forzar: bool) -> bool:
     return (100.0 * det / len(evidencia)) <= MOTOR_GUARD_PCT
 
 
+def determinista_guard(resultados: List[Dict[str, Any]]) -> bool:
+    """Backstop de la pasada «determinista»: ¿algún caso respondió con el LLM?
+
+    Especular (motor_guard) comprueba que el modelo SÍ se usó; esta función
+    comprueba lo contrario: que el LLM NO se usó cuando se suponía apagado.
+    Un `engine == "llm"` aquí significa que el parche `LLM_OFF` no alcanzó a la
+    instancia que la app realmente usa —el patrón dual de import del backend
+    puede dejar dos cargas del módulo— y la «línea base» estaría midiendo al
+    modelo sin que nada lo señalara (spec §7: fallar ruidosamente).
+    """
+    no_agregados = [r for r in resultados
+                    if r.get("ok") is not None and r.get("mode") != "aggregate"]
+    return not any(r.get("engine") == "llm" for r in no_agregados)
+
+
 # ---------------------------------------------------------------------------
 # Persistencia e impresión
 # ---------------------------------------------------------------------------
@@ -231,6 +289,12 @@ def print_report(report: dict) -> None:
     print(f"| {'GLOBAL (macro)':<12} | {'':>5} | {'':>8} | {report['global']:>4.1f} |")
     if report["errores"]:
         print(f"! {report['errores']} caso(s) con excepción (ver detalle en el JSON)")
+    rutados = report.get("rutados_a_agregacion") or []
+    if rutados:
+        print(f"! {len(rutados)} caso(s) NO agregados terminaron en la rama de "
+              "agregación (nunca llegaron al LLM):")
+        print(f"  {', '.join(rutados)} — reformúlalos pidiendo filas "
+              "(«muéstrame…») para que vayan al modelo")
     g = report["grounding"]
     print(f"grounding: {g['rechazo_pct']:.1f}% de respuestas rechazadas por el guard · "
           f"{g['inventados']} ID(s) inventados (esperado 0)")
@@ -345,6 +409,12 @@ def _run_pasada(dataset_ids: set) -> Dict[str, Any]:
     con_rechazo = sum(1 for r in puntuados if r.get("grounding_rechazado"))
     no_agregados = [r for r in puntuados if r.get("mode") != "aggregate"]
     con_ejemplos = sum(1 for r in no_agregados if (r.get("rag_examples_used") or 0) > 0)
+    # Señal de diagnóstico: un caso NO agregado que terminó en la rama de
+    # agregación nunca llegó al LLM (su hit@k es False por construcción) y su
+    # puntuación no mide al modelo, sino al enrutador (spec §9: visible).
+    rutados_a_agregacion = [r["id"] for r in puntuados
+                            if r.get("categoria") != "aggregate"
+                            and r.get("mode") == "aggregate"]
     grounding = {
         "rechazo_pct": round(100.0 * con_rechazo / len(puntuados), 1) if puntuados else 0.0,
         "inventados": sum(r.get("inventados") or 0 for r in puntuados),
@@ -357,7 +427,8 @@ def _run_pasada(dataset_ids: set) -> Dict[str, Any]:
         "fallos_con_1mas": sum(1 for r in no_agregados
                                if not r.get("ok") and (r.get("rag_examples_used") or 0) > 0),
     }
-    return {"resultados": resultados, "grounding": grounding, "fewshot": fewshot}
+    return {"resultados": resultados, "grounding": grounding, "fewshot": fewshot,
+            "rutados_a_agregacion": rutados_a_agregacion}
 
 
 def _probe_ollama() -> None:
@@ -398,6 +469,12 @@ def run(motor: str = "llm", forzar: bool = False, tmp: Optional[Path] = None) ->
                     parcial = _run_pasada(dataset_ids)
             else:
                 parcial = _run_pasada(dataset_ids)
+        if p == "determinista" and not determinista_guard(parcial["resultados"]):
+            raise SystemExit(
+                "GUARD: con motor=determinista algún caso respondió con engine "
+                "«llm» — el parche no alcanzó a la instancia que la app usa y la "
+                "línea base mediría al modelo. Revisa las instancias cargadas."
+            )
         if p == "llm" and not motor_guard(parcial["resultados"], forzar):
             raise SystemExit(
                 f"GUARD: con motor=llm, el {MOTOR_GUARD_PCT:.0f}% máximo de casos de "
@@ -409,6 +486,7 @@ def run(motor: str = "llm", forzar: bool = False, tmp: Optional[Path] = None) ->
             fewshot=parcial["fewshot"], motor=p, hash_muestra=hash_muestra,
             modelo=cfg["model"], num_ctx=cfg["num_ctx"],
             temperatura=cfg["temperature"],
+            rutados_a_agregacion=parcial["rutados_a_agregacion"],
         )
 
     if tmp is not None:

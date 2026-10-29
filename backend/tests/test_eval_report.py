@@ -49,6 +49,35 @@ def test_motor_guard_con_llm_en_uso_pasa():
     assert motor_guard(resultados, forzar=False) is True    # 30 % no supera 30 %
 
 
+def test_motor_guard_excluye_retrieval_puro_del_denominador():
+    # Los 6 casos `retrieval` responden con engine="retrieval" por diseño (sin
+    # LLM): contarlos en el denominador diluye el 30 % — con 6 de ellos el
+    # umbral efectivo subía a 38 % sobre los 13 casos de evidencia reales.
+    # Aquí 4 de 7 elegibles quedaron en el determinista (57 %) → debe fallar.
+    evidencia_llm = [{"categoria": "filter_set", "engine": "llm", "mode": "evidence"}] * 3
+    fallback = [{"categoria": "filter_set", "engine": "deterministic", "mode": "evidence"}] * 4
+    retrieval = [{"categoria": "retrieval", "engine": "retrieval", "mode": "evidence"}] * 6
+    assert motor_guard(evidencia_llm + fallback + retrieval, forzar=False) is False
+
+
+def test_backstop_determinista_detecta_llm_encendido():
+    # Si el parche de LLM_OFF no alcanza a la instancia que la app realmente
+    # usa (C1), la pasada determinista responde con engine="llm": sin este
+    # backstop esa corrida se publicaría como «línea base» sin que nada
+    # fallara. Aquí 2 de 3 no-agregados quedaron en el LLM → debe abortar.
+    resultados = [{"categoria": "filter_set", "ok": True,
+                   "engine": "llm", "mode": "evidence"}] * 2
+    resultados += [{"categoria": "filter_set", "ok": False,
+                    "engine": "deterministic", "mode": "evidence"}]
+    assert runner.determinista_guard(resultados) is False
+    assert runner.determinista_guard([{"categoria": "filter_set", "ok": True,
+                                       "engine": "deterministic",
+                                       "mode": "evidence"}]) is True
+    # Los casos con excepción no prueban nada sobre el motor: se ignoran.
+    assert runner.determinista_guard([{"categoria": "filter_set", "ok": None,
+                                       "engine": None, "mode": None}]) is True
+
+
 def test_llm_off_restaura_la_config_al_salir():
     import ai_config
 
@@ -56,6 +85,76 @@ def test_llm_off_restaura_la_config_al_salir():
     with runner.LLM_OFF():
         assert ai_config.get()["enabled"] is False
     assert ai_config.get() == antes
+
+
+def _instancias(nombre: str):
+    """Todas las instancias del módulo cargadas en el proceso (sueltas y
+    bajo el paquete `backend`): el backend importa con try/except dual
+    (ai_service.py:42-47, main.py:61-71), así que pueden convivir dos."""
+    import sys
+
+    return [m for name, m in sys.modules.items()
+            if name == nombre or name == f"backend.{nombre}"]
+
+
+def _forzar_doble_carga(nombre: str):
+    """Carga también la forma `backend.<nombre>` para reproducir el entorno de
+    producción (`uvicorn backend.main:app`, raíz del proyecto en sys.path).
+
+    La suite corre desde `backend/` con solo esa raíz en sys.path, así que sin
+    este empujón solo existiría la instancia top-level y el test no probaría
+    nada. Si el paquete no es importable se omite (el runner igual debe
+    parchear lo que haya).
+    """
+    import importlib
+    import sys
+    from pathlib import Path
+
+    raiz = str(Path(__file__).resolve().parents[2])
+    if raiz not in sys.path:
+        sys.path.insert(0, raiz)
+    try:
+        importlib.import_module(f"backend.{nombre}")
+    except ImportError:
+        pass
+
+
+def test_llm_off_alcanza_las_dos_instancias_de_ai_config():
+    # La app en producción corre como `uvicorn backend.main:app` (raíz del
+    # proyecto en sys.path): allí `main.ai_config` es la instancia
+    # `backend.ai_config`, NO la top-level. Parchear solo la top-level deja
+    # el LLM encendido y la «línea base» publicaría puntuación del modelo.
+    import ai_config
+
+    _forzar_doble_carga("ai_config")
+    mods = _instancias("ai_config")
+    if len(mods) < 2:
+        pytest.skip("paquete backend no importable en este entorno")
+    with runner.LLM_OFF():
+        for mod in mods:
+            assert mod.get()["enabled"] is False, f"{mod.__name__} quedó encendido"
+    for mod in mods:
+        assert mod.get()["enabled"] is not False
+
+
+def test_aislamiento_redirige_las_dos_instancias_de_feedback(tmp_path):
+    # Mismo motivo que el test anterior: si solo se redirige la instancia
+    # top-level, la corrida ESCRIBE en el feedback.json real del analista y
+    # contamina su memoria few-shot (spec §4.1, la garantía nº 1).
+    import feedback_store
+
+    _forzar_doble_carga("feedback_store")
+    mods = _instancias("feedback_store")
+    if len(mods) < 2:
+        pytest.skip("paquete backend no importable en este entorno")
+    reales = {mod: mod.FEEDBACK_PATH for mod in mods}
+    with runner._isolated_store(tmp_path):
+        for mod in mods:
+            assert mod.FEEDBACK_PATH == tmp_path / "feedback.json", \
+                f"{mod.__name__} sigue apuntando al JSON real"
+            assert mod._load() == []
+    for mod, real in reales.items():
+        assert mod.FEEDBACK_PATH == real
 
 
 def test_aislamiento_no_lee_ni_escribe_la_memoria_real(tmp_path):

@@ -65,6 +65,26 @@ def test_los_agregados_son_preguntas_de_agregacion():
             assert is_aggregate_question(c.question), f"{c.id} no enruta al determinista"
 
 
+def test_ningun_caso_no_agregado_enruta_a_agregacion():
+    """Dirección negativa del ruteo: una consulta no-agregada que el enrutador
+    clasifica como agregación NUNCA llega al LLM — `_aggregate_answer` devuelve
+    un conteo sin Log_ID citados, y con `cited=[]` y un esperado estrecho no
+    vacío, hit@k es False SIEMPRE, en ambas pasadas y con cualquier motor.
+
+    Dos casos cayeron así («¿Qué eventos fallidos hay en WS-018?» e «Intentos
+    de logon fallido del usuario admin»: «fallo»/«fallido» están en
+    RESULT_MARKERS) y caparon filter_set al 71.4 % para siempre, deprimiendo
+    el macro global sin que nada lo señalara. Se reformularon pidiendo FILAS
+    (ROW_REQUEST_MARKERS), que el enrutador devuelve a la recuperación normal.
+    """
+    for c in CASES:
+        if c.categoria != "aggregate":
+            assert not is_aggregate_question(c.question), (
+                f"{c.id} ({c.categoria}) enruta a agregación: jamás llega al "
+                "LLM y su hit@k es False por construcción"
+            )
+
+
 def test_ids_de_caso_unicos():
     assert len({c.id for c in CASES}) == len(CASES) == 24
 
