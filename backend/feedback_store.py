@@ -382,6 +382,12 @@ def prompt_block(question: str, limit: int = MAX_EXAMPLES) -> str:
     Vacío si no hay ejemplos: la app funciona igual que antes (cero regresión).
     Los ejemplos van etiquetados como criterio del analista, separados de la
     evidencia, para que el modelo no los confunda con un hallazgo.
+
+    Los DESCARTADOS y los que FUNCIONARON van en secciones propias (negativos
+    primero): agrupados son más legibles para el modelo que una lista
+    intercalada, y reflejan la distinción que ya hace el almacén. Cada ejemplo
+    empieza por «- Consulta «» — ai_service._feedback_note cuenta ese prefijo
+    para informar de cuántos ejemplos se inyectaron (rag_examples_used).
     """
     examples = similar(question, limit)
     if not examples:
@@ -391,13 +397,18 @@ def prompt_block(question: str, limit: int = MAX_EXAMPLES) -> str:
         "CRITERIO DEL ANALISTA SOBRE CONSULTAS SIMILARES (material de referencia "
         "para redactar, NO un hallazgo de los registros):",
     ]
-    for ex in examples:
-        if ex["kind"] == "negative":
+    negatives = [ex for ex in examples if ex["kind"] == "negative"]
+    positives = [ex for ex in examples if ex["kind"] == "positive"]
+    if negatives:
+        lines.append("— Lo que el analista DESCARTÓ (no repitas este criterio):")
+        for ex in negatives:
             lines.append(
                 f"- Consulta «{ex['question']}» → el analista DESCARTÓ esta "
                 f"respuesta y la corrigió así: {ex['answer']}"
             )
-        else:
+    if positives:
+        lines.append("— Lo que al analista LE FUNCIONÓ:")
+        for ex in positives:
             lines.append(
                 f"- Consulta «{ex['question']}» → respuesta que funcionó en esta "
                 f"conversación: {ex['answer']}"

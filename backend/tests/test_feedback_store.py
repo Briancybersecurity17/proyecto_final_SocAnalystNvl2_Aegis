@@ -159,6 +159,19 @@ def test_prompt_block_incluye_correccion_y_etiqueta_criterio():
     assert "NO un hallazgo" in block
 
 
+def test_prompt_block_separa_bloques_negativos_y_positivos():
+    feedback_store.add_correction(Q, "Respuesta descartada y corregida.")
+    feedback_store.remember_implicit(Q + " ¿y los hosts?", "Respuesta que funcionó.",
+                                     next_question=Q + " ¿y por qué?")
+    block = feedback_store.prompt_block(Q, limit=2)
+
+    assert "CRITERIO DEL ANALISTA" in block          # cabecera se mantiene
+    assert "DESCARTÓ" in block and "NO un hallazgo" in block
+    idx_descartado = block.index("DESCARTÓ")
+    idx_funciono = block.index("LE FUNCIONÓ")
+    assert idx_descartado < idx_funciono             # bloque negativo primero
+
+
 def test_los_negativos_van_primero():
     feedback_store.remember_implicit(Q, A, next_question=Q + " ¿y por qué?")
     feedback_store.add_correction(Q, "Versión corregida por el analista.")
