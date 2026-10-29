@@ -29,7 +29,7 @@ import logging
 import re
 import unicodedata
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("soc.ai")
 
@@ -1372,7 +1372,7 @@ FEEDBACK_BLOCK_OVERHEAD_CHARS = 160
 FEEDBACK_PER_EXAMPLE_CHARS = 140
 
 
-def _feedback_note(question: str, base_chars: int, history_chars: int) -> str:
+def _feedback_note(question: str, base_chars: int, history_chars: int) -> Tuple[str, int]:
     """Bloque few-shot con el criterio del analista sobre consultas afines.
 
     **Presupuestado contra `num_ctx`.** El prompt NO debe pasar de la ventana:
@@ -1385,6 +1385,11 @@ def _feedback_note(question: str, base_chars: int, history_chars: int) -> str:
     Vacío si no hay ejemplos aprendidos todavía: la app responde igual que
     antes (cero regresión). Es criterio de redacción, nunca un hallazgo, y el
     propio bloque lo advierte al modelo.
+
+    Devuelve `(bloque, nº de ejemplos inyectados)`: el conteo lo informa la
+    respuesta como `rag_examples_used` (auditoría del harness de evaluación).
+    Se cuenta sobre el propio bloque («- Consulta «», contrato de
+    `feedback_store.prompt_block`) para que el número nunca mienta.
     """
     try:
         num_ctx = int(ai_config.get()["num_ctx"])
@@ -1393,12 +1398,14 @@ def _feedback_note(question: str, base_chars: int, history_chars: int) -> str:
         budget = free_chars - FEEDBACK_BLOCK_OVERHEAD_CHARS
         per_example = feedback_store.EXAMPLE_CHARS + FEEDBACK_PER_EXAMPLE_CHARS
         if budget < per_example:
-            return ""   # no cabe ni un ejemplo: se omite el few-shot entero
+            return "", 0   # no cabe ni un ejemplo: se omite el few-shot entero
         limit = min(feedback_store.MAX_EXAMPLES, int(budget // per_example))
         block = feedback_store.prompt_block(question, limit)
     except Exception:  # noqa: BLE001 – el few-shot nunca tumba la consulta
-        return ""
-    return f"{block}\n\n" if block else ""
+        return "", 0
+    if not block:
+        return "", 0
+    return f"{block}\n\n", block.count("- Consulta «")
 
 
 def _grounding_ok(answer: str, evidence: List[Dict[str, Any]]) -> bool:
@@ -1486,8 +1493,12 @@ def _ref_note(reference: Optional[Dict[str, Any]]) -> str:
 
 def _qa_messages(
     ctx: Dict[str, Any], history: Optional[List[Dict[str, Any]]] = None
-) -> List[Dict[str, str]]:
+) -> Tuple[List[Dict[str, str]], int]:
     """Mensajes del QA: system + turnos previos (memoria) + consulta actual.
+
+    Devuelve `(mensajes, nº de ejemplos few-shot inyectados)`: el conteo lo
+    informa la respuesta como `rag_examples_used` (auditoría para el harness
+    de evaluación); la posición del bloque en el prompt no cambia.
 
     La memoria multi-turno permite resolver referencias como «esos 33
     eventos» («¿y esos mismos con IP externa?»): los últimos
@@ -1526,9 +1537,9 @@ def _qa_messages(
     # Criterio del analista sobre consultas afines: va ANTES de la evidencia
     # (para que el modelo lo use al redactar) pero presupuestado contra
     # num_ctx: los ejemplos nunca pueden ser lo que desborde la ventana.
-    note = _feedback_note(ctx.get("question", ""), len(head) + len(tail), history_chars)
+    note, used = _feedback_note(ctx.get("question", ""), len(head) + len(tail), history_chars)
     messages.append({"role": "user", "content": head + note + tail})
-    return messages
+    return messages, used
 
 
 async def _remote_answer(
@@ -1539,7 +1550,8 @@ async def _remote_answer(
     if not cfg["enabled"] or not cfg["api_url"] or not ctx["evidence"]:
         return None
 
-    text = await ai_config.chat(_qa_messages(ctx, history), cfg=cfg)
+    messages, _used = _qa_messages(ctx, history)   # el conteo lo expone Task 4
+    text = await ai_config.chat(messages, cfg=cfg)
     if not text:
         return None
     return text if _grounding_ok(text, ctx["evidence"]) else None
@@ -1645,7 +1657,8 @@ async def stream_question(
     pieces: List[str] = []
     interrupted = False
     try:
-        async for piece in ai_config.chat_stream(_qa_messages(ctx, history), cfg=cfg):
+        messages, _used = _qa_messages(ctx, history)   # el conteo lo expone Task 4
+        async for piece in ai_config.chat_stream(messages, cfg=cfg):
             pieces.append(piece)
             yield {"type": "token", "text": piece}
     except Exception as exc:  # noqa: BLE001 – red/caída del LLM a mitad

@@ -36,7 +36,7 @@ async def main() -> None:
         {"event_id": h.get("event_id"), "level": h.get("level")} for h in hits
     ])
     ctx = ai_service.build_qa_context(question, hits, summary={}, reference=reference)
-    messages = ai_service._qa_messages(ctx, history=None)
+    messages, used = ai_service._qa_messages(ctx, history=None)
 
     prompt_chars = sum(len(m["content"]) for m in messages)
     print(f"pregunta: {question}")

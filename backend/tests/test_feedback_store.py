@@ -244,15 +244,33 @@ def test_fewshot_cabe_en_la_ventana_por_defecto(monkeypatch):
         feedback_store.add_correction(f"¿Qué hosts concentran inicios fallidos en SRV-DC0{i}?",
                                       f"SRV-DC0{i} concentra 12 intentos fallidos.")
 
-    note = _feedback_note("¿Qué hosts concentran inicios fallidos?", 3900, 1400)
+    block, n = _feedback_note("¿Qué hosts concentran inicios fallidos?", 3900, 1400)
 
-    assert note != ""
-    assert "CRITERIO DEL ANALISTA" in note
+    assert block != ""
+    assert "CRITERIO DEL ANALISTA" in block
+    assert n >= 1
 
 
-def test_fewshot_cero_ejemplos_si_la_memoria_lleno_la_ventana(monkeypatch):
+def test_feedback_note_cuenta_los_ejemplos_inyectados(monkeypatch):
+    """rag_examples_used depende de este conteo (Task 4): con ventana holgada
+    y corrección previa, el bloque existe y cuenta los ejemplos que trae."""
+    from ai_service import _feedback_note
+
+    _stub_num_ctx(monkeypatch, 4096)
+    feedback_store.add_correction("¿Qué hosts concentran inicios fallidos?",
+                                  "Cita los hosts con más fallos y sus IPs.")
+
+    block, n = _feedback_note("¿Qué hosts concentran inicios fallidos?", 1200, 300)
+
+    assert n >= 1
+    assert "- Consulta «" in block
+    assert n == block.count("- Consulta «")   # el conteo es la verdad del bloque
+
+
+def test_feedback_note_con_ventana_llena_da_cero_ejemplos(monkeypatch):
     """Si turnos + evidencia ya ocupan num_ctx, inyectar ejemplos haría que
-    Ollama recortara el system prompt (reglas de no inventar Log_ID)."""
+    Ollama recortara el system prompt (reglas de no inventar Log_ID): la
+    rama de presupuesto insuficiente devuelve (bloque vacío, 0)."""
     from ai_service import _feedback_note
 
     _stub_num_ctx(monkeypatch, 2048)   # ventana vieja: no alcanza para history+fewshot
@@ -261,9 +279,9 @@ def test_fewshot_cero_ejemplos_si_la_memoria_lleno_la_ventana(monkeypatch):
                                       f"SRV-DC0{i} concentra 12 intentos fallidos.")
 
     # 4 turnos + evidencia: prompt real medido a 2253 tok con num_ctx=2048.
-    note = _feedback_note("¿Qué hosts concentran inicios fallidos?", 3900, 1400)
+    block, n = _feedback_note("¿Qué hosts concentran inicios fallidos?", 3900, 1400)
 
-    assert note == ""
+    assert (block, n) == ("", 0)
 
 
 def test_fewshot_sin_ejemplos_es_vacio(monkeypatch):
@@ -271,7 +289,7 @@ def test_fewshot_sin_ejemplos_es_vacio(monkeypatch):
 
     _stub_num_ctx(monkeypatch, 4096)
 
-    assert _feedback_note("¿Qué hosts concentran inicios fallidos?", 3900, 1400) == ""
+    assert _feedback_note("¿Qué hosts concentran inicios fallidos?", 3900, 1400) == ("", 0)
 
 
 def test_qa_messages_metel_el_bloque_y_no_le_pasa_de_num_ctx(monkeypatch):
@@ -306,9 +324,10 @@ def test_qa_messages_metel_el_bloque_y_no_le_pasa_de_num_ctx(monkeypatch):
     ctx = build_qa_context("¿Qué hosts concentran inicios de sesión fallidos?",
                            hits, summary={"rows": 715})
 
-    messages = _qa_messages(ctx, history)
+    messages, used = _qa_messages(ctx, history)
     prompt_chars = sum(len(m["content"]) for m in messages)
 
     # ~2,5 chars/tok medido: el prompt no debe superar num_ctx por mucho margen.
     assert prompt_chars / 2.5 <= 4096
     assert "CRITERIO DEL ANALISTA" in messages[-1]["content"]
+    assert used >= 1
