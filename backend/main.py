@@ -135,13 +135,25 @@ EXPECTED_COLUMNS = [
 # módulo NEUTRAL (severity.py) sin FastAPI ni pandas, para que eval/cases.py
 # calcule la verdad sin arrastrar la app completa (spec §3). Re-exportados
 # aquí: la verdad del eval y la clasificación del producto son el MISMO código.
-from severity import (
-    LEVEL_LABELS,
-    LEVEL_ORDER,
-    SEVERITY_KEYWORDS,
-    SEVERITY_TO_LEVEL,
-    normalize_level,
-)
+# Patrón dual como el resto del repo (main.py:95-108): con `uvicorn
+# backend.main:app` desde la raíz, cwd está en sys.path pero `severity.py`
+# vive en backend/, así que el import absoluto rompería el arranque.
+try:
+    from backend.severity import (
+        LEVEL_LABELS,
+        LEVEL_ORDER,
+        SEVERITY_KEYWORDS,
+        SEVERITY_TO_LEVEL,
+        normalize_level,
+    )
+except ImportError:  # pragma: no cover
+    from severity import (
+        LEVEL_LABELS,
+        LEVEL_ORDER,
+        SEVERITY_KEYWORDS,
+        SEVERITY_TO_LEVEL,
+        normalize_level,
+    )
 
 # Windows Security event IDs – explanation grounded in the dataset's own
 # Event_Description column (no invented findings).

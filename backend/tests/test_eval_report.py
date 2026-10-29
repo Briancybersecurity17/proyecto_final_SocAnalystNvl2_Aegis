@@ -163,6 +163,54 @@ def test_build_report_calcula_latencia_y_cobertura_por_categoria():
         "filter_set": {"casos": 2, "con_ejemplos": 1, "cobertura_pct": 50.0}}
 
 
+def test_determinista_guard_detecta_rechazo_de_grounding():
+    """Falso negativo del backstop: si el parche no alcanza a la instancia que
+    la app usa, el LLM corre y su respuesta puede ser RECHAZADA por el guard
+    de grounding → engine vuelve "deterministic" (spec §5.3) y el guard pasaba,
+    publicando la «línea base» midiendo al modelo. Con qwen2.5:3b ese escenario
+    es el probable, no el residual. Una pasada determinista JAMÁS puede producir
+    grounding_rechazado (con el LLM apagado, _remote_answer sale antes de chat).
+    """
+    con_llm_encendido = [{"categoria": "filter_set", "ok": True,
+                          "engine": "deterministic", "mode": "evidence",
+                          "grounding_rechazado": True}]
+    assert runner.determinista_guard(con_llm_encendido) is False
+    # Una pasada sana (sin rechazos) sigue pasando.
+    sano = [{"categoria": "filter_set", "ok": True, "engine": "deterministic",
+             "mode": "evidence", "grounding_rechazado": False}]
+    assert runner.determinista_guard(sano) is True
+
+
+def test_fewshot_global_excluye_retrieval():
+    """El denominador global few-shot debe excluir `retrieval` (nunca pasan por
+    el LLM), usando el MISMO exclusor que la cobertura por categoría: si no,
+    `fallos_con_0` cuenta fallos que no pudieron llevar criterio y el % global
+    no reconcilia con las líneas por categoría de debajo.
+
+    Se ejercita _elegibles_fewshot (el exclusor compartido) porque es donde
+    vive el criterio; `_run_pasada` y `_cobertura_por_categoria` lo consumen.
+    """
+    from eval.runner import _elegibles_fewshot
+
+    resultados = [
+        {"categoria": "filter_set", "ok": True, "mode": "evidence",
+         "rag_examples_used": 2},
+        {"categoria": "filter_set", "ok": False, "mode": "evidence",
+         "rag_examples_used": 0},
+        # retrieval: jamás lleva ejemplos y falla → NO debe entrar al cubo 0.
+        {"categoria": "retrieval", "ok": False, "mode": "evidence",
+         "rag_examples_used": 0},
+        # agregado y excepción: tampoco.
+        {"categoria": "aggregate", "ok": True, "mode": "aggregate",
+         "rag_examples_used": 0},
+        {"categoria": "evidence_qa", "ok": None, "mode": None},
+    ]
+    elegibles = _elegibles_fewshot(resultados)
+    assert [r["categoria"] for r in elegibles] == ["filter_set", "filter_set"]
+    assert sum(1 for r in elegibles if not r["ok"]) == 1   # fallos_con_0 == 1
+    assert sum(1 for r in elegibles if (r.get("rag_examples_used") or 0) > 0) == 1
+
+
 def test_score_case_agregado_exige_el_numero_correcto():
     c = _caso("aggregate", unidades="eventos")
     assert runner._score_case(c, 97, {"answer": "Hay 97 eventos críticos."}, []) is True

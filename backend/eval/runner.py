@@ -51,8 +51,23 @@ def _patched_modules(nombre: str, attr: str, valor: Any) -> Iterator[List[Any]]:
     redirige un módulo que nadie lee: la corrida tocaría el feedback.json real
     del analista y el LLM seguiría encendido en la pasada «determinista».
     Devuelve las instancias parcheadas (para inspección en tests).
+
+    Importante: se ASEGURA la carga ANTES de escanear. En el proceso canónico
+    del CLI la entrada a `_isolated_store` ocurre antes de que `main` se
+    importe (eso pasa dentro de `_run_pasada`); con un escaneo pasivo, ese
+    import tardío crearia una instancia nueva que ignora la redirección y la
+    corrida leería el feedback.json real (regresión medida — ver
+    test_eval_isolation_fresh.py). Al cargar primero, el import tardío de
+    `main` reutiliza el módulo ya parcheado de sys.modules.
     """
+    import importlib
     import sys
+
+    for name in (nombre, f"backend.{nombre}"):
+        try:
+            importlib.import_module(name)
+        except ImportError:
+            pass
 
     mods = [m for name, m in sys.modules.items()
             if (name == nombre or name == f"backend.{nombre}") and m is not None]
@@ -226,16 +241,14 @@ def build_report(resultados: List[Dict[str, Any]], grounding: Dict[str, Any],
 def _cobertura_por_categoria(resultados: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     """Casos con ≥1 ejemplo inyectado, desglosados por categoría.
 
-    Un caso en la rama de agregación no pide criterio (el conteo sale del
-    resumen), así que se excluye del denominador, igual que en la cobertura
-    global; los casos `retrieval` no pasan por el LLM y tampoco cuentan.
+    Usa `_elegibles_fewshot` como exclusor: un caso en la rama de agregación
+    no pide criterio (el conteo sale del resumen) y `retrieval` jamás pasa por
+    el LLM. El denominador global (en `_run_pasada`) usa el MISMO criterio, así
+    que el % global reconcilia con estas líneas — antes divergían y
+    `fallos_con_0` contaba fallos que no pudieron llevar criterio.
     """
     por_cat: Dict[str, Dict[str, int]] = {}
-    for r in resultados:
-        if r.get("ok") is None:
-            continue
-        if r.get("mode") == "aggregate" or r.get("categoria") == "retrieval":
-            continue
+    for r in _elegibles_fewshot(resultados):
         cat = por_cat.setdefault(r["categoria"], {"casos": 0, "con_ejemplos": 0})
         cat["casos"] += 1
         if (r.get("rag_examples_used") or 0) > 0:
@@ -244,6 +257,20 @@ def _cobertura_por_categoria(resultados: List[Dict[str, Any]]) -> Dict[str, Dict
                 "cobertura_pct": round(100.0 * v["con_ejemplos"] / v["casos"], 1)
                 if v["casos"] else 0.0}
             for c, v in por_cat.items()}
+
+
+def _elegibles_fewshot(resultados: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Casos que PUEDEN llevar criterio few-shot (exclusor único y compartido).
+
+    Se excluye: casos con excepción (sin respuesta), la rama de agregación
+    (el conteo sale del resumen, sin prompt few-shot) y `retrieval` (puntúa
+    el retriever solo, sin LLM). Toda la métrica few-shot —global y por
+    categoría— debe pasar por aquí para que los denominadores coincidan.
+    """
+    return [r for r in resultados
+            if r.get("ok") is not None
+            and r.get("mode") != "aggregate"
+            and r.get("categoria") != "retrieval"]
 
 
 def _latencia(resultados: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -318,9 +345,18 @@ def determinista_guard(resultados: List[Dict[str, Any]]) -> bool:
     instancia que la app realmente usa —el patrón dual de import del backend
     puede dejar dos cargas del módulo— y la «línea base» estaría midiendo al
     modelo sin que nada lo señalara (spec §7: fallar ruidosamente).
+
+    También detecta el caso MÁS PROBABLE con un 3B: si el LLM corre y su
+    respuesta es rechazada por el guard de grounding, `engine` vuelve
+    "deterministic" (spec §5.3) — sin este check el backstop pasaría y la
+    «línea base» publicaría puntuación del modelo. Una pasada determinista
+    JAMÁS puede producir `grounding_rechazado` (con el LLM apagado,
+    `_remote_answer` sale antes de llamar a `chat`).
     """
     no_agregados = [r for r in resultados
                     if r.get("ok") is not None and r.get("mode") != "aggregate"]
+    if any(r.get("grounding_rechazado") for r in no_agregados):
+        return False
     return not any(r.get("engine") == "llm" for r in no_agregados)
 
 
@@ -474,11 +510,15 @@ def _run_pasada(dataset_ids: set) -> Dict[str, Any]:
                 client.delete(f"/api/analysis/{analysis_id}/chat")
                 rag_store.delete_analysis(analysis_id)
 
-    # Grounding global y cobertura few-shot (spec §6-7).
+    # Grounding global y cobertura few-shot (spec §6-7). El denominador few-shot
+    # pasa por _elegibles_fewshot: MISMO exclusor que la cobertura por categoría,
+    # para que el % global reconcilie con las líneas de abajo (antes contaba
+    # fallos de `retrieval`, que jamás pueden llevar criterio).
     puntuados = [r for r in resultados if r.get("ok") is not None]
     con_rechazo = sum(1 for r in puntuados if r.get("grounding_rechazado"))
-    no_agregados = [r for r in puntuados if r.get("mode") != "aggregate"]
-    con_ejemplos = sum(1 for r in no_agregados if (r.get("rag_examples_used") or 0) > 0)
+    elegibles_fewshot = _elegibles_fewshot(resultados)
+    con_ejemplos = sum(1 for r in elegibles_fewshot
+                       if (r.get("rag_examples_used") or 0) > 0)
     # Señal de diagnóstico: un caso NO agregado que terminó en la rama de
     # agregación nunca llegó al LLM (su hit@k es False por construcción) y su
     # puntuación no mide al modelo, sino al enrutador (spec §9: visible).
@@ -490,11 +530,11 @@ def _run_pasada(dataset_ids: set) -> Dict[str, Any]:
         "inventados": sum(r.get("inventados") or 0 for r in puntuados),
     }
     fewshot = {
-        "cobertura_pct": round(100.0 * con_ejemplos / len(no_agregados), 1)
-        if no_agregados else 0.0,
-        "fallos_con_0": sum(1 for r in no_agregados
+        "cobertura_pct": round(100.0 * con_ejemplos / len(elegibles_fewshot), 1)
+        if elegibles_fewshot else 0.0,
+        "fallos_con_0": sum(1 for r in elegibles_fewshot
                             if not r.get("ok") and not (r.get("rag_examples_used") or 0)),
-        "fallos_con_1mas": sum(1 for r in no_agregados
+        "fallos_con_1mas": sum(1 for r in elegibles_fewshot
                                if not r.get("ok") and (r.get("rag_examples_used") or 0) > 0),
     }
     return {"resultados": resultados, "grounding": grounding, "fewshot": fewshot,

@@ -23,7 +23,10 @@ from typing import Any, Callable
 
 import pandas as pd
 
-from severity import normalize_level
+try:
+    from backend.severity import normalize_level
+except ImportError:  # pragma: no cover
+    from severity import normalize_level
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample.xlsx"
 
