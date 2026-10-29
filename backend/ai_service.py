@@ -1554,11 +1554,14 @@ async def _remote_answer(
     utilizable.
     """
     cfg = ai_config.get()
+    if not cfg["enabled"] or not cfg["api_url"] or not ctx["evidence"]:
+        # El LLM no va a correr: el bloque few-shot no se construye ni viaja,
+        # así que informar un conteo > 0 sería un «ejemplos inyectados» en un
+        # prompt que jamás se envió (la pasada determinista del harness contaría
+        # cobertura que no existe).
+        return None, {"grounding_rechazado": False, "rag_examples_used": 0}
     messages, used = _qa_messages(ctx, history)
     info: Dict[str, Any] = {"grounding_rechazado": False, "rag_examples_used": used}
-    if not cfg["enabled"] or not cfg["api_url"] or not ctx["evidence"]:
-        return None, info
-
     text = await ai_config.chat(messages, cfg=cfg)
     if not text:
         return None, info

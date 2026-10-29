@@ -30,6 +30,20 @@ def test_compare_detecta_delta_y_hash():
     assert cmp["hash_ok"] and cmp["delta_global"] > 0
 
 
+def test_compare_no_pierde_categorias_que_desaparecieron():
+    """Si una categoría existe SOLO en la línea base (todos sus casos
+    revientan ahora), no puede perderse en la comparación: se muestra
+    «— → 0» en vez de desaparecer en silencio y dejar un delta engañoso."""
+    antes = _informe([("filter_set", True), ("refusal", True)])
+    despues = _informe([("filter_set", True)])       # refusal desapareció
+
+    cmp = compare_reports(despues, antes)
+
+    assert "refusal" in cmp["por_categoria"]
+    assert cmp["por_categoria"]["refusal"] == {"antes": 100.0, "despues": 0.0,
+                                               "delta": -100.0, "presente": False}
+
+
 def test_compare_con_hash_distinto_advierte():
     a, b = _informe([("filter_set", True)]), _informe([("filter_set", False)])
     b["hash_muestra"] = "otro"

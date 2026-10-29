@@ -402,6 +402,24 @@ def test_ask_con_llm_ok_no_marca_rechazo(client, analysis_id, monkeypatch):
     assert body["rag_examples_used"] == 0
 
 
+def test_ask_llm_apagado_con_memoria_no_informa_ejemplos(client, analysis_id, monkeypatch):
+    """El LLM apagado con criterio guardado NO informa ejemplos: el bloque
+    few-shot no se construye ni viaja en el prompt, así que un conteo > 0
+    sería «ejemplos inyectados» en un prompt que jamás se envió. Contaminaría
+    la cobertura few-shot de la pasada determinista del harness."""
+    import feedback_store
+
+    feedback_store.add_correction(_Q_DC01, "Cita los EVT- recuperados y su host.")
+    from main import ai_config
+
+    ai_config.update({"enabled": False})       # LLM apagado (config aislada)
+
+    body = client.post(f"/api/analysis/{analysis_id}/ask", json={"question": _Q_DC01}).json()
+
+    assert body["engine"] == "deterministic"
+    assert body["rag_examples_used"] == 0
+
+
 def test_ask_agregado_expone_rag_examples_cero(client, analysis_id):
     """La rama aggregate no pasa por el modelo: el conteo es 0, explícito."""
     body = client.post(f"/api/analysis/{analysis_id}/ask",

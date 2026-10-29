@@ -260,12 +260,23 @@ def _latencia(resultados: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def compare_reports(actual: dict, baseline: dict) -> dict:
-    """Deltas entre corridas; `hash_ok=False` es advertencia, no fallo."""
+    """Deltas entre corridas; `hash_ok=False` es advertencia, no fallo.
+
+    Las categorías se recorren por la UNIÓN de ambas corridas: si una existe
+    solo en la línea base (todos sus casos revientan ahora), no puede perderse
+    en la comparación — se muestra «— → 0» en vez de desaparecer en silencio.
+    """
     por_categoria = {}
-    for cat, info in actual["por_categoria"].items():
+    cats = list(actual["por_categoria"]) + [
+        c for c in baseline["por_categoria"] if c not in actual["por_categoria"]
+    ]
+    for cat in cats:
+        info = actual["por_categoria"].get(cat)
         antes = baseline["por_categoria"].get(cat, {}).get("pct", 0.0)
-        por_categoria[cat] = {"antes": antes, "despues": info["pct"],
-                              "delta": round(info["pct"] - antes, 2)}
+        despues = info["pct"] if info else 0.0      # ausente = 0 aciertos
+        por_categoria[cat] = {"antes": antes, "despues": despues,
+                              "delta": round(despues - antes, 2),
+                              "presente": info is not None}
     return {
         "hash_ok": actual["hash_muestra"] == baseline["hash_muestra"],
         "delta_global": round(actual["global"] - baseline["global"], 2),

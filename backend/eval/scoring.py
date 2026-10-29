@@ -19,9 +19,10 @@ import unicodedata
 LOG_ID_RE = re.compile(r"\b[A-Za-z]{2,12}[-_]\d{2,}\b")
 
 # Números con formato español/inglés («1.234», «1,234», «1234»). El lookbehind/
-# lookahead de [\d.] descarta IPs («10.10.97.1»): cada trozo de una IP está
-# pegado a un punto. Un «1234» sin separador también vale.
-_NUMBER_RE = re.compile(r"(?<![\d.])\d+(?:[.,]\d{3})*(?![\d.])")
+# lookahead de [\d.-] descarta lo pegado a un punto o a un guion: los trozos
+# de una IP («10.10.97.1») y los de una fecha («2026-01-10») — un «2026»
+# solto en una fecha NO es un conteo. Un «1234» sin separador también vale.
+_NUMBER_RE = re.compile(r"(?<![\d.-])\d+(?:[.,]\d{3})*(?![\d.-])")
 
 # Negaciones fuertes: con cualquiera de estas la respuesta está negando algo.
 _DENIAL_MARKERS = (
@@ -41,8 +42,18 @@ def _deacc(text: str) -> str:
 
 
 def cited_ids(text: str) -> list[str]:
-    """Log_ID candidatos citados en una respuesta, en orden de aparición."""
-    return LOG_ID_RE.findall(text or "")
+    """Log_ID candidatos citados en una respuesta, en orden de aparición.
+
+    Cada ID cuenta UNA sola vez: repetir «EVT-1, EVT-1» no aporta tres
+    evidencias sino una, y sin deduplicar inflaría la precisión@k.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for token in LOG_ID_RE.findall(text or ""):
+        if token not in seen:
+            seen.add(token)
+            out.append(token)
+    return out
 
 
 def invented_ids(cited: list[str], dataset_ids: set[str]) -> list[str]:
@@ -79,7 +90,8 @@ def number_in_answer(text: str, expected: int, unidades: str | None = None) -> b
 
     - Frontera de token: esperar 97 no acepta «1977».
     - Formatos ES/EN: «1.234», «1,234», «1234» son el mismo 1234.
-    - IPs y fechas no cuentan como números (lookaround de [\d.]).
+    - IPs y fechas no cuentan como números (el lookaround descarta lo pegado
+      a un punto o a un guion: «10.10.97.1», «2026-01-10»).
     - Con `unidades`, el número debe ser el MÁS CERCANO a la unidad declarada:
       «La IP 10.10.97.1 originó 68 eventos» prueba 68 (no 97 ni 18), porque
       68 es lo más próximo a «eventos». Sin unidad, cualquier coincidencia vale.
@@ -107,11 +119,17 @@ def number_in_answer(text: str, expected: int, unidades: str | None = None) -> b
 
 
 def precision_at_k(cited: list[str], expected: set[str]) -> float:
-    """De lo citado, qué fracción es correcta (k = len(cited))."""
-    if not cited:
+    """De lo citado, qué fracción es correcta (k = IDs distintos citados).
+
+    Los IDs repetidos cuentan una sola vez: «EVT-1, EVT-1» es UNA evidencia
+    correcta, no dos — sin deduplicar, repetir un ID inflaría (o hundiría)
+    la precisión y el umbral ancho de 0.5 dejaría de significar algo.
+    """
+    citados = list(dict.fromkeys(cited))
+    if not citados:
         return 0.0
-    hits = sum(1 for token in cited if token in expected)
-    return round(hits / len(cited), 2)
+    hits = sum(1 for token in citados if token in expected)
+    return round(hits / len(citados), 2)
 
 
 def hit_at_k(cited: list[str], expected: set[str]) -> bool:

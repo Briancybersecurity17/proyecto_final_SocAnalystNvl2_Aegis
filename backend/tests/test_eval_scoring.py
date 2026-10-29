@@ -52,6 +52,24 @@ def test_precision_conjunto_calculado_a_mano():
                                   {"EVT-A", "EVT-B", "EVT-C", "EVT-D"}) == 0.67
 
 
+def test_precision_cuenta_cada_id_una_sola_vez():
+    """Un ID repetido NO es más precisión: «EVT-1, EVT-1, EVT-1» es una sola
+    evidencia correcta, no tres. La deduplicación preserva el orden para que
+    hit_at_k y la impresión del informe no cambien."""
+    esperados = {"EVT-A", "EVT-B"}
+    assert scoring.precision_at_k(["EVT-A", "EVT-A", "EVT-A"], esperados) == 1.0
+    assert scoring.precision_at_k(["EVT-A", "EVT-X", "EVT-X"], esperados) == 0.5
+
+
+def test_fecha_no_cuenta_como_numero():
+    """El lookaround de [\d.] descarta IPs pero NO fechas («2026-01-10» tiene
+    guiones): esperar 2026 no debe aceptar la fecha. Solo la parte de la fecha
+    pegada al resto del número la descarta, por eso el test es contra el
+    número AÑO completo, que es el que el modelo citaría como conteo."""
+    assert not scoring.number_in_answer("Ocurrió el 2026-01-10", 2026)
+    assert scoring.number_in_answer("Ocurrieron 2026 eventos", 2026)
+
+
 def test_precision_sin_citados_es_cero():
     assert scoring.precision_at_k([], {"EVT-A"}) == 0.0
 
