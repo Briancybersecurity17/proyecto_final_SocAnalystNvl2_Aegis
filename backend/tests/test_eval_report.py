@@ -37,10 +37,26 @@ def test_compare_con_hash_distinto_advierte():
 
 
 def test_motor_guard_falla_si_el_llm_no_se_uso():
-    resultados = [{"categoria": "filter_set", "engine": "deterministic", "mode": "evidence"}] * 10
-    resultados += [{"categoria": "aggregate", "engine": "deterministic", "mode": "aggregate"}] * 5
+    # Registros como los produce _run_pasada: cada uno lleva "ok".
+    resultados = [{"categoria": "filter_set", "ok": True,
+                   "engine": "deterministic", "mode": "evidence"}] * 10
+    resultados += [{"categoria": "aggregate", "ok": True,
+                    "engine": "deterministic", "mode": "aggregate"}] * 5
     assert motor_guard(resultados, forzar=False) is False   # 100% > 30%
     assert motor_guard(resultados, forzar=True) is True     # --forzar
+
+
+def test_motor_guard_ignora_los_errores():
+    # Un caso con excepción no prueba nada sobre el motor: si todos los de
+    # evidencia revientan, el guard no juzga (no aborta) y build_report los
+    # muestra aparte como `errores`.
+    rotos = [{"categoria": "filter_set", "ok": None, "engine": None,
+              "mode": None, "error": "boom"}] * 12
+    assert motor_guard(rotos, forzar=False) is True
+    # Con un solo elegible determinista (100 %) sí debe fallar.
+    assert motor_guard(rotos + [{"categoria": "filter_set", "ok": True,
+                                 "engine": "deterministic",
+                                 "mode": "evidence"}], forzar=False) is False
 
 
 def test_motor_guard_con_llm_en_uso_pasa():
@@ -54,10 +70,13 @@ def test_motor_guard_excluye_retrieval_puro_del_denominador():
     # LLM): contarlos en el denominador diluye el 30 % — con 6 de ellos el
     # umbral efectivo subía a 38 % sobre los 13 casos de evidencia reales.
     # Aquí 4 de 7 elegibles quedaron en el determinista (57 %) → debe fallar.
-    evidencia_llm = [{"categoria": "filter_set", "engine": "llm", "mode": "evidence"}] * 3
-    fallback = [{"categoria": "filter_set", "engine": "deterministic", "mode": "evidence"}] * 4
-    retrieval = [{"categoria": "retrieval", "engine": "retrieval", "mode": "evidence"}] * 6
-    assert motor_guard(evidencia_llm + fallback + retrieval, forzar=False) is False
+    elegibles = ([{"categoria": "filter_set", "ok": True, "engine": "llm",
+                   "mode": "evidence"}] * 3
+                 + [{"categoria": "filter_set", "ok": True,
+                     "engine": "deterministic", "mode": "evidence"}] * 4)
+    retrieval = [{"categoria": "retrieval", "ok": True, "engine": "retrieval",
+                  "mode": "evidence"}] * 6
+    assert motor_guard(elegibles + retrieval, forzar=False) is False
 
 
 def test_backstop_determinista_detecta_llm_encendido():
@@ -85,6 +104,95 @@ def test_llm_off_restaura_la_config_al_salir():
     with runner.LLM_OFF():
         assert ai_config.get()["enabled"] is False
     assert ai_config.get() == antes
+
+
+# --- _score_case: el corazón del scoring por categoría -----------------------
+# Es una función pura (caso, esperado, body, cited) y es donde viven el umbral
+# 0.5 de las preguntas anchas, la bifurcación ancho/estrecho, la refusal y el
+# agregado. Un bug aquí envenenaría CADA número del informe sin que ningún otro
+# test fallara, así que se cubre con una tabla explícita.
+
+def _caso(categoria: str, unidades: str | None = None):
+    class _C:
+        pass
+
+    c = _C()
+    c.categoria, c.unidades = categoria, unidades
+    return c
+
+
+def test_build_report_calcula_latencia_y_cobertura_por_categoria():
+    # `print_report` y el JSON deben llevar la media de `ms` por categoría y
+    # la cobertura few-shot desglosada: la cobertura global esconde si el
+    # criterio aprendido llega solo a un tipo de consulta (spec §6).
+    resultados = [
+        {"categoria": "filter_set", "ok": True, "ms": 100, "mode": "evidence",
+         "rag_examples_used": 2},
+        {"categoria": "filter_set", "ok": False, "ms": 300, "mode": "evidence",
+         "rag_examples_used": 0},
+        {"categoria": "aggregate", "ok": True, "ms": 50, "mode": "aggregate",
+         "rag_examples_used": 0},
+        {"categoria": "retrieval", "ok": True, "ms": 10, "mode": "evidence",
+         "rag_examples_used": 0},
+    ]
+    rep = build_report(resultados=resultados,
+                       grounding={"rechazo_pct": 0.0, "inventados": 0},
+                       fewshot={"cobertura_pct": 33.3}, motor="llm",
+                       hash_muestra="abc", modelo="qwen2.5:3b",
+                       num_ctx=4096, temperatura=0.2)
+    assert rep["latencia"]["por_categoria"] == {"filter_set": 200, "aggregate": 50,
+                                                "retrieval": 10}
+    assert rep["latencia"]["media_ms"] == 115          # (100+300+50+10)/4
+    # La cobertura por categoría excluye aggregate y retrieval: solo las 2
+    # de filter_set pueden llevar criterio.
+    assert rep["fewshot"]["por_categoria"] == {
+        "filter_set": {"casos": 2, "con_ejemplos": 1, "cobertura_pct": 50.0}}
+
+
+def test_score_case_agregado_exige_el_numero_correcto():
+    c = _caso("aggregate", unidades="eventos")
+    assert runner._score_case(c, 97, {"answer": "Hay 97 eventos críticos."}, []) is True
+    # Un número equivocado NO cuenta, ni aunque la prosa suene bien.
+    assert runner._score_case(c, 97, {"answer": "Hay 92 eventos críticos."}, []) is False
+    # Con unidad declarada, el número debe ser el más cercano a ella: la IP
+    # «10.10.97.1» no debe colarse como si fuera el 97 esperado.
+    assert runner._score_case(c, 68, {"answer": "La IP 10.10.97.1 originó 68 eventos."},
+                              []) is True
+
+
+def test_score_case_refusal_exige_negar_sin_citar_ids():
+    c = _caso("refusal")
+    assert runner._score_case(c, True, {"answer": "No encontre registros."}, []) is True
+    # «No encontré nada; revise EVT-00007» NO es un refusal: afirma algo sobre
+    # un ID concreto, así que el caso falla.
+    assert runner._score_case(c, True, {"answer": "No encontre nada; revise EVT-00007."},
+                              ["EVT-00007"]) is False
+    # Una respuesta que afirma sin negar tampoco es un refusal.
+    assert runner._score_case(c, True, {"answer": "Vi 12 registros."}, []) is False
+
+
+def test_score_case_estrecho_pasa_con_un_solo_hit():
+    # Pregunta estrecha (esperado <= 2*k): basta con citar UN ID relevante.
+    esperado = {"EVT-00001", "EVT-00002"}
+    c = _caso("filter_set")
+    assert runner._score_case(c, esperado, {"answer": "x"}, ["EVT-00001"]) is True
+    # Un único ID inventado no acierta.
+    assert runner._score_case(c, esperado, {"answer": "x"}, ["EVT-99999"]) is False
+
+
+def test_score_case_ancho_exige_precision_minima():
+    # Pregunta ancha (esperado > 2*k): manda la precisión@k con umbral 0.5 —
+    # el recall sería bajo por construcción (la ventana trae k).
+    esperado = {f"EVT-{i:05d}" for i in range(20)}      # 20 > 2*8 → ancha
+    c = _caso("filter_set")
+    # 3 de 5 correctos = 0.6 ≥ 0.5 → acierto.
+    assert runner._score_case(c, esperado, {"answer": "x"},
+                              ["EVT-00001", "EVT-00002", "EVT-00003",
+                               "EVT-99998", "EVT-99999"]) is True
+    # 2 de 5 correctos = 0.4 < 0.5 → fallo (umbral, no «alguno sirve»).
+    assert runner._score_case(c, esperado, {"answer": "x"},
+                              ["EVT-00001", "EVT-00002",
+                               "EVT-99997", "EVT-99998", "EVT-99999"]) is False
 
 
 def _instancias(nombre: str):

@@ -211,7 +211,8 @@ def build_report(resultados: List[Dict[str, Any]], grounding: Dict[str, Any],
         "por_categoria": por_categoria,
         "errores": errores,
         "grounding": grounding,
-        "fewshot": fewshot,
+        "fewshot": {**fewshot, "por_categoria": _cobertura_por_categoria(resultados)},
+        "latencia": _latencia(resultados),
         "rutados_a_agregacion": rutados_a_agregacion or [],
         "motor": motor,
         "hash_muestra": hash_muestra,
@@ -219,6 +220,42 @@ def build_report(resultados: List[Dict[str, Any]], grounding: Dict[str, Any],
         "num_ctx": num_ctx,
         "temperatura": temperatura,
         "casos": resultados,
+    }
+
+
+def _cobertura_por_categoria(resultados: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Casos con ≥1 ejemplo inyectado, desglosados por categoría.
+
+    Un caso en la rama de agregación no pide criterio (el conteo sale del
+    resumen), así que se excluye del denominador, igual que en la cobertura
+    global; los casos `retrieval` no pasan por el LLM y tampoco cuentan.
+    """
+    por_cat: Dict[str, Dict[str, int]] = {}
+    for r in resultados:
+        if r.get("ok") is None:
+            continue
+        if r.get("mode") == "aggregate" or r.get("categoria") == "retrieval":
+            continue
+        cat = por_cat.setdefault(r["categoria"], {"casos": 0, "con_ejemplos": 0})
+        cat["casos"] += 1
+        if (r.get("rag_examples_used") or 0) > 0:
+            cat["con_ejemplos"] += 1
+    return {c: {"casos": v["casos"], "con_ejemplos": v["con_ejemplos"],
+                "cobertura_pct": round(100.0 * v["con_ejemplos"] / v["casos"], 1)
+                if v["casos"] else 0.0}
+            for c, v in por_cat.items()}
+
+
+def _latencia(resultados: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Media de `ms` por categoría y global (solo casos con latencia medida)."""
+    latencias: Dict[str, List[int]] = {}
+    for r in resultados:
+        if r.get("ms") is not None:
+            latencias.setdefault(r["categoria"], []).append(int(r["ms"]))
+    total = [ms for v in latencias.values() for ms in v]
+    return {
+        "media_ms": round(sum(total) / len(total)) if total else 0,
+        "por_categoria": {c: round(sum(v) / len(v)) for c, v in latencias.items()},
     }
 
 
@@ -240,17 +277,25 @@ def compare_reports(actual: dict, baseline: dict) -> dict:
 def motor_guard(resultados: List[Dict[str, Any]], forzar: bool) -> bool:
     """¿La corrida «llm» usó el modelo de verdad? (False → abortar)
 
-    Si más del 30 % de los casos de EVIDENCIA (los de agregación se excluyen:
-    van al determinista por diseño) terminaron con engine determinista, la
-    puntuación mide el fallback y no el modelo: mentiría «mejoró» o «empeoró».
+    El denominador son los casos de EVIDENCIA que el LLM puede responder:
+    se excluyen los de agregación (van al determinista por diseño) y los
+    `retrieval` (responden con engine="retrieval" por definición: son el
+    retriever solo, sin modelo). Contar los retrieval diluiría el umbral —
+    con 6 de ellos el 30 % efectivo subía a 38 % sobre los 13 casos reales.
+
+    Un caso con excepción tampoco cuenta: no prueba nada sobre el motor, y si
+    todos los de evidencia revientan el guard no puede juzgar (build_report
+    los muestra aparte como `errores`).
     """
     if forzar:
         return True
-    evidencia = [r for r in resultados if r.get("mode") == "evidence"]
-    if not evidencia:
+    elegibles = [r for r in resultados
+                 if r.get("mode") == "evidence" and r.get("engine") != "retrieval"
+                 and r.get("ok") is not None]
+    if not elegibles:
         return True
-    det = sum(1 for r in evidencia if r.get("engine") == "deterministic")
-    return (100.0 * det / len(evidencia)) <= MOTOR_GUARD_PCT
+    det = sum(1 for r in elegibles if r.get("engine") == "deterministic")
+    return (100.0 * det / len(elegibles)) <= MOTOR_GUARD_PCT
 
 
 def determinista_guard(resultados: List[Dict[str, Any]]) -> bool:
@@ -282,11 +327,19 @@ def load_report(path: Path) -> dict:
 
 def print_report(report: dict) -> None:
     print(f"\n=== Eval RAG+LLM · motor={report['motor']} · modelo={report['modelo']} ===")
+    print(f"muestra: hash {report['hash_muestra']} · num_ctx {report['num_ctx']} · "
+          f"temperatura {report['temperatura']}")
     print("| categoría    | casos | aciertos |    % |")
     print("|--------------|------:|---------:|-----:|")
     for cat, info in report["por_categoria"].items():
         print(f"| {cat:<12} | {info['casos']:>5} | {info['aciertos']:>8} | {info['pct']:>4.1f} |")
     print(f"| {'GLOBAL (macro)':<12} | {'':>5} | {'':>8} | {report['global']:>4.1f} |")
+
+    lat = report.get("latencia") or {}
+    if lat:
+        print(f"latencia media: {lat['media_ms']} ms "
+              + " · ".join(f"{c} {v} ms" for c, v in lat["por_categoria"].items()))
+
     if report["errores"]:
         print(f"! {report['errores']} caso(s) con excepción (ver detalle en el JSON)")
     rutados = report.get("rutados_a_agregacion") or []
@@ -300,6 +353,12 @@ def print_report(report: dict) -> None:
           f"{g['inventados']} ID(s) inventados (esperado 0)")
     f = report["fewshot"]
     print(f"few-shot:  {f['cobertura_pct']:.1f}% de los casos con ≥1 ejemplo inyectado")
+    for cat, info in (f.get("por_categoria") or {}).items():
+        print(f"  {cat:<12} {info['con_ejemplos']}/{info['casos']} "
+              f"({info['cobertura_pct']:.1f}%)")
+    if f.get("fallos_con_0") or f.get("fallos_con_1mas"):
+        print(f"  fallos: {f['fallos_con_0']} con 0 ejemplos, "
+              f"{f['fallos_con_1mas']} con ≥1 (¿el criterio aprendido ayudó?)")
     for r in report["casos"]:
         if r.get("ok") is None:
             print(f"  ! {r['id']}: {r.get('error')}")

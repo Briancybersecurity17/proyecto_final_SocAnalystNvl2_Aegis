@@ -131,35 +131,17 @@ EXPECTED_COLUMNS = [
 # ---------------------------------------------------------------------------
 # Risk classification (severity from the source file -> our 4 levels)
 # ---------------------------------------------------------------------------
-# Mapeo de valores originales del campo Severity (del Excel / fuente) →
-# nuestros 4 niveles de riesgo. El orden refleja la política de la
-# organización: warning se trata como crítico (no como medio).
-SEVERITY_TO_LEVEL: Dict[str, str] = {
-    "critical": "critico",
-    "critico": "critico",
-    "high": "alto",
-    "alto": "alto",
-    "medium": "medio",
-    "medio": "medio",
-    "warning": "critico",
-    "low": "bajo",
-    "bajo": "bajo",
-    "informational": "bajo",
-    "informative": "bajo",
-    "info": "bajo",
-}
-LEVEL_ORDER = ["critico", "alto", "medio", "bajo"]
-LEVEL_LABELS = {"critico": "Crítico", "alto": "Alto", "medio": "Medio", "bajo": "Bajo"}
-
-# Palabras clave para mapear valores desconocidos (otros datasets) de forma
-# robusta, sin depender de coincidencia exacta. Se revisan de más grave a más
-# leve; el primero que gana se aplica. Default: "bajo" (sin evidencia de riesgo).
-SEVERITY_KEYWORDS: List[Tuple[str, Tuple[str, ...]]] = [
-    ("critico", ("critical", "crit", "warn", "err", "severe", "fatal", "emergency", "alert")),
-    ("alto", ("high", "major", "elevated")),
-    ("medio", ("medium", "moderate", "average")),
-    ("bajo", ("low", "inform", "info", "trivial", "minor")),
-]
+# Clasificación de severidad: el catálogo y normalize_level viven en un
+# módulo NEUTRAL (severity.py) sin FastAPI ni pandas, para que eval/cases.py
+# calcule la verdad sin arrastrar la app completa (spec §3). Re-exportados
+# aquí: la verdad del eval y la clasificación del producto son el MISMO código.
+from severity import (
+    LEVEL_LABELS,
+    LEVEL_ORDER,
+    SEVERITY_KEYWORDS,
+    SEVERITY_TO_LEVEL,
+    normalize_level,
+)
 
 # Windows Security event IDs – explanation grounded in the dataset's own
 # Event_Description column (no invented findings).
@@ -221,30 +203,6 @@ def _records(df: pd.DataFrame) -> List[Dict[str, Any]]:
                 except Exception:
                     row[key] = str(value)
     return out
-
-
-def normalize_level(severity: Any) -> str:
-    """Map a raw severity value to one of our four risk levels.
-
-    Coincidencia exacta primero (catálogo conocido), luego coincidencia parcial
-    (contiene) para ser robustos con otros datasets, y por defecto "bajo"
-    (sin evidencia de riesgo destacada).
-    """
-    raw = str(severity).strip().lower()
-    if not raw or raw in ("nan", "none", "null", ""):
-        return "bajo"
-
-    # 1. Coincidencia exacta (catálogo conocido)
-    exact = SEVERITY_TO_LEVEL.get(raw)
-    if exact:
-        return exact
-
-    # 2. Coincidencia parcial por palabras clave (otros datasets)
-    for level, keywords in SEVERITY_KEYWORDS:
-        if any(k in raw for k in keywords):
-            return level
-
-    return "bajo"
 
 
 def row_reason(row: pd.Series) -> str:

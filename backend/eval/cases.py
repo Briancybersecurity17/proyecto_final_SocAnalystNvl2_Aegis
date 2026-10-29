@@ -23,7 +23,7 @@ from typing import Any, Callable
 
 import pandas as pd
 
-from main import normalize_level
+from severity import normalize_level
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample.xlsx"
 
