@@ -8,13 +8,14 @@ Diseño (rigor analítico):
     registros (grounding estricto, sin inventar conclusiones).
 
 Dos modos de operación:
-    1. Modelo remoto (opcional): si se define ``AI_API_URL`` (compatible con
-       la API de OpenAI: ``/v1/chat/completions``) se envía el contexto y se
-       usa la respuesta. ``AI_API_KEY`` y ``AI_MODEL`` son opcionales.
-    2. Generador local determinista (fallback): si no hay URL configurada, si
-       falla la llamada o si la respuesta no es JSON válido, se redacta el
-       informe con plantillas basadas en los mismos números. Nunca se queda
-       sin informe.
+    1. LLM (opcional): la configuración vive en ``ai_config`` (panel «Opciones
+       IA», persistido en disco): por defecto Ollama local con qwen2.5:3b vía
+       ``/api/chat`` y opciones por request (num_ctx, temperature…); también
+       acepta cualquier endpoint compatible con OpenAI (``AI_API_URL`` y cía.
+       siguen aportando los defaults por entorno).
+    2. Generador local determinista (fallback): si el LLM está apagado, no
+       responde o la respuesta no es JSON válido, se redacta el informe con
+       plantillas basadas en los mismos números. Nunca se queda sin informe.
 
 Uso:
     from ai_service import generate_report_narrative
@@ -24,21 +25,26 @@ Uso:
 from __future__ import annotations
 
 import json
-import os
+import logging
 import re
 import unicodedata
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-import httpx
+logger = logging.getLogger("soc.ai")
 
 # ---------------------------------------------------------------------------
-# Configuración del modelo remoto (opcional)
+# Configuración del LLM (panel «Opciones IA»)
 # ---------------------------------------------------------------------------
-AI_API_URL = os.getenv("AI_API_URL", "").strip()
-AI_API_KEY = os.getenv("AI_API_KEY", "").strip()
-AI_MODEL = os.getenv("AI_MODEL", "gpt-4o-mini").strip()
-AI_TIMEOUT = float(os.getenv("AI_TIMEOUT", "60"))
+# Fuente de verdad única: ai_config lee/valida el JSON en disco y arma el
+# payload según el dialecto de la URL (Ollama nativo o compatible OpenAI).
+# Los cambios del panel aplican al instante, sin reiniciar el backend.
+try:
+    from backend import ai_config
+    from backend import feedback_store
+except ImportError:  # pragma: no cover – módulo suelto (sys.path con backend/)
+    import ai_config
+    import feedback_store
 
 LEVEL_ORDER = ["critico", "alto", "medio", "bajo"]
 LEVEL_LABELS = {
@@ -477,63 +483,62 @@ def _clean_json(text: str) -> Optional[Dict[str, Any]]:
 
 
 async def _remote_narrative(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Llama al modelo remoto. Devuelve None si no está configurado o falla."""
-    if not AI_API_URL:
+    """LLM para el informe. Devuelve None si está apagado o falla."""
+    cfg = ai_config.get()
+    if not cfg["enabled"] or not cfg["api_url"]:
         return None
 
-    payload: Dict[str, Any] = {
-        "model": AI_MODEL,
-        "temperature": 0.2,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": (
-                    "Redacta el informe técnico a partir de estos datos calculados.\n"
-                    "Responde SOLO con JSON válido con exactamente estas claves:\n"
-                    '  "executive_summary": string,\n'
-                    '  "methodology": string,\n'
-                    '  "correlation": string,\n'
-                    '  "conclusions": string,\n'
-                    '  "findings": [ {"id": string, "title": string, '
-                    '"level": "critico|alto|medio|bajo", "explanation": string} ],\n'
-                    '  "action_plan": [ {"priority": "P1|P2|P3|P4", '
-                    '"action": string, "rationale": string} ]\n'
-                    "Los findings NO llevan evidencias (se añaden luego desde los "
-                    "registros). No inventes datos.\n\nDATOS:\n"
-                    + json.dumps(ctx, ensure_ascii=False, default=str)
-                ),
-            },
-        ],
-    }
-    headers = {"Content-Type": "application/json"}
-    if AI_API_KEY:
-        headers["Authorization"] = f"Bearer {AI_API_KEY}"
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": (
+                "Redacta el informe técnico a partir de estos datos calculados.\n"
+                "Responde SOLO con JSON válido con exactamente estas claves:\n"
+                '  "executive_summary": string,\n'
+                '  "methodology": string,\n'
+                '  "correlation": string,\n'
+                '  "conclusions": string,\n'
+                '  "findings": [ {"id": string, "title": string, '
+                '"level": "critico|alto|medio|bajo", "explanation": string} ],\n'
+                '  "action_plan": [ {"priority": "P1|P2|P3|P4", '
+                '"action": string, "rationale": string} ]\n'
+                "Los findings NO llevan evidencias (se añaden luego desde los "
+                "registros). No inventes datos.\n\nDATOS:\n"
+                + json.dumps(ctx, ensure_ascii=False, default=str)
+            ),
+        },
+    ]
 
-    try:
-        async with httpx.AsyncClient(timeout=AI_TIMEOUT) as client:
-            resp = await client.post(AI_API_URL, json=payload, headers=headers)
-            resp.raise_for_status()
-            body = resp.json()
-    except Exception:  # noqa: BLE001 – cualquier fallo cae al modo local
+    text = await ai_config.chat(
+        messages,
+        temperature=0.2,
+        # El informe es largo: con el tope del chat (512) el JSON llega
+        # truncado y se descarta. Para SOLO esta llamada se levantan los
+        # topes (sin mutar lo guardado en el panel); -1 = sin límite.
+        cfg={
+            **cfg,
+            "num_ctx": max(cfg["num_ctx"], 8192),
+        },
+        num_predict=(
+            -1 if cfg["num_predict"] == -1 else max(cfg["num_predict"], 3072)
+        ),
+    )
+    if not text:
         return None
-
-    # Compatible con OpenAI (choices[0].message.content) o {"content": "..."}
-    content = ""
-    try:
-        content = body["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError):
-        content = body.get("content") if isinstance(body, dict) else ""
-
-    parsed = _clean_json(str(content or ""))
-    return parsed if parsed else None
+    parsed = _clean_json(text)
+    if parsed is None:
+        logger.warning(
+            "El LLM no devolvió JSON válido para el informe (¿truncado?): %.200s", text
+        )
+    return parsed
 
 
 def _merge(fallback: Dict[str, Any], remote: Dict[str, Any]) -> Dict[str, Any]:
     """Usa la respuesta remota solo donde aporta contenido; nunca pierde datos."""
     merged = dict(fallback)
     merged["source"] = "llm"
-    merged["model"] = AI_MODEL or "modelo remoto"
+    merged["model"] = ai_config.get()["model"] or "modelo remoto"
 
     for key in ("executive_summary", "methodology", "correlation", "conclusions"):
         value = remote.get(key)
@@ -723,6 +728,13 @@ def generate_data_insights(summary: Dict[str, Any]) -> List[str]:
 
 QA_MAX_EVIDENCE = 8
 QA_MIN_SCORE = 0.30  # por debajo de esto avisamos de baja confianza
+# Memoria multi-turno: turnos de conversación que se inyectan en el prompt
+# (por análisis, en RAM) y tope de caracteres de cada respuesta recordada.
+# Acotados a propósito: con num_ctx=2048 la ventana es finita y el prompt
+# actual (evidencias + referencia) ya ocupa ~1200 tokens; 4 turnos × 350
+# chars dejan margen sin desbordar ni truncar la pregunta vigente.
+CHAT_HISTORY_TURNS = 4
+QA_HISTORY_ANSWER_CHARS = 350
 QA_SYSTEM_PROMPT = (
     "Eres un analista SOC de nivel 2 respondiendo una consulta sobre eventos de "
     "un SIEM. Respondes en español, con precisión técnica y sin adornos. "
@@ -730,7 +742,11 @@ QA_SYSTEM_PROMPT = (
     "un dato no está en la evidencia, no lo menciones ni lo infieras. Cita cada "
     "afirmación con el Log_ID del evento que la respalda. Nunca inventes hosts, "
     "IPs, usuarios, fechas, cifras ni eventos. Si la evidencia no alcanza para "
-    "responder, dilo explícitamente."
+    "responder, dilo explícitamente. "
+    "Estructura la respuesta: 1) respuesta directa en la primera frase; "
+    "2) justificación con los Log_ID citados; 3) solo si aporta, un cierre con "
+    "riesgo o siguiente paso. Sé breve: máximo ~150 palabras salvo que se pida "
+    "detalle."
 )
 
 
@@ -807,9 +823,14 @@ def _reference_lines(reference: Optional[Dict[str, Any]]) -> List[str]:
     for item in events[:QA_MAX_EVIDENCE]:
         lines.append(f"- `Event ID {item.get('id')}` — {item.get('titulo')}")
     for item in techs[:QA_MAX_EVIDENCE]:
+        # Solo ~79 técnicas están curadas en español; las demás vienen de la
+        # fuente oficial en inglés, así que se usa ese texto en lugar de un
+        # hueco vacío tras los dos puntos.
+        desc = str(item.get("descripcion_es") or "").strip() or str(
+            item.get("description_en") or ""
+        ).strip()
         lines.append(
-            f"- `{item.get('id')} {item.get('name')}` ({item.get('tactic_es')}): "
-            f"{item.get('descripcion_es')}"
+            f"- `{item.get('id')} {item.get('name')}` ({item.get('tactic_es')}): {desc}"
         )
     return lines
 
@@ -1279,7 +1300,7 @@ def _qa_fallback(ctx: Dict[str, Any]) -> Dict[str, Any]:
             f"**Origen:** {_top(ips)}.",
             f"**Event IDs:** {_top(event_ids)}.",
             "",
-            "**Evidencias (ordenadas por similitud):**",
+            "**Evidencias (más relevantes primero):**",
         ]
     for position, item in enumerate(evidence, start=1):
         lines.append(
@@ -1336,6 +1357,50 @@ def _cited_log_ids(text: str) -> List[str]:
     return re.findall(r"\b[A-Za-z]{2,12}[-_]\d{2,}\b", text or "")
 
 
+# --- Presupuesto del bloque few-shot contra num_ctx -------------------------
+# Aproximación chars→tokens medida sobre prompts REALES de este proyecto (no
+# la regla genérica de «4 chars/tok», que se queda corta con JSON):
+#   5818 chars ↔ 2253 tok   y   6753 chars ↔ 2545 tok   ⇒  ~2,6 chars/tok
+# Se usa 2,5 (por debajo de lo medido) para SOBREESTIMAR el consumo y que el
+# presupuesto nunca se quede corto.
+CHARS_PER_TOKEN = 2.5
+# Colchón de lo que no se puede medir aquí (redondeos, tokenización real).
+CTX_MARGIN_TOKENS = 128
+# Etiqueta y aviso del bloque few-shot («NO es un hallazgo de los registros»…).
+FEEDBACK_BLOCK_OVERHEAD_CHARS = 160
+# Coste por ejemplo dentro del bloque (la etiqueta «consulta «…» → …»).
+FEEDBACK_PER_EXAMPLE_CHARS = 140
+
+
+def _feedback_note(question: str, base_chars: int, history_chars: int) -> str:
+    """Bloque few-shot con el criterio del analista sobre consultas afines.
+
+    **Presupuestado contra `num_ctx`.** El prompt NO debe pasar de la ventana:
+    si pasa, Ollama recorta los mensajes MÁS VIEJOS —el system prompt con las
+    reglas de no inventar Log_ID— en vez de acortar la respuesta, y el modelo
+    deja de seguir las instrucciones justo cuando la conversación se pone
+    larga. Por eso, si la memoria de turnos ya se comió la ventana, se inyectan
+    CERO ejemplos: el few-shot es un plus, nunca lo que haga perder instrucciones.
+
+    Vacío si no hay ejemplos aprendidos todavía: la app responde igual que
+    antes (cero regresión). Es criterio de redacción, nunca un hallazgo, y el
+    propio bloque lo advierte al modelo.
+    """
+    try:
+        num_ctx = int(ai_config.get()["num_ctx"])
+        used_tok = (len(QA_SYSTEM_PROMPT) + history_chars + base_chars) / CHARS_PER_TOKEN
+        free_chars = (num_ctx - used_tok - CTX_MARGIN_TOKENS) * CHARS_PER_TOKEN
+        budget = free_chars - FEEDBACK_BLOCK_OVERHEAD_CHARS
+        per_example = feedback_store.EXAMPLE_CHARS + FEEDBACK_PER_EXAMPLE_CHARS
+        if budget < per_example:
+            return ""   # no cabe ni un ejemplo: se omite el few-shot entero
+        limit = min(feedback_store.MAX_EXAMPLES, int(budget // per_example))
+        block = feedback_store.prompt_block(question, limit)
+    except Exception:  # noqa: BLE001 – el few-shot nunca tumba la consulta
+        return ""
+    return f"{block}\n\n" if block else ""
+
+
 def _grounding_ok(answer: str, evidence: List[Dict[str, Any]]) -> bool:
     """Rechaza la respuesta del modelo si cita Log_ID inexistentes.
 
@@ -1356,64 +1421,125 @@ def _grounding_ok(answer: str, evidence: List[Dict[str, Any]]) -> bool:
     return True
 
 
-async def _remote_answer(ctx: Dict[str, Any]) -> Optional[str]:
-    """Llama al modelo remoto para redactar la respuesta. None si no aplica."""
-    if not AI_API_URL or not ctx["evidence"]:
+def _slim_for_prompt(evidence: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Evidencia serializada SOLO para el prompt del LLM (no para la UI).
+
+    El campo `document` del envelope repite literalmente los campos crudos
+    (Log_ID, Timestamp, Hostname…) más [DESC] y [ANÁLISIS]: enviarlo al modelo
+    dobla el prompt sin aportar información nueva y solo encarece el prefill.
+    El modelo trabaja con los campos estructurados, que son más fáciles de
+    citar sin inventar Log_IDs.
+
+    NOTA: se descartó que el prefill corriera en CPU por VRAM insuficiente
+    (medido en la GTX 1060 de 6 GB: prefill en GPU a ~30 ms incluso con
+    num_ctx=16384). El motivo real para adelgazar es el tamaño del prompt,
+    no un desplazamiento a CPU.
+    """
+    slim: List[Dict[str, Any]] = []
+    for item in evidence:
+        slim.append({
+            "log_id": item.get("log_id"),
+            "timestamp": item.get("timestamp"),
+            "host": item.get("host"),
+            "event_id": item.get("event_id"),
+            "user": item.get("user"),
+            "source_ip": item.get("source_ip"),
+            "severity": item.get("severity"),
+            "level": item.get("level"),
+            "suspicious": item.get("suspicious"),
+            "result": item.get("result"),
+            "description": str(item.get("description") or "")[:200],
+        })
+    return slim
+
+
+def _ref_note(reference: Optional[Dict[str, Any]]) -> str:
+    """Nota de la referencia del marco (MITRE + Event IDs) para el prompt.
+
+    Versión compacta: solo los campos que el modelo necesita para explicar un
+    Event ID o una técnica (id, nombre, táctica, descripción corta). Los campos
+    largos (`se_detecta` completo) se quedan fuera del prompt: el modelo los
+    resumiría igual mal y cuestan tokens de prefill. La descripción usa el
+    español curado y, si la técnica no lo está, la fuente oficial en inglés.
+    """
+    reference = reference or {}
+    if not reference.get("available"):
+        return ""
+    events = [
+        {"id": e.get("id"), "titulo": e.get("titulo"), "tecnicas": e.get("relacionados")}
+        for e in (reference.get("event_ids") or [])[:QA_MAX_EVIDENCE]
+    ]
+    techs = [
+        {"id": t.get("id"), "name": t.get("name"), "tactic": t.get("tactic_es"),
+         "desc": str(t.get("descripcion_es") or t.get("description_en") or "")[:160]}
+        for t in (reference.get("techniques") or [])[:QA_MAX_EVIDENCE]
+    ]
+    return (
+        "\n\nREFERENCIA TÉCNICA (MITRE ATT&CK y glosario de Event IDs): úsala SOLO "
+        "para explicar qué significa un Event ID o qué técnica representa. "
+        "Jamás la presentes como un hallazgo de los registros y no afirmes que "
+        "la técnica haya ocurrido salvo que los eventos lo demuestren.\n"
+        + json.dumps({"event_ids": events, "techniques": techs},
+                     ensure_ascii=False, default=str)
+    )
+
+
+def _qa_messages(
+    ctx: Dict[str, Any], history: Optional[List[Dict[str, Any]]] = None
+) -> List[Dict[str, str]]:
+    """Mensajes del QA: system + turnos previos (memoria) + consulta actual.
+
+    La memoria multi-turno permite resolver referencias como «esos 33
+    eventos» («¿y esos mismos con IP externa?»): los últimos
+    ``CHAT_HISTORY_TURNS`` turnos viajan como pares user/assistant antes de la
+    pregunta vigente. Cada respuesta inyectada se acorta a
+    ``QA_HISTORY_ANSWER_CHARS`` porque la ventana de contexto (num_ctx) es
+    finita. La RECUPERACIÓN sigue usando solo la pregunta actual: los
+    embeddings no entienden contexto conversacional (limitación conocida).
+    """
+    messages: List[Dict[str, str]] = [
+        {"role": "system", "content": QA_SYSTEM_PROMPT}
+    ]
+    history_chars = 0
+    for turn in (history or [])[-CHAT_HISTORY_TURNS:]:
+        q = str(turn.get("question") or "").strip()
+        a = str(turn.get("answer") or "").strip()
+        if not q or not a:
+            continue
+        answer = a[:QA_HISTORY_ANSWER_CHARS]
+        messages.append({"role": "user", "content": q})
+        messages.append({"role": "assistant", "content": answer})
+        history_chars += len(q) + len(answer)
+
+    head = (
+        "Responde la consulta usando SOLO estos eventos recuperados.\n"
+        "Cita los Log_ID entre comillas simples. Si no hay evidencia "
+        "suficiente, dilo.\n\n"
+    )
+    tail = (
+        "CONSULTA:\n"
+        + ctx["question"]
+        + "\n\nEVENTOS RECUPERADOS:\n"
+        + json.dumps(_slim_for_prompt(ctx["evidence"]), ensure_ascii=False, default=str)
+        + _ref_note(ctx.get("reference"))
+    )
+    # Criterio del analista sobre consultas afines: va ANTES de la evidencia
+    # (para que el modelo lo use al redactar) pero presupuestado contra
+    # num_ctx: los ejemplos nunca pueden ser lo que desborde la ventana.
+    note = _feedback_note(ctx.get("question", ""), len(head) + len(tail), history_chars)
+    messages.append({"role": "user", "content": head + note + tail})
+    return messages
+
+
+async def _remote_answer(
+    ctx: Dict[str, Any], history: Optional[List[Dict[str, Any]]] = None
+) -> Optional[str]:
+    """LLM para la respuesta del asistente. None si está apagado o falla."""
+    cfg = ai_config.get()
+    if not cfg["enabled"] or not cfg["api_url"] or not ctx["evidence"]:
         return None
 
-    reference = ctx.get("reference") or {}
-    ref_note = ""
-    if reference.get("available"):
-        ref_note = (
-            "\n\nREFERENCIA TÉCNICA (MITRE ATT&CK y glosario de Event IDs): úsala SOLO "
-            "para explicar qué significa un Event ID o qué técnica representa. "
-            "Jamás la presentes como un hallazgo de los registros y no afirmes que "
-            "la técnica haya ocurrido salvo que los eventos lo demuestren.\n"
-            + json.dumps(
-                {"event_ids": reference.get("event_ids", []),
-                 "techniques": reference.get("techniques", [])},
-                ensure_ascii=False, default=str,
-            )
-        )
-
-    payload: Dict[str, Any] = {
-        "model": AI_MODEL,
-        "temperature": 0.1,
-        "messages": [
-            {"role": "system", "content": QA_SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": (
-                    "Responde la consulta usando SOLO estos eventos recuperados.\n"
-                    "Cita los Log_ID entre comillas simples. Si no hay evidencia "
-                    "suficiente, dilo.\n\nCONSULTA:\n"
-                    + ctx["question"]
-                    + "\n\nEVENTOS RECUPERADOS:\n"
-                    + json.dumps(ctx["evidence"], ensure_ascii=False, default=str)
-                    + ref_note
-                ),
-            },
-        ],
-    }
-    headers = {"Content-Type": "application/json"}
-    if AI_API_KEY:
-        headers["Authorization"] = f"Bearer {AI_API_KEY}"
-
-    try:
-        async with httpx.AsyncClient(timeout=AI_TIMEOUT) as client:
-            resp = await client.post(AI_API_URL, json=payload, headers=headers)
-            resp.raise_for_status()
-            body = resp.json()
-    except Exception:  # noqa: BLE001 – cualquier fallo cae al modo local
-        return None
-
-    content = ""
-    try:
-        content = body["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError):
-        content = body.get("content") if isinstance(body, dict) else ""
-
-    text = str(content or "").strip()
+    text = await ai_config.chat(_qa_messages(ctx, history), cfg=cfg)
     if not text:
         return None
     return text if _grounding_ok(text, ctx["evidence"]) else None
@@ -1425,6 +1551,7 @@ async def answer_question(
     summary: Optional[Dict[str, Any]] = None,
     reference: Optional[Dict[str, Any]] = None,
     index_note: str = "",
+    history: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Responde una consulta en lenguaje natural sobre los eventos indexados.
 
@@ -1435,6 +1562,9 @@ async def answer_question(
 
     `reference` es la base de conocimiento (Event IDs + técnicas ATT&CK) que se
     muestra APARTE, etiquetada como material del marco, nunca como hallazgo.
+    `history` son los turnos previos de la conversación (memoria multi-turno)
+    que el modelo ve antes de la consulta vigente; la recuperación de
+    evidencias no cambia (se hace con la pregunta actual).
     """
     ctx = build_qa_context(question, hits, summary, reference=reference, index_note=index_note)
     # Consultas de agregación («¿cuántos...?», «¿qué hosts concentran...?»):
@@ -1448,13 +1578,107 @@ async def answer_question(
     if not ctx["evidence"]:
         return fallback
 
-    remote = await _remote_answer(ctx)
+    remote = await _remote_answer(ctx, history)
     if remote:
         return {
             **fallback,
             "answer": remote,
             "engine": "llm",
-            "model": AI_MODEL,
+            "model": ai_config.get()["model"],
             "confidence": fallback["confidence"],
         }
     return fallback
+
+
+async def stream_question(
+    question: str,
+    hits: List[Dict[str, Any]],
+    summary: Optional[Dict[str, Any]] = None,
+    reference: Optional[Dict[str, Any]] = None,
+    index_note: str = "",
+    history: Optional[List[Dict[str, Any]]] = None,
+):
+    """Versión en streaming de ``answer_question`` para el endpoint SSE.
+
+    Emite, en orden, eventos (``type``) pensados para la UI del chat:
+
+    1. ``meta``  – evidencias, bloque MITRE, contadores y confianza: todo lo
+       rápido se calcula ANTES de arrancar el modelo, así el analista ve las
+       tarjetas mientras la respuesta se escribe.
+    2. ``token`` – trozos de texto del LLM (0..n).
+    3. ``final`` – texto final + motor (``llm`` si pasó el grounding).
+       Si no hay LLM (apagado/caído/sin evidencia) va directo, sin tokens.
+    4. ``fallback`` – el LLM falló a mitad de camino o citó Log_ID
+       inexistentes: lo transmitido se DESCARTA y se entrega la respuesta
+       determinista con un ``warning`` explicando el motivo.
+
+    Nunca termina sin respuesta (mismo contrato que ``answer_question``).
+    """
+    ctx = build_qa_context(question, hits, summary, reference=reference, index_note=index_note)
+
+    aggregate = _aggregate_answer(ctx)
+    if aggregate is not None:
+        yield {"type": "final", **aggregate}
+        return
+
+    fallback = _qa_fallback(ctx)
+    yield {
+        "type": "meta",
+        "evidence": ctx["evidence"],
+        "reference": ctx["reference"],
+        "summary_line": fallback["summary_line"],
+        "confidence": fallback["confidence"],
+        "warnings": fallback["warnings"],
+        "mode": fallback["mode"],
+        "dataset_rows": ctx["dataset_rows"],
+    }
+
+    if not ctx["evidence"]:
+        yield {"type": "final", **fallback}
+        return
+
+    cfg = ai_config.get()
+    if not cfg["enabled"] or not cfg["api_url"]:
+        yield {"type": "final", **fallback}
+        return
+
+    pieces: List[str] = []
+    interrupted = False
+    try:
+        async for piece in ai_config.chat_stream(_qa_messages(ctx, history), cfg=cfg):
+            pieces.append(piece)
+            yield {"type": "token", "text": piece}
+    except Exception as exc:  # noqa: BLE001 – red/caída del LLM a mitad
+        interrupted = True
+        logger.warning("Streaming del LLM interrumpido: %s", exc)
+
+    text = "".join(pieces).strip()
+    if interrupted or not text:
+        # Texto parcial NUNCA se entrega como si estuviera acabado: un «El host
+        # DC-01 tuvo in…» cortado a mitad induciría a error al analista.
+        # Si no llegó ni un token, el LLM ni siquiera arrancó (caída o timeout
+        # de conexión): se avisa «sin respuesta»; si arrancó y se cortó, «inter-
+        # rumpido», que es más grave porque había texto descartado.
+        warning = (
+            "llm_sin_respuesta" if interrupted and not pieces else
+            "stream_interrumpido" if interrupted else
+            "llm_sin_respuesta"
+        )
+        yield {
+            "type": "fallback",
+            **fallback,
+            "warning": warning,
+        }
+        return
+    if not _grounding_ok(text, ctx["evidence"]):
+        # Un solo Log_ID inventado invalida TODO el texto transmitido:
+        # se descarta y se muestra la respuesta determinista con aviso.
+        yield {"type": "fallback", **fallback, "warning": "grounding_rechazado"}
+        return
+    yield {
+        "type": "final",
+        **fallback,
+        "answer": text,
+        "engine": "llm",
+        "model": cfg["model"],
+    }

@@ -1,7 +1,9 @@
 import uuid
 import asyncio
+import json
 import logging
 import re
+import time
 from contextlib import asynccontextmanager
 from datetime import date, datetime
 from io import BytesIO
@@ -33,27 +35,55 @@ async def lifespan(_: FastAPI):
     """
     asyncio.create_task(asyncio.to_thread(rag_store.warmup))
     asyncio.create_task(asyncio.to_thread(kb_store.warmup))
+    # Cross-encoder del rerank: solo ordena la evidencia, pero cuesta ~1 s en
+    # cargarse, así que se precarga en un hilo y no en la primera consulta.
+    asyncio.create_task(asyncio.to_thread(rerank.warmup))
+    # LLM: el arranque de llama-server + carga del GGUF en la GPU cuesta ~4 s.
+    # Se paga aquí en segundo plano (el usuario sigue en el Dashboard) para que
+    # la primera pregunta del asistente ya salga con el modelo residente.
+    # Si Ollama está apagado, warmup() no hace nada y el chat cae al motor
+    # determinista como siempre.
+    async def _warm_llm() -> None:
+        start = time.perf_counter()
+        if await ai_config.warmup():
+            logger.info(
+                "LLM calentado en %.1fs (modelo residente en GPU)",
+                time.perf_counter() - start,
+            )
+    asyncio.create_task(_warm_llm())
+    # Memoria de criterio del analista (few-shot): lee el JSON y sincroniza el
+    # índice semántico en segundo plano, igual que el resto de precargas.
+    asyncio.create_task(asyncio.to_thread(feedback_store.warmup))
     yield
 
 # El servicio de IA se importa como paquete (uvicorn backend.main:app) o como
 # módulo suelto (test_backend.py añade /backend al sys.path).
 try:
     from backend.ai_service import (
+        CHAT_HISTORY_TURNS,
+        QA_HISTORY_ANSWER_CHARS,
         generate_report_narrative,
         generate_data_insights,
         answer_question,
         is_aggregate_question,
+        stream_question,
     )
-    from backend import rag_store, kb_store
+    from backend import rag_store, kb_store, ai_config, rerank, feedback_store
 except ImportError:  # pragma: no cover
     from ai_service import (
+        CHAT_HISTORY_TURNS,
+        QA_HISTORY_ANSWER_CHARS,
         generate_report_narrative,
         generate_data_insights,
         answer_question,
         is_aggregate_question,
+        stream_question,
     )
     import rag_store
     import kb_store
+    import ai_config
+    import rerank
+    import feedback_store
 
 # El motor de filtros con el mismo patrón dual paquete/suelto: así todos los
 # endpoints que muestran filas (/rows, /summary, /facets) comparten las
@@ -423,7 +453,16 @@ def _hybrid_retrieve(
             existing["retrieval"] = "hibrida"
 
     ordered = sorted(merged.values(), key=lambda item: -float(item.get("score", 0.0)))
-    return ordered[: max(1, min(n_results, 20))]
+    limit = max(1, min(n_results, 20))
+
+    # Reordenación con cross-encoder: la fusión coseno+léxica da un score grosero
+    # y con muchos empates; el cross-encoder lee consulta y registro juntos y
+    # decide el orden real. Se le pasa un pool más ancho que `limit` para que
+    # haya margen de promover candidatos que la similitud coseno dejó fuera.
+    # `score` se conserva tal cual (es el que interpretan QA_MIN_SCORE y la
+    # respuesta determinista); el logit del modelo va en `rerank_score`.
+    pool = ordered[: max(limit, rerank.POOL_MIN)]
+    return rerank.apply(question, pool)[:limit]
 
 
 # ---------------------------------------------------------------------------
@@ -802,7 +841,14 @@ async def upload_excel(file: UploadFile = File(...), background_tasks: Backgroun
         raise HTTPException(status_code=400, detail="Solo se aceptan archivos .xlsx")
     content = await file.read()
     analysis_id = str(uuid.uuid4())
-    analysis_store[analysis_id] = {"status": "pending", "summary": None, "error": None}
+    analysis_store[analysis_id] = {
+        # Se guarda el propio id: _remember_turn lo usa para etiquetar los
+        # ejemplos few-shot que salen de la conversación (auditoría en el JSON).
+        "analysis_id": analysis_id,
+        "status": "pending",
+        "summary": None,
+        "error": None,
+    }
     background_tasks.add_task(process_analysis, analysis_id, content, file.filename or "")
     return AnalysisResult(analysis_id=analysis_id, status="pending")
 
@@ -1044,6 +1090,13 @@ class AskRequest(BaseModel):
     n_results: int = 8
 
 
+class FeedbackRequest(BaseModel):
+    """Corrección del analista sobre una respuesta del asistente (few-shot)."""
+    question: str = ""
+    corrected_answer: str = ""  # respuesta correcta escrita por el analista
+    bad_answer: str = ""        # respuesta del modelo que se descarta (auditable)
+
+
 def _ensure_semantic_index(
     analysis_id: str, entry: Dict[str, Any], df: pd.DataFrame | None
 ) -> bool:
@@ -1082,14 +1135,12 @@ def _ensure_semantic_index(
     return True
 
 
-@app.post("/api/analysis/{analysis_id}/ask")
-async def ask_question(analysis_id: str, payload: AskRequest):
-    """Consulta en lenguaje natural sobre los eventos importados (RAG).
+def _ask_prep(analysis_id: str, payload: AskRequest) -> Dict[str, Any]:
+    """Valida una consulta del asistente y prepara el contexto compartido.
 
-    Recuperación híbrida (semántica + léxica) y respuesta anclada a los
-    eventos recuperados: cada cifra y cada Log_ID procede de los registros,
-    nunca del modelo. Las consultas de agregación (conteos, distribución,
-    hosts dominantes) se responden con cifras exactas del resumen del dataset.
+    Lo usan el endpoint normal (/ask) y el de streaming (/ask/stream) para que
+    ambas rutas apliquen exactamente las mismas reglas: validación, aviso de
+    índice en construcción y recuperación híbrida idéntica.
     """
     if analysis_id not in analysis_store:
         raise HTTPException(status_code=404, detail="Analysis not found")
@@ -1118,11 +1169,6 @@ async def ask_question(analysis_id: str, payload: AskRequest):
     rag_state = entry.get("rag") or {}
     indexing = _ensure_semantic_index(analysis_id, entry, df)
 
-    # --- Consulta de agregación: cifras exactas, sin recuperación -----------
-    if is_aggregate_question(question):
-        answer = await answer_question(question, [], entry["summary"], reference=None)
-        return {**common, "retrieved": 0, **answer}
-
     # Si el índice semántico todavía no está listo (acaba de subirse o se está
     # reconstruyendo), se avisa en la respuesta: lo recuperado procede solo de
     # la búsqueda léxica. Nunca se bloquea la petición esperando al índice.
@@ -1135,19 +1181,288 @@ async def ask_question(analysis_id: str, payload: AskRequest):
             "Vuelve a preguntar en unos segundos para la recuperación semántica."
         )
 
-    hits = _hybrid_retrieve(
-        analysis_id, question, df, n_results=n_results,
-        level=level, suspicious=bool(payload.suspicious),
+    return {
+        "entry": entry,
+        "question": question,
+        "n_results": n_results,
+        "level": level,
+        "suspicious": bool(payload.suspicious),
+        "common": common,
+        "df": df,
+        "index_note": index_note,
+    }
+
+
+def _chat_history(entry: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Turnos de conversación guardados en RAM para este análisis (0 si no hay)."""
+    return entry.get("chat_history") or []
+
+
+def _remember_turn(entry: Dict[str, Any], question: str, answer: str) -> None:
+    """Guarda un turno (pregunta + respuesta) para la memoria multi-turno.
+
+    La memoria es deliberadamente corta: solo los últimos CHAT_HISTORY_TURNS
+    turnos y cada respuesta acortada a QA_HISTORY_ANSWER_CHARS, porque la
+    ventana de contexto del modelo es finita. Vive en el propio análisis (en
+    RAM) y se borra con DELETE .../chat, al cambiar de análisis o al reiniciar
+    el backend (criterio: los datos no tocan disco).
+    """
+    if not answer or not question:
+        return
+    history = entry.setdefault("chat_history", [])
+    # Señal implícita de feedback: si la consulta anterior fue del LLM y este
+    # nuevo turno vuelve sobre el mismo tema, la respuesta previa fue útil ⇒
+    # ejemplo positivo para el few-shot. Se salta la primera consulta (no hay
+    # turno anterior) y las de agregación (respuesta del motor, no del modelo).
+    prev = history[-1] if history else None
+    if prev and not is_aggregate_question(question) and not is_aggregate_question(prev["question"]):
+        try:
+            feedback_store.remember_implicit(
+                prev["question"], prev["answer"],
+                analysis_id=str(entry.get("analysis_id") or ""),
+                next_question=question,
+            )
+        except Exception:  # noqa: BLE001 – el feedback nunca rompe la conversación
+            logger.debug("feedback implícito descartado", exc_info=True)
+    history.append({"question": question[:400], "answer": answer[:QA_HISTORY_ANSWER_CHARS]})
+    del history[:-CHAT_HISTORY_TURNS]
+
+
+@app.post("/api/analysis/{analysis_id}/ask")
+async def ask_question(analysis_id: str, payload: AskRequest):
+    """Consulta en lenguaje natural sobre los eventos importados (RAG).
+
+    Recuperación híbrida (semántica + léxica) y respuesta anclada a los
+    eventos recuperados: cada cifra y cada Log_ID procede de los registros,
+    nunca del modelo. Las consultas de agregación (conteos, distribución,
+    hosts dominantes) se responden con cifras exactas del resumen del dataset.
+
+    La conversación tiene memoria multi-turno (últimos turnos en RAM por
+    análisis), así que se puede preguntar «¿y esos mismos con IP externa?».
+    """
+    prep = _ask_prep(analysis_id, payload)
+    entry, question, common = prep["entry"], prep["question"], prep["common"]
+
+    # --- Consulta de agregación: cifras exactas, sin recuperación -----------
+    if is_aggregate_question(question):
+        answer = await answer_question(question, [], entry["summary"], reference=None)
+        _remember_turn(entry, question, str(answer.get("answer") or ""))
+        return {**common, "retrieved": 0, **answer}
+
+    # Recuperación + reordenación fuera del event loop: el cross-encoder del
+    # rerank tarda ~1 s y bloquearía el resto de peticiones del proceso.
+    hits = await asyncio.to_thread(
+        _hybrid_retrieve,
+        analysis_id, question, prep["df"], n_results=prep["n_results"],
+        level=prep["level"], suspicious=prep["suspicious"],
     )
 
     # Base de conocimiento: significado de los Event IDs observados y técnicas
     # MITRE ATT&CK asociadas (referencia del marco, no un hallazgo sobre datos).
     reference = await asyncio.to_thread(kb_store.build_reference, question, hits)
     answer = await answer_question(
-        question, hits, entry["summary"], reference=reference, index_note=index_note
+        question, hits, entry["summary"], reference=reference,
+        index_note=prep["index_note"], history=_chat_history(entry),
     )
+    _remember_turn(entry, question, str(answer.get("answer") or ""))
 
     return {**common, "retrieved": len(hits), **answer}
+
+
+@app.post("/api/analysis/{analysis_id}/ask/stream")
+async def ask_question_stream(analysis_id: str, payload: AskRequest):
+    """Versión en streaming de /ask (SSE con eventos con nombre).
+
+    Emite, en este orden: `meta` (evidencias y referencia ya disponibles,
+    mientras el modelo empieza a escribir), 0..n eventos `token` y un cierre
+    `final` (respuesta del LLM validada contra los Log_ID recuperados) o
+    `fallback` (la respuesta determinista sustituye a la del modelo si éste se
+    cayó a mitad o citó Log_ID inexistentes). Como en /ask, SIEMPRE termina
+    con una respuesta utilizable; cada evento lleva los mismos campos que la
+    respuesta completa, más el tipo en la clave `kind`.
+    """
+    t0 = time.perf_counter()
+    prep = _ask_prep(analysis_id, payload)
+    t_prep = time.perf_counter() - t0
+    entry, question, common = prep["entry"], prep["question"], prep["common"]
+
+    async def frames():
+        def _sse(kind: str, data: Dict[str, Any]) -> Dict[str, str]:
+            # `default=str` tolera escalares numpy/pandas del dataset sin
+            # tumbar el stream (json.dumps solo serializa tipos nativos).
+            return {
+                "event": kind,
+                "data": json.dumps({"kind": kind, **data}, ensure_ascii=False, default=str),
+            }
+
+        # Agregaciones: una sola respuesta con cifras exactas, sin streaming.
+        if is_aggregate_question(question):
+            answer = await answer_question(question, [], entry["summary"], reference=None)
+            _remember_turn(entry, question, str(answer.get("answer") or ""))
+            yield _sse("final", {**common, "retrieved": 0, **answer})
+            return
+
+        t1 = time.perf_counter()
+        hits = await asyncio.to_thread(
+            _hybrid_retrieve,
+            analysis_id, question, prep["df"], n_results=prep["n_results"],
+            level=prep["level"], suspicious=prep["suspicious"],
+        )
+        t2 = time.perf_counter()
+        # Misma base de conocimiento que /ask (referencia del marco aparte).
+        reference = await asyncio.to_thread(kb_store.build_reference, question, hits)
+        t3 = time.perf_counter()
+        timed = False
+
+        async for event in stream_question(
+            question, hits, entry["summary"], reference=reference,
+            index_note=prep["index_note"], history=_chat_history(entry),
+        ):
+            kind = str(event.get("type") or "")
+            body = {k: v for k, v in event.items() if k != "type"}
+            if kind == "meta":
+                if not timed:
+                    # Desglose de la fase «invisible» (hasta que aparecen las
+                    # evidencias): prep = validación+índice, recuperación =
+                    # RAG+léxica+rerank, referencia = consulta a la KB.
+                    timed = True
+                    logger.info(
+                        "timing /ask/stream: prep=%.2fs recuperación=%.2fs "
+                        "referencia=%.2fs → meta=%.2fs",
+                        t_prep, t2 - t1, t3 - t2, time.perf_counter() - t0,
+                    )
+                yield _sse("meta", {**common, "retrieved": len(hits), "engine": "streaming", **body})
+            elif kind == "token":
+                yield _sse("token", {"text": body.get("text", "")})
+            else:  # final | fallback: la respuesta emitida es la definitiva
+                _remember_turn(entry, question, str(body.get("answer") or ""))
+                yield _sse(kind, {**common, "retrieved": len(hits), **body})
+
+    return EventSourceResponse(frames())
+
+
+@app.post("/api/analysis/{analysis_id}/feedback")
+async def submit_feedback(analysis_id: str, payload: FeedbackRequest):
+    """Registra la corrección del analista sobre una respuesta del asistente.
+
+    Es el motor del few-shot: enseña al modelo la respuesta BUENA para esa
+    consulta, que se inyecta como criterio en consultas futuras afines. El
+    backend sigue funcionando sin esto (el fallback determinista no cambia),
+    pero con cada corrección el asistente aprende el estándar del equipo sin
+    reentrenar el modelo.
+    """
+    if analysis_id not in analysis_store:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    question = (payload.question or "").strip()
+    corrected = (payload.corrected_answer or "").strip()
+    if not question or not corrected:
+        raise HTTPException(
+            status_code=422,
+            detail="question y corrected_answer son obligatorios",
+        )
+    saved = await asyncio.to_thread(
+        feedback_store.add_correction,
+        question, corrected, (payload.bad_answer or "").strip(), analysis_id,
+    )
+    return {"ok": saved is not None, "example": saved, "stats": feedback_store.status()}
+
+
+@app.get("/api/feedback")
+async def feedback_status():
+    """Conteo de la memoria de criterio para el panel «Opciones IA»."""
+    return feedback_store.status()
+
+
+@app.delete("/api/feedback")
+async def feedback_clear():
+    """Vacía la memoria de criterio aprendido (ejemplos few-shot)."""
+    removed = feedback_store.clear()
+    return {"ok": True, "removed": removed, "stats": feedback_store.status()}
+
+
+@app.delete("/api/analysis/{analysis_id}/chat")
+async def clear_chat_history(analysis_id: str):
+    """Borra la memoria de conversación (turnos) de un análisis."""
+    if analysis_id not in analysis_store:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    analysis_store[analysis_id]["chat_history"] = []
+    return {"ok": True}
+
+
+def _observed_event_stats(df: pd.DataFrame | None) -> List[Dict[str, Any]]:
+    """Recuento por Event_ID de los registros EN MEMORIA (sin tocar disco).
+
+    Para cada Event_ID observado devuelve cuántos registros hay, cuántos están
+    ya marcados como sospechosos, su reparto por nivel y los hosts implicados.
+    No se deduce nada nuevo: es un agrupado de la clasificación que el motor ya
+    hizo al ingerir el archivo, y es lo que sustenta la correlación ATT&CK.
+    """
+    if df is None or df.empty or "Event_ID" not in df.columns:
+        return []
+
+    work = df.copy()
+    work["_event"] = work["Event_ID"].astype(str).str.strip()
+    work = work[~work["_event"].isin(["", "nan", "None", "<NA>", "—"])]
+    if work.empty:
+        return []
+
+    work["_level"] = (
+        work["Severity"].map(normalize_level) if "Severity" in work.columns else "bajo"
+    )
+    work["_reason"] = work.apply(row_reason, axis=1)
+    work["_suspicious"] = work.apply(_is_suspicious, axis=1)
+
+    out: List[Dict[str, Any]] = []
+    for event_id, grp in work.groupby("_event", sort=False):
+        item: Dict[str, Any] = {
+            "event_id": str(event_id),
+            "count": int(len(grp)),
+            "suspicious": int(grp["_suspicious"].sum()),
+            "levels": dict(sorted(
+                ((str(k), int(v)) for k, v in grp["_level"].value_counts().items()),
+                key=lambda kv: (-kv[1], kv[0]),
+            )),
+        }
+        if "Hostname" in grp.columns:
+            item["hosts"] = sorted({str(h) for h in grp["Hostname"].dropna().unique()})[:8]
+        if "Timestamp" in grp.columns:
+            stamps = pd.to_datetime(grp["Timestamp"], errors="coerce").dropna()
+            if len(stamps):
+                item["first_seen"] = stamps.min().strftime("%Y-%m-%d %H:%M")
+                item["last_seen"] = stamps.max().strftime("%Y-%m-%d %H:%M")
+        out.append(item)
+
+    out.sort(key=lambda s: (-s["count"], s["event_id"]))
+    return out
+
+
+@app.get("/api/analysis/{analysis_id}/attack/correlations")
+async def attack_correlations(analysis_id: str) -> Dict[str, Any]:
+    """Correlaciones ATT&CK de los registros de este análisis (determinista).
+
+    Cruza los Event_ID que existen en el dataset en memoria con el glosario y
+    las técnicas MITRE de la base de conocimiento, y devuelve también los
+    Event_ID que no tienen entrada en el glosario (`unmapped`) en lugar de
+    inventarles una correlación. Ni modelo ni similitud de por medio: es una
+    referencia del marco anclada a tus datos, con los recuentos reales.
+    """
+    if analysis_id not in analysis_store:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    entry = analysis_store[analysis_id]
+    if entry.get("status") != "done":
+        raise HTTPException(status_code=409, detail="El análisis aún no está listo")
+
+    df = entry.get("dataframe")
+    observed = await asyncio.to_thread(_observed_event_stats, df)
+    correlation = await asyncio.to_thread(kb_store.correlate, observed)
+
+    return {
+        "analysis_id": analysis_id,
+        "rows": int(len(df)) if df is not None else 0,
+        "observed_events": len(observed),
+        "observed_rows": sum(int(item.get("count") or 0) for item in observed),
+        **correlation,
+    }
 
 
 @app.get("/api/kb/status")
@@ -1171,3 +1486,67 @@ async def rag_status(analysis_id: str = Query("", description="Análisis concret
     if analysis_id and analysis_id not in analysis_store:
         info["known_analysis"] = False
     return info
+
+
+# ---------------------------------------------------------------------------
+# Panel «Opciones IA»: configuración del LLM (Ollama local por defecto)
+# ---------------------------------------------------------------------------
+class AiConfigPatch(BaseModel):
+    """Parche parcial de la configuración de la IA (todos los campos opcionales)."""
+
+    enabled: bool | None = None
+    api_url: str | None = None
+    api_key: str | None = None
+    model: str | None = None
+    num_ctx: int | None = None
+    temperature: float | None = None
+    keep_alive: str | None = None
+    num_predict: int | None = None
+    timeout: float | None = None
+
+
+def _ai_envelope(cfg: Dict[str, Any], status: Dict[str, Any]) -> Dict[str, Any]:
+    """Configuración + sonda de estado para el panel (respuesta de GET y PUT)."""
+    installed: bool | None = None
+    if status.get("kind") == "ollama":
+        want = cfg["model"]
+        names = [str(m.get("name", "")) for m in status.get("models", [])]
+        installed = any(n == want or n.startswith(want + ":") for n in names)
+    return {"config": cfg, "status": status, "model_installed": installed}
+
+
+@app.get("/api/ai/config")
+async def get_ai_config():
+    """Configuración vigente del LLM + estado real de Ollama (modelos y VRAM).
+
+    Responde siempre 200: si Ollama está caído, `status.reachable: false` con
+    el motivo, y la app sigue operativa con el motor determinista.
+    """
+    cfg = ai_config.get()
+    status = await ai_config.probe(cfg)
+    return _ai_envelope(cfg, status)
+
+
+@app.put("/api/ai/config")
+async def put_ai_config(patch: AiConfigPatch):
+    """Guarda la configuración del LLM (persistida en disco, aplica al instante).
+
+    Ollama recibe las opciones por request, así que no hace falta reiniciar
+    nada: el próximo informe o chat ya usa los valores nuevos.
+    """
+    try:
+        cfg = ai_config.update(patch.model_dump(exclude_none=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    status = await ai_config.probe(cfg)
+    return _ai_envelope(cfg, status)
+
+
+@app.post("/api/ai/test")
+async def test_ai_connection(patch: AiConfigPatch | None = None):
+    """Prueba de conexión real: sonda de estado + ping al modelo midiendo latencia.
+
+    Acepta (opcional) los valores del panel para probarlos ANTES de guardarlos.
+    """
+    override = patch.model_dump(exclude_none=True) if patch else {}
+    return await ai_config.test_connection(override)

@@ -96,14 +96,25 @@ def event_ids() -> Dict[str, Dict[str, Any]]:
 # Documentos indexados
 # ---------------------------------------------------------------------------
 def _tech_text(t: Dict[str, Any]) -> str:
+    """Texto indexado de una técnica.
+
+    Solo ~79 de las ~706 técnicas están curadas en español; el resto se quedan
+    con la descripción oficial en inglés, así que aquí se usa el español SOLO
+    cuando existe: indexar «Qué es:  | Cómo se detecta: » en vacío convertiría
+    la búsqueda semántica de las no curadas en ruido.
+    """
     eventos = ", ".join(t.get("eventos") or [])
     aliases = ", ".join(t.get("aliases") or [])
+    desc_es = str(t.get("descripcion_es") or "").strip()
+    se_detecta = str(t.get("se_detecta") or "").strip()
+    desc = desc_es or str(t.get("description") or "").strip()
     parts = [
         f"[TÉCNICA] {t.get('id')} {t.get('name')}",
         f"Táctica: {t.get('tactic_es')} ({t.get('tactic')})",
-        f"Qué es: {t.get('descripcion_es')}",
-        f"Cómo se detecta: {t.get('se_detecta')}",
+        f"Qué es: {desc}",
     ]
+    if se_detecta:
+        parts.append(f"Cómo se detecta: {se_detecta}")
     if eventos:
         parts.append(f"Event IDs relacionados: {eventos}")
     if aliases:
@@ -417,16 +428,116 @@ def build_reference(question: str, evidence: List[Dict[str, Any]]) -> Dict[str, 
 
 
 def _tech_view(t: Dict[str, Any]) -> Dict[str, Any]:
-    """Vista reducida y segura de una técnica para la API/UI."""
+    """Vista reducida y segura de una técnica para la API/UI.
+
+    `curated: true` = traducción/detección curadas a mano por el proyecto;
+    `false` = técnica completada desde la fuente oficial, en cuyo caso
+    `descripcion_es`/`se_detecta` vienen vacíos y hay que usar `description_en`.
+    """
     return {
         "id": t["id"],
         "name": t.get("name"),
         "tactic": t.get("tactic"),
         "tactic_es": t.get("tactic_es"),
         "url": t.get("url"),
-        "descripcion_es": t.get("descripcion_es"),
-        "se_detecta": t.get("se_detecta"),
+        "descripcion_es": t.get("descripcion_es") or "",
+        "se_detecta": t.get("se_detecta") or "",
         "eventos": t.get("eventos") or [],
         "aliases": t.get("aliases") or [],
+        "curated": bool(t.get("curated")),
         "description_en": (t.get("description") or "")[:240],
+    }
+
+
+def correlate(observed: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Correlación ATT&CK de los Event IDs realmente observados en el dataset.
+
+    Es un JOIN, no una inferencia: cada técnica que sale de aquí llega porque
+    un Event ID que **sí está** en tus registros lo referencia en el glosario
+    (`event_ids.json`), y se anota con los recuentos de esos registros. No hay
+    modelo, similitud ni umbral de por medio, así que por diseño no puede
+    sugerir nada no anclado a los datos; los Event_ID sin entrada en el
+    glosario se devuelven aparte (`unmapped`) en lugar de inventarles una
+    correlación.
+
+    `observed` lo aporta el llamador, calculado sobre el dataframe en memoria:
+    `[{"event_id", "count", "suspicious", "levels", "hosts", ...}]`.
+    """
+    _load()
+    table = event_ids()
+    techs = {t["id"]: t for t in techniques()}
+
+    # id referenciado → id vigente, para resolver los alias revocados por MITRE
+    # (el glosario cita T1562.001, que hoy vive como T1685).
+    canonical: Dict[str, str] = {}
+    for tid, t in techs.items():
+        canonical[tid] = tid
+        for alias in t.get("aliases") or []:
+            canonical[alias] = tid
+
+    stat_keys = ("count", "suspicious", "levels", "hosts", "first_seen", "last_seen")
+    event_entries: List[Dict[str, Any]] = []
+    unmapped: List[Dict[str, Any]] = []
+    by_tech: Dict[str, List[Dict[str, Any]]] = {}
+
+    for item in observed:
+        key = str(item.get("event_id") or "").strip()
+        entry = table.get(key)
+        if entry is None:
+            unmapped.append(item)
+            continue
+        event_entries.append({**entry, **{k: item.get(k) for k in stat_keys}})
+        for tid in entry.get("relacionados") or []:
+            cid = canonical.get(str(tid).strip())
+            if not cid:
+                continue      # apunta a una técnica que ya no existe: se omite
+            by_tech.setdefault(cid, []).append({
+                "event_id": key,
+                "count": int(item.get("count") or 0),
+                "suspicious": int(item.get("suspicious") or 0),
+            })
+
+    techniques_out: List[Dict[str, Any]] = []
+    for cid, matched in by_tech.items():
+        t = techs.get(cid)
+        if t is None:
+            continue
+        techniques_out.append({
+            **_tech_view(t),
+            "matched_events": matched,
+            "matched_rows": sum(m["count"] for m in matched),
+            "matched_suspicious": sum(m["suspicious"] for m in matched),
+        })
+    # Orden por riesgo observado (sospechosos → volumen → id), no alfabético:
+    # el panel es una cola de revisión, no un diccionario.
+    techniques_out.sort(
+        key=lambda t: (-t["matched_suspicious"], -t["matched_rows"], t["id"])
+    )
+
+    tactics: Dict[str, Dict[str, Any]] = {}
+    for t in techniques_out:
+        key = t.get("tactic") or "—"
+        bucket = tactics.setdefault(key, {
+            "id": key,
+            "name_es": t.get("tactic_es") or key,
+            "techniques": 0,
+            "rows": 0,
+            "suspicious": 0,
+            "ids": [],
+        })
+        bucket["techniques"] += 1
+        bucket["rows"] += t["matched_rows"]
+        bucket["suspicious"] += t["matched_suspicious"]
+        bucket["ids"].append(t["id"])
+    tactics_out = sorted(
+        tactics.values(), key=lambda b: (-b["suspicious"], -b["rows"], b["id"])
+    )
+
+    return {
+        "available": bool(techs and table),
+        "note": SOURCE_NOTE,
+        "event_ids": event_entries,
+        "unmapped": unmapped,
+        "techniques": techniques_out,
+        "tactics": tactics_out,
     }

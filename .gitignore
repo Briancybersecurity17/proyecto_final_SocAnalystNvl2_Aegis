@@ -20,6 +20,17 @@ backend/data/rag/
 # ----- Caché de la base de conocimiento (bundle STIX de MITRE, ~50 MB) -----
 backend/data/kb_cache/
 
+# ----- Configuración local de la IA (panel «Opciones IA», específica de la máquina) -----
+backend/data/ai_config.json
+
+# ----- Memoria de criterio aprendida (ejemplos few-shot, datos del analista) -----
+# Es el «cerebro aprendido» de la máquina: regenerable y específico de quien
+# la usa, igual que ai_config.json. Se puede vaciar desde el panel.
+backend/data/feedback.json
+
+# ----- Estado interno de las herramientas de agente -----
+.superpowers/
+
 # ----- OS / editor files -----
 .DS_Store
 Thumbs.db

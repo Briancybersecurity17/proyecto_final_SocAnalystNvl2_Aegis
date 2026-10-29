@@ -595,19 +595,10 @@ def build(force: bool = False) -> dict:
     entries: dict[str, dict] = {}
     missing = []
 
-    for tid, (desc_es, detecta, eventos) in CURATED.items():
-        canonical, aliases = _resolve(tid, revoked)
-        if canonical in entries:
-            # Dos curadurías cayeron sobre la misma técnica vigente → fusionar.
-            for alias in aliases + [tid]:
-                if alias not in entries[canonical]["aliases"]:
-                    entries[canonical]["aliases"].append(alias)
-            continue
-        obj = techniques.get(canonical)
-        if obj is None:
-            missing.append(tid)
-            continue
-
+    def _entry(canonical: str, aliases: list[str], desc_es: str, detecta: str,
+               eventos: list[str], curated: bool) -> dict:
+        """Entrada de KB para una técnica vigente (campo `kind` = «technique»)."""
+        obj = techniques[canonical]
         phases = [p for p in obj.get("kill_chain_phases", [])
                   if p.get("kill_chain_name") == "mitre-attack"]
         tactic_key = phases[0].get("phase_name", "") if phases else ""
@@ -615,7 +606,7 @@ def build(force: bool = False) -> dict:
             other_id for other_id in techniques
             if other_id.startswith(canonical + ".")
         })
-        entries[canonical] = {
+        return {
             "kind": "technique",
             "id": canonical,
             "name": obj.get("name", canonical),
@@ -626,12 +617,51 @@ def build(force: bool = False) -> dict:
             "descripcion_es": desc_es,
             "se_detecta": detecta,
             "eventos": eventos,
+            "curated": curated,
             "subtechniques": subs,
-            "aliases": aliases,   # IDs antiguos revocados por MITRE (p. ej. T1562)
+            # IDs antiguos revocados por MITRE (p. ej. T1562 → T1685); nunca el
+            # propio `canonical`, que ya encabeza la entrada.
+            "aliases": [a for a in aliases if a and a != canonical],
         }
+
+    def _merge_aliases(canonical: str, aliases: list[str]) -> None:
+        # `alias != canonical`: sin este filtro, técnicas no revocadas acaban
+        # listándose a sí mismas como alias propias (ruido en la UI y en el
+        # texto indexado, donde ya aparecen como `[TÉCNICA] T1685 …`).
+        for alias in aliases:
+            if alias and alias != canonical and alias not in entries[canonical]["aliases"]:
+                entries[canonical]["aliases"].append(alias)
+
+    for tid, (desc_es, detecta, eventos) in CURATED.items():
+        canonical, aliases = _resolve(tid, revoked)
+        if canonical in entries:
+            # Dos curadurías cayeron sobre la misma técnica vigente → fusionar.
+            _merge_aliases(canonical, aliases + [tid])
+            continue
+        if canonical not in techniques:
+            missing.append(tid)
+            continue
+        entries[canonical] = _entry(canonical, aliases, desc_es, detecta, eventos, True)
 
     if missing:
         print(f"[aviso] no encontradas en el bundle: {', '.join(missing)}")
+
+    # Cobertura completa de ATT&CK: además de la curaduría en español se vuelcan
+    # TODAS las técnicas vigentes del bundle (~620). Las no curadas quedan con
+    # `descripcion_es` y `se_detecta` vacíos y `curated: false`, de modo que la
+    # UI y el prompt del asistente usan en su lugar `description` (inglés, la
+    # fuente oficial): traducir ~540 técnicas a mano no es realista y una
+    # traducción automática distorsiona tecnicismos de detección.
+    expanded = 0
+    for tid in sorted(techniques):
+        canonical, aliases = _resolve(tid, revoked)
+        if canonical in entries:
+            _merge_aliases(canonical, aliases + [tid])
+            continue
+        if canonical not in techniques:
+            continue
+        entries[canonical] = _entry(canonical, aliases, "", "", [], False)
+        expanded += 1
 
     ordered = sorted(entries.values(), key=lambda e: e["id"])
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -639,8 +669,12 @@ def build(force: bool = False) -> dict:
         json.dumps(ordered, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     renamed = sum(1 for e in ordered if e["aliases"])
-    print(f"[ok] {len(ordered)} técnicas ({renamed} renumeradas por MITRE) -> {OUT_PATH}")
-    return {"written": len(ordered), "missing": missing}
+    curated = sum(1 for e in ordered if e.get("curated"))
+    print(f"[ok] {len(ordered)} técnicas ({curated} curadas en español, "
+          f"{expanded} completadas desde la fuente oficial, "
+          f"{renamed} renumeradas por MITRE) -> {OUT_PATH}")
+    return {"written": len(ordered), "curated": curated,
+            "expanded": expanded, "missing": missing}
 
 
 if __name__ == "__main__":
