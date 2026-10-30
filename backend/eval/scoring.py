@@ -2,10 +2,16 @@
 
 Toman lo esperado (calculado con pandas por cases.py) y la respuesta real del
 sistema, y devuelven el resultado. Sin I/O, sin red, sin LLM: se ejercitan
-instantáneamente con pytest (tests/test_eval_scoring.py).
+instantáneamente con pytest (tests/test_eval_scoring.py y
+tests/test_eval_report_scoring.py).
 
 La verdad calculable nunca viene de texto escrito a mano: estas funciones solo
 comparan, no juzgan prosa (spec §2: sin juez LLM).
+
+Las funciones de la categoría `report` (informe ejecutivo) detectan los
+mismos fallos que el validador de `ai_service` pero con una implementación
+INDEPENDIENTE a propósito: si ambos detectan lo mismo por caminos distintos,
+se cruzan y se corrigen; si solo lo detectara uno, la medida mintiría.
 """
 from __future__ import annotations
 
@@ -18,11 +24,14 @@ import unicodedata
 # pasaría desapercibido para el grounding.
 LOG_ID_RE = re.compile(r"\b[A-Za-z]{2,12}[-_]\d{2,}\b")
 
-# Números con formato español/inglés («1.234», «1,234», «1234»). El lookbehind/
-# lookahead de [\d.-] descarta lo pegado a un punto o a un guion: los trozos
-# de una IP («10.10.97.1») y los de una fecha («2026-01-10») — un «2026»
-# solto en una fecha NO es un conteo. Un «1234» sin separador también vale.
-_NUMBER_RE = re.compile(r"(?<![\d./-])\d+(?:[.,]\d{3})*(?![\d./-])")
+# Números con formato español/inglés («1.234», «1,234», «1234»). El lookbehind
+# de [\d./-] descarta lo pegado a un punto o a un guion: los trozos de una IP
+# («10.10.97.1») y los de una fecha («2026-01-10») — un «2026» solto en una
+# fecha NO es un conteo. El lookahead solo rechaza puntuación SEGUIDA de otro
+# dígito («10.10», «31/12»): el punto de cierre de frase («…nivel Bajo: 603.»)
+# sí cuenta, o cualquier cifra al final de oración sería invisible para
+# level_count_near y number_in_answer.
+_NUMBER_RE = re.compile(r"(?<![\d./-])\d+(?:[.,]\d{3})*(?!\d|[./-]\d)")
 
 # Negaciones fuertes: con cualquiera de estas la respuesta está negando algo.
 _DENIAL_MARKERS = (
@@ -161,3 +170,130 @@ def macro_average(per_category: dict[str, float]) -> float:
     if not per_category:
         return 0.0
     return round(sum(per_category.values()) / len(per_category), 2)
+
+
+# ---------------------------------------------------------------------------
+# Categoría `report` — scoring puro del informe ejecutivo (tarea 6)
+# ---------------------------------------------------------------------------
+# Pareja «Event ID … X»: el id justo tras las palabras clave. Con la forma
+# «Event IDs dominantes: 4625 (102)» no casa (tras «IDs» viene una palabra),
+# así que solo se evalúan afirmaciones reales de conteo por id.
+_EVENT_ID_PAIR_RE = re.compile(r"\bevent[\s_]*id[s]?\s*(\d{2,})\b")
+
+# Contrato estructural del informe: las 6 claves de `field_sources`. Son
+# nombres de campo, no cifras de datos, por eso se fijan aquí.
+REPORT_FIELDS = (
+    "executive_summary",
+    "methodology",
+    "findings",
+    "correlation",
+    "conclusions",
+    "action_plan",
+)
+
+
+def _level_pattern(label: str) -> str:
+    """«Crítico» → `\\bcritic[oa]s?\\b`: género y número libres («Alto»/«Alta»),
+    con frontera de palabra para no casar «criticismo» ni «alternativa»."""
+    word = _deacc(label)
+    stem = word[:-1] if word.endswith(("o", "a")) else word
+    return rf"\b{re.escape(stem)}[oa]s?\b"
+
+
+def level_count_near(text: str, label: str, count: int, window: int = _UNIT_WINDOW) -> bool:
+    r"""¿Aparece `count` pegado a una mención del nivel `label`?
+
+    Cubre «N … nivel Crítico» (la cifra antes de la etiqueta) y también
+    «nivel Crítico: N» / «Crítico: N», la forma del fallback determinista,
+    dentro de `window` chars.
+
+    Necesaria porque `number_in_answer(unidades=...)` no sirve para la
+    distribución: exige que el número sea el MÁS CERCANO de todo el texto a
+    la unidad y «nivel» aparece muchas veces en un informe. Aquí basta con
+    que LA cifra del nivel esté en la ventana de su mención.
+    """
+    body = _deacc(text)
+    numbers = list(_NUMBER_RE.finditer(body))
+    for label_match in re.finditer(_level_pattern(label), body):
+        for n in numbers:
+            antes = n.end() <= label_match.start() and label_match.start() - n.end() <= window
+            despues = n.start() >= label_match.end() and n.start() - label_match.end() <= window
+            if (antes or despues) and _number_value(n.group()) == count:
+                return True
+    return False
+
+
+def eventid_pairs_bad(text: str, counts: dict[str, int],
+                      window: int = _UNIT_WINDOW) -> list[str]:
+    r"""Parejas «N … Event ID X» cuya cifra no es el conteo real de X.
+
+    Segunda implementación INDEPENDIENTE de la regla B del validador de
+    `ai_service` (el eval la cruza con ella): para cada «Event ID X», la
+    cifra atribuida es la más cercana justo ANTES del id dentro de `window`
+    chars. Sin cifra adyacente no hay afirmación que evaluar («Event ID
+    conocidos de Windows Security» no declara un conteo), y los ids de OTRA
+    pareja («… Event ID 4625 y 111 de Event ID 4624») no valen como cifra.
+    X ausente del df también es motivo: su conteo no es verificable.
+    Devuelve motivos legibles; [] = todas las parejas cuadran.
+    """
+    body = _deacc(text)
+    id_matches = list(_EVENT_ID_PAIR_RE.finditer(body))
+    # Spans que son el X de una pareja: no cuentan como cifra atribuida.
+    etiquetas = {(m.start(1), m.end(1)) for m in id_matches}
+    numbers = list(_NUMBER_RE.finditer(body))
+    motivos: list[str] = []
+    for m in id_matches:
+        x = m.group(1)
+        pos = m.start(1)
+        previos = [n for n in numbers
+                   if n.end() <= pos and pos - n.end() <= window
+                   and (n.start(), n.end()) not in etiquetas]
+        if not previos:
+            continue  # sin cifra pegada: no es una afirmación de conteo
+        cifra = max(previos, key=lambda n: n.end())
+        valor = _number_value(cifra.group())
+        if x not in counts:
+            motivos.append(f"«{valor} … Event ID {x}»: el id no está en el df")
+        elif valor != int(counts[x]):
+            motivos.append(f"«{valor} … Event ID {x}» ≠ {int(counts[x])}")
+    return motivos
+
+
+def ip_cited(text: str, ips: list[str]) -> bool:
+    """¿El texto cita alguna de las IPs reales del df?"""
+    body = str(text or "")
+    return any(ip and str(ip) in body for ip in ips)
+
+
+def required_tokens(text: str, tokens: list[str]) -> list[str]:
+    """De `tokens`, los que NO aparecen en el texto (mayúsculas/tildes irrelevantes)."""
+    body = _deacc(text)
+    return [token for token in tokens if _deacc(token) not in body]
+
+
+def sentences_repeated(text: str) -> bool:
+    """¿Hay una frase de ≥5 palabras normalizada repetida ≥2 veces?
+
+    Normalización propia (minúsculas, sin puntuación, espacios colapsados):
+    una enumeración corta («Nivel crítico. Nivel crítico.») no es
+    redundancia. Implementación independiente de la regla D del validador.
+    """
+    counts: dict[str, int] = {}
+    for part in re.split(r"[.;!?\n]+", str(text or "")):
+        norm = " ".join(re.sub(r"[^\w\s]", " ", part.lower()).split())
+        if norm and len(norm.split()) >= 5:
+            counts[norm] = counts.get(norm, 0) + 1
+    return any(times >= 2 for times in counts.values())
+
+
+def field_sources_ok(payload: dict) -> bool:
+    """¿`field_sources` trae las 6 claves del contrato con valor «llm»/«local»?"""
+    if not isinstance(payload, dict):
+        return False
+    sources = payload.get("field_sources")
+    if not isinstance(sources, dict):
+        return False
+    return all(
+        isinstance(sources.get(campo), str) and sources[campo] in ("llm", "local")
+        for campo in REPORT_FIELDS
+    )

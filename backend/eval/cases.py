@@ -14,9 +14,18 @@ Categorías:
                retriever por sí mismo, sin la redacción del modelo por medio.
   evidence_qa— respuesta del sistema citando IDs → precision@k sobre los
                relevantes del dataset (preguntas anchas: más de 2*k relevantes).
+
+Además, `REPORT_CASES` (tarea 6): los 7 casos de la categoría `report` del
+informe ejecutivo. Su verdad sale de `report_truth(df)` — derivada SOLO del
+DataFrame con pandas — y sus `verifica` usan las funciones puras de
+`eval/scoring.py`, implementadas de forma INDEPENDIENTE del validador de
+`ai_service` para que ambos se crucen (spec §4: «el eval re-detecta los
+mismos fallos por otro camino»). Este módulo sigue sin importar FastAPI,
+Ollama ni ChromaDB.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -24,9 +33,14 @@ from typing import Any, Callable
 import pandas as pd
 
 try:
-    from backend.severity import normalize_level
+    from backend.severity import LEVEL_LABELS, LEVEL_ORDER, normalize_level
 except ImportError:  # pragma: no cover
-    from severity import normalize_level
+    from severity import LEVEL_LABELS, LEVEL_ORDER, normalize_level
+
+try:
+    from eval import scoring
+except ImportError:  # pragma: no cover – módulo suelto
+    from backend.eval import scoring
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample.xlsx"
 
@@ -123,4 +137,267 @@ CASES: list[Case] = [
          lambda df: _ids(df, df["User"].astype(str).eq(r"CORP\jlopez"))),
     Case("eq-ip-ext-34", "evidence_qa", "¿Qué hizo la IP externa 203.0.113.74?",
          lambda df: _ids(df, df["Source_IP"].astype(str).eq("203.0.113.74"))),
+]
+
+
+# ---------------------------------------------------------------------------
+# Informe ejecutivo: verdad derivada del df y los 7 casos `report` (tarea 6)
+# ---------------------------------------------------------------------------
+def _code_str(value: Any) -> str:
+    """«4625.0» → «4625» (celdas vacías dejan floats) y « 404 » → «404».
+
+    Misma SEMÁNTICA que el normalizador de Result de producción
+    (`ai_service._result_text`), reimplementada aquí a mano: eval no importa
+    al producto. La versión del test (`_resultados_txt`) es una tercera
+    implementación independiente que re-verifica este criterio.
+    """
+    text = str(value).strip()
+    if re.fullmatch(r"-?\d+\.0+", text):
+        return text.split(".", 1)[0]
+    return text
+
+
+def report_truth(df: pd.DataFrame) -> dict:
+    """Verdad del informe derivada ÚNICAMENTE del DataFrame (cero cifras a mano).
+
+    - `level_counts`: `Severity` normalizado con `severity.normalize_level`,
+      el módulo NEUTRO (solo stdlib, sin FastAPI/Ollama/ChromaDB) que el
+      propio backend re-exporta desde `main.normalize_level` — el eval y el
+      producto comparten el MISMO mapping, no un duplicado desincronizable.
+    - `event_id_counts`: `value_counts()` COMPLETO de `Event_ID` (la regla de
+      atribución puede citar cualquier id, no solo un top-N).
+    - `http_codes`/`http_levels`: valores del campo `Result` que casan el
+      patrón de código HTTP 4xx/5xx (`[45]\\d{2}`) — el patrón se deriva de
+      los datos, nunca ids escritos a mano — y sus niveles reales por fila.
+    - `ips`: `Source_IP` con sus conteos; `dataset_ids`: Log_ID para el
+      grounding; `rows`, `levels_present` y `highest` (primer nivel del enum
+      con conteo > 0, el mismo criterio que el riesgo global del backend).
+    """
+    levels = df["Severity"].map(normalize_level)
+    level_counts = {lvl: int(levels.eq(lvl).sum()) for lvl in LEVEL_ORDER}
+    levels_present = [lvl for lvl in LEVEL_ORDER if level_counts[lvl] > 0]
+
+    event_id_counts = {
+        str(key): int(count)
+        for key, count in df["Event_ID"].map(_code_str).value_counts().items()
+    }
+
+    resultados = df["Result"].map(_code_str)
+    http_codes: dict[str, int] = {}
+    http_levels: dict[str, dict[str, int]] = {}
+    for raw, count in resultados.value_counts().items():
+        code = str(raw)
+        if not re.fullmatch(r"[45]\d{2}", code):
+            continue
+        sub = levels[resultados == code]
+        http_codes[code] = int(count)
+        http_levels[code] = {
+            lvl: int(sub.eq(lvl).sum()) for lvl in LEVEL_ORDER
+            if int(sub.eq(lvl).sum()) > 0
+        }
+
+    ips = {
+        str(key): int(count)
+        for key, count in df["Source_IP"].dropna().astype(str).value_counts().items()
+    }
+
+    return {
+        "rows": int(len(df)),
+        "level_counts": level_counts,
+        "levels_present": levels_present,
+        "highest": levels_present[0] if levels_present else None,
+        "event_id_counts": event_id_counts,
+        "http_codes": http_codes,
+        "http_levels": http_levels,
+        "ips": ips,
+        "dataset_ids": set(df["Log_ID"].astype(str)),
+    }
+
+
+@dataclass(frozen=True)
+class ReportCase:
+    id: str
+    descripcion: str
+    verifica: Callable[[dict, pd.DataFrame], bool]  # payload del informe + df
+    cubre: str  # problema #1..#6 de la nota del ciclo («—» = contrato)
+
+
+# Los 4 campos de prosa del informe (los demás los genera el sistema).
+_PROSE_FIELDS = ("executive_summary", "methodology", "correlation", "conclusions")
+
+
+def _narrativa(payload: dict) -> str:
+    """Texto de los 4 campos de prosa concatenado, para escanear parejas y IDs."""
+    return " ".join(str(payload.get(campo) or "") for campo in _PROSE_FIELDS)
+
+
+def _verificar_distribucion(payload: dict, df: pd.DataFrame) -> bool:
+    """#3: executive_summary con el total de registros y TODOS los niveles
+    presentes nombrados con su conteo real (omisión del LLM sin distribución)."""
+    truth = report_truth(df)
+    text = str(payload.get("executive_summary") or "")
+    if not scoring.number_in_answer(text, truth["rows"], "registros"):
+        return False
+    return all(
+        scoring.level_count_near(text, LEVEL_LABELS[lvl], truth["level_counts"][lvl])
+        for lvl in truth["levels_present"]
+    )
+
+
+def _verificar_atribucion(payload: dict, df: pd.DataFrame) -> bool:
+    """#1: cero parejas «N … Event ID X» con N ≠ conteo real del df (o id
+    ausente) — el 97→4625, detectado con `eventid_pairs_bad` (implementación
+    propia, independiente de la regla B del validador)."""
+    truth = report_truth(df)
+    return not scoring.eventid_pairs_bad(_narrativa(payload), truth["event_id_counts"])
+
+
+def _verificar_conclusiones(payload: dict, df: pd.DataFrame) -> bool:
+    """#6: conclusions con etiqueta de riesgo, total de registros y
+    distribución completa — ni prosa sin cifras."""
+    truth = report_truth(df)
+    text = str(payload.get("conclusions") or "")
+    if truth["highest"] and scoring.required_tokens(
+            text, [LEVEL_LABELS[truth["highest"]]]):
+        return False
+    if truth["rows"] and not scoring.number_in_answer(text, truth["rows"], "registros"):
+        return False
+    return all(
+        scoring.level_count_near(text, LEVEL_LABELS[lvl], truth["level_counts"][lvl])
+        for lvl in truth["levels_present"]
+    )
+
+
+def _verificar_correlation(payload: dict, df: pd.DataFrame) -> bool:
+    """#3: correlation con al menos UNA IP que exista en el df (el LLM que
+    redacta correlation sin una sola IP cae aquí)."""
+    truth = report_truth(df)
+    if not truth["ips"]:
+        return True  # sin IPs en el archivo no hay nada que exigir
+    return scoring.ip_cited(str(payload.get("correlation") or ""), list(truth["ips"]))
+
+
+def _verificar_hallazgos(payload: dict, df: pd.DataFrame) -> bool:
+    """#2, #4 y #5: findings con ids `H-##` únicos, títulos sin repetir,
+    niveles del enum y — si el tema del hallazgo es un código HTTP que existe
+    en `Result` — el nivel que esas filas HTTP realmente tienen (según
+    `normalize_level`, derivado del df: «HTTP como bajo» cuando las filas son
+    críticas cae aquí)."""
+    truth = report_truth(df)
+    findings = payload.get("findings")
+    if not isinstance(findings, list) or not findings:
+        return False
+    ids: list[str] = []
+    titulos: list[str] = []
+    for hallazgo in findings:
+        if not isinstance(hallazgo, dict):
+            return False
+        fid = str(hallazgo.get("id") or "")
+        if not re.fullmatch(r"H-\d{2}", fid):
+            return False
+        ids.append(fid)
+        titulo = " ".join(str(hallazgo.get("title") or "").split()).lower()
+        if not titulo:
+            return False
+        titulos.append(titulo)
+        if hallazgo.get("level") not in LEVEL_ORDER:
+            return False
+        # Tema HTTP: algún código 4xx/5xx del campo Result citado en el
+        # hallazgo. Un id tipo «4624» no está en http_codes, así que los
+        # Event ID de Windows no disparan esta comprobación por accidente.
+        texto = " ".join([
+            str(hallazgo.get("title") or ""),
+            str(hallazgo.get("explanation") or ""),
+            str(hallazgo.get("evidence") or ""),
+        ])
+        codigos = {tok for tok in re.findall(r"\b[45]\d{2}\b", texto)
+                   if tok in truth["http_codes"]}
+        if codigos:
+            niveles_http = set().union(
+                *[set(truth["http_levels"].get(c, ())) for c in codigos])
+            if niveles_http and hallazgo.get("level") not in niveles_http:
+                return False
+    if len(set(ids)) != len(ids) or len(set(titulos)) != len(titulos):
+        return False
+    return True
+
+
+def _verificar_grounding(payload: dict, df: pd.DataFrame) -> bool:
+    """#5: cero Log_ID inventados en la narrativa y en las evidencias de los
+    findings (`invented_ids` = ∅ sobre el set de Log_ID del df)."""
+    truth = report_truth(df)
+    partes = [_narrativa(payload)]
+    findings = payload.get("findings")
+    if isinstance(findings, list):
+        for hallazgo in findings:
+            if not isinstance(hallazgo, dict):
+                continue
+            partes.append(str(hallazgo.get("title") or ""))
+            partes.append(str(hallazgo.get("explanation") or ""))
+            for item in hallazgo.get("evidence") or []:
+                if isinstance(item, dict):
+                    partes.append(str(item.get("log_id") or ""))
+                else:
+                    partes.append(str(item))
+    cited = scoring.cited_ids(" ".join(partes))
+    return not scoring.invented_ids(cited, truth["dataset_ids"])
+
+
+def _verificar_field_sources(payload: dict, df: pd.DataFrame) -> bool:
+    """Contrato: las 6 claves de `field_sources` con valor «llm»/«local».
+
+    No deriva nada del df — es el registro de procedencia de cada campo.
+    """
+    return scoring.field_sources_ok(payload)
+
+
+REPORT_CASES: list[ReportCase] = [
+    ReportCase(
+        id="rep-distribucion",
+        descripcion="executive_summary con total de registros y distribución "
+                    "completa de niveles con sus conteos reales",
+        verifica=_verificar_distribucion,
+        cubre="#3",
+    ),
+    ReportCase(
+        id="rep-atribucion-eventid",
+        descripcion="toda pareja «N … Event ID X» del texto con N igual al "
+                    "conteo global real de X en el df",
+        verifica=_verificar_atribucion,
+        cubre="#1",
+    ),
+    ReportCase(
+        id="rep-conclusiones-cifras",
+        descripcion="conclusions con etiqueta de riesgo, total de registros y "
+                    "distribución completa",
+        verifica=_verificar_conclusiones,
+        cubre="#6",
+    ),
+    ReportCase(
+        id="rep-correlation-ip",
+        descripcion="correlation con al menos una IP que exista en el df",
+        verifica=_verificar_correlation,
+        cubre="#3",
+    ),
+    ReportCase(
+        id="rep-hallazgos-estructura",
+        descripcion="findings con ids H-## únicos, títulos únicos, niveles del "
+                    "enum y hallazgo HTTP con el nivel real de sus filas",
+        verifica=_verificar_hallazgos,
+        cubre="#2, #4, #5",
+    ),
+    ReportCase(
+        id="rep-grounding-ids",
+        descripcion="cero Log_ID inventados en la narrativa ni en las "
+                    "evidencias de los findings",
+        verifica=_verificar_grounding,
+        cubre="#5",
+    ),
+    ReportCase(
+        id="rep-field-sources",
+        descripcion="las 6 claves de field_sources presentes con valor «llm» "
+                    "o «local»",
+        verifica=_verificar_field_sources,
+        cubre="—",
+    ),
 ]
