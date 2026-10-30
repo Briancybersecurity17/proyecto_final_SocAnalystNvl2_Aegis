@@ -482,6 +482,63 @@ def _clean_json(text: str) -> Optional[Dict[str, Any]]:
     return data if isinstance(data, dict) else None
 
 
+# Presupuesto de generación SOLO para la llamada del informe: los demás usos
+# de num_predict no se tocan. El informe es largo: con el tope del chat (512)
+# el JSON llegaba truncado y se descartaba. Contingencia documentada, no
+# activa: si en la corrida de aceptación el JSON llega truncado, subir a 12288.
+_REPORT_NUM_PREDICT = 1600
+
+# User prompt endurecido en 4 bloques, alineado con las reglas A–D del
+# validador (bloque 2 = regla C campo a campo; bloque 3 = reglas A/B/D y
+# honestidad de la fuente). Solo pide los 4 campos de prosa: findings y
+# action_plan los genera el sistema.
+_REPORT_USER_PROMPT = (
+    "Redacta la prosa del informe técnico a partir de estos datos calculados.\n"
+    "Responde SOLO con JSON válido con exactamente estas 4 claves (cada valor, string):\n"
+    '  "executive_summary": string,\n'
+    '  "methodology": string,\n'
+    '  "correlation": string,\n'
+    '  "conclusions": string\n'
+    "\n"
+    "1) ALCANCE. Redactas únicamente executive_summary, methodology, correlation y "
+    "conclusions. Los hallazgos (findings) y el plan de acción (action_plan) los "
+    "genera el sistema: NO los emitas, no emitas ningún campo «id» ni ninguna otra "
+    "clave fuera de las 4 pedidas.\n"
+    "\n"
+    "2) ESTRUCTURA POR CAMPO (lo exige el validador; complételo campo a campo):\n"
+    "  - executive_summary: los «N registros» del total EN LA MISMA FRASE, la "
+    "etiqueta de riesgo del ctx tal como aparece en DATOS, la distribución "
+    "completa de niveles (cada nivel con count > 0 nombrado de forma concreta con "
+    "«nivel» + su nombre, sin repetir frases) y el total de eventos sospechosos.\n"
+    "  - methodology: pasos numerados que cubran la importación del archivo, la "
+    "clasificación por severidad y las reglas de sospecha, citando al menos una "
+    "clave original de severity_mapping tal como aparece en DATOS (su valor "
+    "«raw» literal, sin traducir).\n"
+    "  - correlation: la PRIMERA IP de suspicious_by_ip con SU conteo de eventos, "
+    "tal como figura en DATOS.\n"
+    "  - conclusions: etiqueta de riesgo, total de registros, distribución completa "
+    "de niveles y la reproducibilidad (todo procede de los datos importados; nada "
+    "externo a ellos).\n"
+    "\n"
+    "3) REGLAS DURAS:\n"
+    "  - Todo número sale de los DATOS tal cual: prohibido recalcular, aproximar o "
+    "reasignar una cifra a otro sustantivo (LO PROHIBIDO), con el ejemplo literal "
+    "(«97» es una cifra arbitraria): «97 registros de Event ID 4625» — el total de "
+    "registros pegado al Event ID 4625.\n"
+    "  - «N de Event ID X» solo si N es exactamente event_id_counts[X].\n"
+    "  - Sin frases repetidas: ninguna frase de 5 palabras o más aparece dos veces.\n"
+    "  - Sin inventar tooling: es un archivo importado, no un SIEM en vivo; no "
+    "menciones consultas, agentes ni consolas que no consten en DATOS.\n"
+    "  - Español formal y verificable; si un dato no está en DATOS, no lo "
+    "menciones ni lo infieras.\n"
+    "\n"
+    "4) FORMATO: SOLO JSON válido, exactamente las 4 claves anteriores, sin "
+    "markdown y sin texto adicional.\n"
+    "\n"
+    "DATOS:\n"
+)
+
+
 async def _remote_narrative(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """LLM para el informe. Devuelve None si está apagado o falla."""
     cfg = ai_config.get()
@@ -492,21 +549,8 @@ async def _remote_narrative(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         {"role": "system", "content": SYSTEM_PROMPT},
         {
             "role": "user",
-            "content": (
-                "Redacta el informe técnico a partir de estos datos calculados.\n"
-                "Responde SOLO con JSON válido con exactamente estas claves:\n"
-                '  "executive_summary": string,\n'
-                '  "methodology": string,\n'
-                '  "correlation": string,\n'
-                '  "conclusions": string,\n'
-                '  "findings": [ {"id": string, "title": string, '
-                '"level": "critico|alto|medio|bajo", "explanation": string} ],\n'
-                '  "action_plan": [ {"priority": "P1|P2|P3|P4", '
-                '"action": string, "rationale": string} ]\n'
-                "Los findings NO llevan evidencias (se añaden luego desde los "
-                "registros). No inventes datos.\n\nDATOS:\n"
-                + json.dumps(ctx, ensure_ascii=False, default=str)
-            ),
+            "content": _REPORT_USER_PROMPT
+            + json.dumps(ctx, ensure_ascii=False, default=str),
         },
     ]
 
@@ -514,14 +558,16 @@ async def _remote_narrative(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         messages,
         temperature=0.2,
         # El informe es largo: con el tope del chat (512) el JSON llega
-        # truncado y se descarta. Para SOLO esta llamada se levantan los
-        # topes (sin mutar lo guardado en el panel); -1 = sin límite.
+        # truncado y se descarta. Para SOLO esta llamada se aplica el suelo
+        # _REPORT_NUM_PREDICT (sin mutar lo guardado en el panel); -1 =
+        # sin límite.
         cfg={
             **cfg,
             "num_ctx": max(cfg["num_ctx"], 8192),
         },
         num_predict=(
-            -1 if cfg["num_predict"] == -1 else max(cfg["num_predict"], 3072)
+            -1 if cfg["num_predict"] == -1
+            else max(cfg["num_predict"], _REPORT_NUM_PREDICT)
         ),
     )
     if not text:
