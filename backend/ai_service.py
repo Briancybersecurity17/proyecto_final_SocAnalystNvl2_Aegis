@@ -591,6 +591,139 @@ def _merge(fallback: Dict[str, Any], remote: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Validación de la narrativa remota (reglas A y D)
+# ---------------------------------------------------------------------------
+# Reglas puras (sin red) que el validador del informe (tarea 5) compondrá:
+# cada una devuelve una lista de motivos legibles de rechazo; [] = pasa.
+
+_NUM_RE = re.compile(r"(?<![\w.\-/])(\d{1,3}(?:[.,]\d{3})+|\d+)(?:\s*%|\b)(?![\w-])")
+# Un punto seguido de dígito o una barra JUSTO DESPUÉS del número marcan una
+# IP o una fecha («10.10.2.15», «31/12/2025»); el lookaround de _NUM_RE ya
+# bloquea lo pegado a la izquierda y los guiones a la derecha («2026-01-10»).
+# El punto de cierre de frase («…Event ID 4625.») no lleva dígito tras el
+# punto, así que esos números sí cuentan.
+_PART_RE = re.compile(r"\.(?=\d)|/")
+# Literales de porcentaje con coma o punto decimal («33,6 %», «33.6%»).
+_PCT_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*%")
+_PCT_TOL = 0.1
+
+
+def _parse_number(raw: str) -> float:
+    """«1.234» / «1,234» / «1234» → 1234.0 (el separador siempre es de miles)."""
+    cleaned = raw.replace(".", "").replace(",", "") if len(raw) > 3 else raw
+    return float(cleaned)
+
+
+def _numbers(text: str) -> List[Tuple[str, float]]:
+    """Todas las apariciones de números: (texto crudo, valor float).
+
+    El lookaround descarta lo pegado a punto/guion/barra (IPs, fechas), igual
+    que `scoring.number_in_answer`; _PART_RE cubre el resto del lado derecho.
+    """
+    found: List[Tuple[str, float]] = []
+    for m in _NUM_RE.finditer(text):
+        if _PART_RE.match(text, m.end()):
+            continue  # octeto de IP o parte de fecha, no una cifra suelta
+        raw = m.group(1)
+        found.append((raw, _parse_number(raw)))
+    return found
+
+
+def _anchors(ctx: Any) -> set[float]:
+    """Cifras anclables del contexto: barrido recursivo (dicts/listas/scalars).
+
+    Se anclan todos los enteros de conteos y los strings ENTERAMENTE
+    numéricos (Event_ID «4625», código HTTP «404»). Las IP («10.10.2.15») no
+    casan con \\d+ y sus octetos no se anclan.
+    """
+    found: set[float] = set()
+    if isinstance(ctx, dict):
+        for key, value in ctx.items():
+            # Las claves también cuentan: códigos HTTP y Event_ID viven como
+            # claves de conteo («404»: 30, «4625»: 4).
+            if isinstance(key, str) and re.fullmatch(r"\d+", key.strip()):
+                found.add(float(key))
+            found |= _anchors(value)
+    elif isinstance(ctx, (list, tuple, set)):
+        for value in ctx:
+            found |= _anchors(value)
+    elif isinstance(ctx, bool):
+        pass  # bool es int en Python: True/False no son cifras del informe
+    elif isinstance(ctx, int):
+        found.add(float(ctx))
+    elif isinstance(ctx, str) and re.fullmatch(r"\d+", ctx.strip()):
+        found.add(float(ctx))
+    return found
+
+
+def _percentages(ctx: Any) -> List[float]:
+    """Porcentajes derivables del contexto (comparar con tolerancia ±0,1).
+
+    Incluye `level_counts[l]/rows*100`, `suspicious_events/rows*100` y
+    cualquier `percentage` ya presente en el ctx (p. ej. risk_levels).
+    """
+    found: List[float] = []
+    if isinstance(ctx, dict):
+        rows = ctx.get("rows")
+        if isinstance(rows, (int, float)) and not isinstance(rows, bool) and rows:
+            for count in (ctx.get("level_counts") or {}).values():
+                if isinstance(count, (int, float)) and not isinstance(count, bool):
+                    found.append(count / rows * 100)
+            susp = ctx.get("suspicious_events")
+            if isinstance(susp, (int, float)) and not isinstance(susp, bool):
+                found.append(susp / rows * 100)
+        for key, value in ctx.items():
+            if key == "percentage" and isinstance(value, (int, float)) and not isinstance(value, bool):
+                found.append(float(value))
+            else:
+                found.extend(_percentages(value))
+    elif isinstance(ctx, (list, tuple)):
+        for value in ctx:
+            found.extend(_percentages(value))
+    return found
+
+
+def _rule_anchor(text: str, ctx: dict) -> List[str]:
+    """Regla A: cada cifra del texto debe estar anclada al contexto.
+
+    Un número seguido de % se contrasta con `_percentages` (±0,1); el resto
+    son enteros y deben estar en `_anchors`. Los porcentajes con coma decimal
+    («33,6 %») también son válidos: el literal del % se parsea completo y se
+    retira del texto antes de revisar enteros (así «33» de «33,6» no se
+    exige como ancla suelta).
+    """
+    reasons: List[str] = []
+    pcts = _percentages(ctx)
+    for m in _PCT_RE.finditer(text):
+        value = float(m.group(1).replace(",", "."))
+        if not any(abs(value - p) <= _PCT_TOL for p in pcts):
+            reasons.append(f"porcentaje {m.group(1)}% sin ancla")
+    anchors = _anchors(ctx)
+    for raw, value in _numbers(_PCT_RE.sub(" ", text)):
+        if value not in anchors:
+            reasons.append(f"número {raw} sin ancla")
+    return reasons
+
+
+def _rule_redundancy(text: str) -> List[str]:
+    """Regla D: una frase normalizada repetida ≥2 veces con ≥5 palabras.
+
+    Frases cortas (<5 palabras) no cuentan: una enumeración («Nivel crítico.»
+    repetido) no es redundancia. El motivo cita la frase tal como se compara.
+    """
+    counts: Dict[str, int] = {}
+    for part in re.split(r"[.;\n]+", text):
+        norm = " ".join(re.sub(r"[^\w\s]", " ", part.lower()).split())
+        if norm:
+            counts[norm] = counts.get(norm, 0) + 1
+    return [
+        f"frase repetida: «{norm}»"
+        for norm, times in counts.items()
+        if times >= 2 and len(norm.split()) >= 5
+    ]
+
+
+# ---------------------------------------------------------------------------
 # API pública
 # ---------------------------------------------------------------------------
 async def generate_report_narrative(summary: Dict[str, Any]) -> Dict[str, Any]:
