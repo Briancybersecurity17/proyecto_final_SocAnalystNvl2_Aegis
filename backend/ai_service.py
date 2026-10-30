@@ -591,7 +591,7 @@ def _merge(fallback: Dict[str, Any], remote: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Validación de la narrativa remota (reglas A y D)
+# Validación de la narrativa remota (reglas A–D)
 # ---------------------------------------------------------------------------
 # Reglas puras (sin red) que el validador del informe (tarea 5) compondrá:
 # cada una devuelve una lista de motivos legibles de rechazo; [] = pasa.
@@ -614,19 +614,24 @@ def _parse_number(raw: str) -> float:
     return float(cleaned)
 
 
-def _numbers(text: str) -> List[Tuple[str, float]]:
-    """Todas las apariciones de números: (texto crudo, valor float).
+def _number_spans(text: str) -> List[Tuple[int, str, float]]:
+    """(posición, texto crudo, valor) de cada número real del texto.
 
     El lookaround descarta lo pegado a punto/guion/barra (IPs, fechas), igual
     que `scoring.number_in_answer`; _PART_RE cubre el resto del lado derecho.
     """
-    found: List[Tuple[str, float]] = []
+    found: List[Tuple[int, str, float]] = []
     for m in _NUM_RE.finditer(text):
         if _PART_RE.match(text, m.end()):
             continue  # octeto de IP o parte de fecha, no una cifra suelta
         raw = m.group(1)
-        found.append((raw, _parse_number(raw)))
+        found.append((m.start(1), raw, _parse_number(raw)))
     return found
+
+
+def _numbers(text: str) -> List[Tuple[str, float]]:
+    """Todas las apariciones de números: (texto crudo, valor float)."""
+    return [(raw, value) for _pos, raw, value in _number_spans(text)]
 
 
 def _anchors(ctx: Any) -> set[float]:
@@ -721,6 +726,236 @@ def _rule_redundancy(text: str) -> List[str]:
         for norm, times in counts.items()
         if times >= 2 and len(norm.split()) >= 5
     ]
+
+
+# --- Regla B: atribución número ↔ etiqueta --------------------------------
+# Ventana de atribución: la etiqueta debe caer a ≤40 chars tras el número.
+_WINDOW = 40
+# Minúsculas sin tildes PRESERVANDO posiciones (las ventanas se miden sobre
+# el texto original); a diferencia de `_norm_text` (NFD), la tabla es 1:1.
+_DEACC_TABLE = str.maketrans("áéíóúüñ", "aeiouun")
+
+_EVENT_ID_RE = re.compile(r"event[\s_]+id\s+(\d+)")
+_SUSPICIOUS_RE = re.compile(r"sospechos[oa]s?")
+# \b inicial evita que «terror» suene a «error»; «http» va pegado a la palabra.
+_ERRORS_RE = re.compile(r"\berror(?:es)?\s*(?:http\b)?")
+# Códigos HTTP 4xx/5xx citados como palabra («404», «500»).
+_HTTP_CODE_RE = re.compile(r"\b[45]\d{2}\b")
+
+
+def _norm_pos(text: str) -> str:
+    """Minúsculas y sin tildes, con las posiciones intactas (para ventanas)."""
+    return (text or "").lower().translate(_DEACC_TABLE)
+
+
+def _label_matches(norm: str) -> List[Tuple[int, str]]:
+    """(posición, etiqueta_canónica) de cada etiqueta atribuible del texto.
+
+    Etiquetas: `event_id:X`, `nivel:L`, `sospechosos`, `errores http` y
+    `codigo:C`. Los patrones de nivel son los de `_LEVEL_PATTERNS` (definido
+    más abajo, en el bloque de chat: se resuelven en tiempo de ejecución).
+    """
+    found: List[Tuple[int, str]] = []
+    for m in _EVENT_ID_RE.finditer(norm):
+        found.append((m.start(), f"event_id:{m.group(1)}"))
+    for lvl in LEVEL_ORDER:
+        for m in re.finditer(rf"nivel\s+({_LEVEL_PATTERNS[lvl]})", norm):
+            found.append((m.start(), f"nivel:{lvl}"))
+    for m in _SUSPICIOUS_RE.finditer(norm):
+        found.append((m.start(), "sospechosos"))
+    for m in _ERRORS_RE.finditer(norm):
+        found.append((m.start(), "errores http"))
+    for m in _HTTP_CODE_RE.finditer(norm):
+        found.append((m.start(), f"codigo:{m.group()}"))
+    return found
+
+
+def _pairs(text: str) -> List[Tuple[float, str]]:
+    """(número, etiqueta) con etiqueta en ventana ≤40 chars tras el número.
+
+    Los literales de % se retiran primero (igual que en la regla A): «33,9 %
+    del nivel crítico» no es una atribución del 33 ni del 9 al nivel. Si dos
+    números compiten por la misma etiqueta, queda el más cercano (criterio de
+    `number_in_answer` con unidades); un número que YA es un código HTTP no
+    reclama otro código («los códigos 404 y 500» enumera, no atribuye).
+    """
+    norm = _PCT_RE.sub(" ", _norm_pos(text))
+    labels = _label_matches(norm)
+    best: Dict[int, Tuple[int, float, str]] = {}  # por posición de etiqueta
+    for pos, raw, value in _number_spans(norm):
+        for lpos, tag in labels:
+            dist = lpos - (pos + len(raw))
+            if not 0 <= dist <= _WINDOW:
+                continue
+            if tag.startswith("codigo:") and re.fullmatch(r"[45]\d{2}", raw):
+                continue  # «404 y 500» son los códigos, no la cifra atribuida
+            if lpos not in best or dist < best[lpos][0]:
+                best[lpos] = (dist, value, tag)
+    return [
+        (best[lpos][1], best[lpos][2]) for lpos in sorted(best)
+    ]
+
+
+def _num(value: Any) -> str:
+    """Cifra legible en los motivos: 97.0 → «97», 33.9 → «33,9»."""
+    number = float(value)
+    return str(int(number)) if number == int(number) else f"{number:.1f}".replace(".", ",")
+
+
+def _http_errors(ctx: dict) -> dict:
+    """Bloque de errores HTTP: el brief lo llama `http_errors` y el ctx real
+    `result_errors` (mismas claves total/codes); se aceptan los dos nombres."""
+    return ctx.get("http_errors") or ctx.get("result_errors") or {}
+
+
+def _rule_attribution(text: str, ctx: dict) -> List[str]:
+    """Regla B: la cifra pegada a una etiqueta debe ser la de su fuente.
+
+    Cada pareja de `_pairs` se resuelve contra el ctx: `event_id_counts`,
+    `level_counts`, `suspicious_events` y `http_errors`/`result_errors`. Un
+    Event ID citado pero ausente del top-20 (o un ctx sin el dict) también
+    motiva rechazo: la cifra no es verificable.
+    """
+    reasons: List[str] = []
+    event_counts = ctx.get("event_id_counts")
+    for value, tag in _pairs(text):
+        kind, _, arg = tag.partition(":")
+        if kind == "event_id":
+            label = f"Event ID {arg}"
+            if not isinstance(event_counts, dict):
+                reasons.append(
+                    f"«{_num(value)} … {label}» sin event_id_counts en el contexto"
+                )
+                continue
+            if arg not in event_counts:
+                reasons.append(f"«{_num(value)} … {label}» sin dato en el contexto")
+                continue
+            truth: Any = event_counts[arg]
+        elif kind == "nivel":
+            label = f"nivel {LEVEL_LABELS.get(arg, arg).lower()}"
+            truth = (ctx.get("level_counts") or {}).get(arg, 0)
+        elif kind == "codigo":
+            label = arg
+            truth = (_http_errors(ctx).get("codes") or {}).get(arg, 0)
+        elif tag == "errores http":
+            label = tag
+            truth = _http_errors(ctx).get("total") or 0
+        else:  # sospechosos
+            label = tag
+            truth = ctx.get("suspicious_events") or 0
+        if value != truth:
+            reasons.append(f"«{_num(value)} … {label}» ≠ {_num(truth)}")
+    return reasons
+
+
+# --- Regla C: contenido obligatorio por campo -----------------------------
+# Marcadores de paso de la metodología, en 3 grupos: importación del archivo,
+# clasificación por severidad y aplicación de reglas de sospecha.
+_METHOD_MARKERS = (
+    r"importaci|archivo|excel",
+    r"severidad|nivel|clasific",
+    r"sospech|regla",
+)
+
+
+def _mentions_level(norm: str, lvl: str) -> bool:
+    """¿El texto nombra el nivel CONCRETO («nivel crítico»), no un pronombre?
+
+    Comparte el patrón con `_label_matches`: «…clasificados en este nivel»
+    no menciona nivel alguno y no cuenta como distribución presentada.
+    """
+    return re.search(rf"nivel\s+({_LEVEL_PATTERNS[lvl]})", norm) is not None
+
+
+def _has_number(text: str, value: Any) -> bool:
+    """¿Aparece `value` como número real del texto (sin IPs, fechas ni %)?"""
+    try:
+        target = float(value)
+    except (TypeError, ValueError):
+        return False
+    return any(number == target for _raw, number in _numbers(_PCT_RE.sub(" ", text)))
+
+
+def _rule_required(field: str, text: str, ctx: dict) -> List[str]:
+    """Regla C: contenido obligatorio por campo, derivado SOLO del ctx.
+
+    Solo se exige lo que los datos permiten: niveles con count>0, una IP de
+    `suspicious_by_ip` con SU conteo, claves de `severity_mapping` solo si el
+    mapping no está vacío. Campos sin regla (findings, action_plan) pasan.
+    """
+    norm = _norm_pos(text)
+    reasons: List[str] = []
+    rows = ctx.get("rows")
+    risk = str(ctx.get("risk", "") or "")
+    levels = ctx.get("level_counts") or {}
+    suspicious = ctx.get("suspicious_events") or 0
+
+    def risk_label_present() -> bool:
+        # El patrón completo de _LEVEL_PATTERNS con \b cubre
+        # crítico/críticos/crítica y no casa «alt…» de «alternativa».
+        if not risk:
+            return False
+        pattern = _LEVEL_PATTERNS.get(risk) or re.escape(risk)
+        return re.search(rf"\b{pattern}\b", norm) is not None
+
+    def missing_levels() -> List[str]:
+        return [
+            f"falta nivel {LEVEL_LABELS.get(lvl, lvl).lower()} de la distribución"
+            for lvl in LEVEL_ORDER
+            if int(levels.get(lvl, 0) or 0) > 0 and not _mentions_level(norm, lvl)
+        ]
+
+    if field == "executive_summary":
+        if rows and not any(
+            _has_number(sentence, rows) and re.search(r"\bregistros?\b", sentence)
+            for sentence in re.split(r"[.;!?\n]+", text)
+        ):
+            reasons.append(f"falta «{_num(rows)} registros» en la misma frase")
+        if not risk_label_present():
+            reasons.append(
+                f"falta etiqueta de riesgo «{LEVEL_LABELS.get(risk, risk)}»"
+            )
+        reasons.extend(missing_levels())
+        if suspicious and not _has_number(text, suspicious):
+            reasons.append(f"falta total de eventos sospechosos ({suspicious})")
+    elif field == "conclusions":
+        if not risk_label_present():
+            reasons.append(
+                f"falta etiqueta de riesgo «{LEVEL_LABELS.get(risk, risk)}»"
+            )
+        if rows and not _has_number(text, rows):
+            reasons.append(f"falta el total de registros ({_num(rows)})")
+        reasons.extend(missing_levels())
+    elif field == "correlation":
+        entries = [
+            entry for entry in (ctx.get("suspicious_by_ip") or [])
+            if isinstance(entry, dict) and entry.get("ip")
+        ]
+        if entries and not any(
+            str(entry["ip"]) in text and _has_number(text, entry.get("events"))
+            for entry in entries
+        ):
+            reasons.append(
+                "falta IP con su conteo de eventos "
+                f"(p. ej. «{entries[0]['ip']}» con {_num(entries[0].get('events') or 0)})"
+            )
+    elif field == "methodology":
+        matched = sum(1 for pattern in _METHOD_MARKERS if re.search(pattern, norm))
+        if matched < 2:
+            reasons.append(
+                f"faltan pasos del método ({matched} de 3 grupos: "
+                "importación, clasificación, sospecha)"
+            )
+        raws = [
+            str(entry.get("raw"))
+            for entry in (ctx.get("severity_mapping") or [])
+            if isinstance(entry, dict) and entry.get("raw")
+        ]
+        if raws and not any(_norm_text(raw) in norm for raw in raws):
+            reasons.append(
+                f"falta clave original de severidad (p. ej. «{raws[0]}»)"
+            )
+    return reasons
 
 
 # ---------------------------------------------------------------------------

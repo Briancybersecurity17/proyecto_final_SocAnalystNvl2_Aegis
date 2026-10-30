@@ -1,12 +1,23 @@
-"""Tarea 2: validador del informe — reglas A (ancla numérica) y D (anti-redundancia).
+"""Tarea 3: validador del informe — reglas B (atribución) y C (contenido obligatorio).
 
 Reglas puras, sin Ollama ni red: el `ctx` sintético reproduce la forma real
 que devuelve `ai_service.build_context` (rows, level_counts, suspicious_*,
 risk_levels con percentage…), porque más adelante el validador se alimentará
-de análisis reales.
+de análisis reales. `event_id_counts` y `severity_mapping` aún no los
+propaga `build_context` (llegan en la tarea 5): los tests los incluyen
+sintéticos para fijar el contrato de las reglas.
 """
 
-from ai_service import _anchors, _numbers, _percentages, _rule_anchor, _rule_redundancy
+from ai_service import (
+    _anchors,
+    _numbers,
+    _pairs,
+    _percentages,
+    _rule_anchor,
+    _rule_attribution,
+    _rule_redundancy,
+    _rule_required,
+)
 
 # Cifras coherentes: 59/174 = 33,908…% → «33,9 %» cabe en la tolerancia ±0,1.
 CTX = {
@@ -25,6 +36,26 @@ CTX = {
     "suspicious_by_ip": [{"ip": "10.10.2.15", "events": 12, "hosts": 2}],
     "suspicious_evidence": [{"event_id": "4625", "source_ip": "10.10.2.15"}],
     "result_errors": {"codes": {"404": 30}, "total": 41},
+    "event_id_counts": {"4625": 102, "4624": 40},
+    "severity_mapping": [
+        {"raw": "Warning", "level": "critico", "count": 59, "percentage": "33,9%"},
+    ],
+}
+
+# Cifras coherentes: nivel medio sin eventos (no se exige en el informe).
+CTX_C = {
+    "rows": 174,
+    "risk": "alto",
+    "level_counts": {"critico": 59, "alto": 35, "medio": 0, "bajo": 80},
+    "suspicious_events": 23,
+    "suspicious_by_ip": [
+        {"ip": "10.10.2.15", "events": 12, "hosts": 2},
+        {"ip": "10.10.9.7", "events": 8, "hosts": 1},
+    ],
+    "severity_mapping": [
+        {"raw": "Warning", "level": "alto", "count": 35, "percentage": "20,1%"},
+        {"raw": "Informational", "level": "bajo", "count": 80, "percentage": "45,9%"},
+    ],
 }
 
 
@@ -96,3 +127,195 @@ def test_regla_d_acepta_frases_cortas_repetidas():
     """Una enumeración repite frases de <5 palabras sin que eso sea rechazo."""
     texto = "Nivel crítico. Nivel crítico. Alto. Alto. Nivel crítico."
     assert _rule_redundancy(texto) == []
+
+
+# --- Regla B -------------------------------------------------------------
+
+def test_pairs_etiqueta_en_ventana():
+    """(número, etiqueta_canónica) solo con la etiqueta a ≤40 chars del número."""
+    assert _pairs("Se detectaron 97 eventos del Event ID 4625.") == [
+        (97.0, "event_id:4625")
+    ]
+
+
+def test_regla_b_event_id_con_cifra_correcta_pasa():
+    texto = "El patrón dominante son 102 eventos del Event ID 4625."
+    assert _rule_attribution(texto, CTX) == []
+
+
+def test_regla_b_event_id_cifra_reasignada_rechaza():
+    """«97 … Event ID 4625» reasigna la cifra real (102) → motivo con ≠."""
+    texto = "El patrón dominante son 97 eventos del Event ID 4625."
+    assert _rule_attribution(texto, CTX) == ["«97 … Event ID 4625» ≠ 102"]
+
+
+def test_regla_b_event_id_no_contado_rechaza():
+    """Citando un Event ID fuera del top-20 no hay cifra que lo salve."""
+    texto = "Se observaron 5 eventos del Event ID 9999."
+    assert _rule_attribution(texto, CTX) == [
+        "«5 … Event ID 9999» sin dato en el contexto"
+    ]
+
+
+def test_regla_b_event_id_sin_counts_en_el_ctx():
+    """Un ctx sin `event_id_counts` (antes de la tarea 5) también motiva."""
+    ctx = {k: v for k, v in CTX.items() if k != "event_id_counts"}
+    texto = "Se observaron 102 eventos del Event ID 4625."
+    assert _rule_attribution(texto, ctx) == [
+        "«102 … Event ID 4625» sin event_id_counts en el contexto"
+    ]
+
+
+def test_regla_b_nivel_contra_level_counts():
+    assert _rule_attribution("Hubo 59 eventos en el nivel crítico.", CTX) == []
+    assert _rule_attribution("Hubo 715 eventos en el nivel crítico.", CTX) == [
+        "«715 … nivel crítico» ≠ 59"
+    ]
+
+
+def test_regla_b_pronombre_este_nivel_no_es_etiqueta():
+    """«715 registros … clasificados en este nivel» no atribuye nada (trampa)."""
+    texto = "Los 715 registros fueron clasificados en este nivel según la severidad."
+    assert _rule_attribution(texto, CTX) == []
+
+
+def test_regla_b_sospechosos_correcto_y_reasignado():
+    assert _rule_attribution("Se detectaron 23 eventos sospechosos.", CTX) == []
+    assert _rule_attribution("Se detectaron 50 eventos sospechosos.", CTX) == [
+        "«50 … sospechosos» ≠ 23"
+    ]
+
+
+def test_regla_b_errores_http_total():
+    assert _rule_attribution("El servidor devolvió 41 respuestas con errores HTTP.", CTX) == []
+    assert _rule_attribution("El servidor devolvió 12 respuestas con errores HTTP.", CTX) == [
+        "«12 … errores http» ≠ 41"
+    ]
+
+
+def test_regla_b_codigo_http_contra_codes():
+    assert _rule_attribution("Se contabilizaron 30 respuestas 404.", CTX) == []
+    assert _rule_attribution("Se contabilizaron 12 respuestas 404.", CTX) == [
+        "«12 … 404» ≠ 30"
+    ]
+
+
+def test_regla_b_mas_de_40_chars_no_atribuye():
+    """Fuera de la ventana de 40 chars la etiqueta no atribuye al número."""
+    texto = (
+        "Se detectaron 50 eventos, revisados uno a uno con detenimiento "
+        "durante la auditoría completa, sospechosos."
+    )
+    assert _rule_attribution(texto, CTX) == []
+
+
+def test_regla_b_dos_numeros_usa_el_mas_cercano():
+    """«174 … 23 sospechosos»: compiten y gana el más cercano (174 no rechaza)."""
+    texto = "El dataset 174 incluye 23 eventos sospechosos."
+    assert _rule_attribution(texto, CTX) == []
+
+
+def test_regla_b_http_errors_o_result_errors():
+    """La regla lee `http_errors` (brief) o `result_errors` (ctx real)."""
+    ctx = {k: v for k, v in CTX.items() if k != "result_errors"}
+    ctx["http_errors"] = {"total": 41, "codes": {"404": 30}}
+    texto = "El servidor devolvió 12 respuestas con errores HTTP."
+    assert _rule_attribution(texto, ctx) == ["«12 … errores http» ≠ 41"]
+
+
+# --- Regla C -------------------------------------------------------------
+
+def test_regla_c_executive_acepta_prosa_completa():
+    texto = (
+        "Se analizaron 174 registros con riesgo alto. "
+        "La distribución: nivel crítico 59, nivel alto 35 y nivel bajo 80. "
+        "Se detectaron 23 eventos sospechosos que requieren revisión."
+    )
+    assert _rule_required("executive_summary", texto, CTX_C) == []
+
+
+def test_regla_c_executive_rechaza_sin_distribucion_completa():
+    texto = (
+        "Se analizaron 174 registros con riesgo alto. "
+        "La distribución: nivel crítico 59 y nivel alto 35. "
+        "Se detectaron 23 eventos sospechosos."
+    )
+    assert _rule_required("executive_summary", texto, CTX_C) == [
+        "falta nivel bajo de la distribución"
+    ]
+
+
+def test_regla_c_executive_rechaza_sin_registros_ni_sospechosos():
+    """«174 registros» debe ir en la MISMA frase; el resto son omisiones."""
+    texto = "El análisis con riesgo alto cubre nivel crítico, alto y bajo."
+    assert _rule_required("executive_summary", texto, CTX_C) == [
+        "falta «174 registros» en la misma frase",
+        "falta nivel alto de la distribución",
+        "falta nivel bajo de la distribución",
+        "falta total de eventos sospechosos (23)",
+    ]
+
+
+def test_regla_c_executive_rechaza_sin_etiqueta_de_riesgo():
+    texto = "Se analizaron 174 registros con sospechosos."
+    motivos = _rule_required("executive_summary", texto, CTX_C)
+    assert "falta etiqueta de riesgo «Alto»" in motivos
+
+
+def test_regla_c_conclusions_acepta_y_rechaza():
+    bueno = (
+        "El riesgo general es alto sobre 174 registros. "
+        "La distribución fue nivel crítico 59, nivel alto 35 y nivel bajo 80."
+    )
+    assert _rule_required("conclusions", bueno, CTX_C) == []
+    malo = (
+        "El riesgo general es alto sobre 174 registros, "
+        "con nivel crítico 59 y nivel alto 35."
+    )
+    assert _rule_required("conclusions", malo, CTX_C) == [
+        "falta nivel bajo de la distribución"
+    ]
+
+
+def test_regla_c_correlation_acepta_ip_con_su_conteo():
+    texto = "La IP 10.10.2.15 concentró 12 eventos sospechosos sobre 2 hosts."
+    assert _rule_required("correlation", texto, CTX_C) == []
+
+
+def test_regla_c_correlation_rechaza_ip_sin_conteo():
+    """La IP citada debe llevar SU número de eventos, no solo el nombre."""
+    texto = "La IP 10.10.9.7 fue la más activa durante toda la ventana de análisis."
+    assert _rule_required("correlation", texto, CTX_C) == [
+        "falta IP con su conteo de eventos (p. ej. «10.10.2.15» con 12)"
+    ]
+
+
+def test_regla_c_methodology_acepta_pasos_y_clave_original():
+    texto = (
+        "Se importó el archivo Excel y se normalizó la severidad Warning "
+        "al nivel alto; después se aplicaron reglas de sospecha."
+    )
+    assert _rule_required("methodology", texto, CTX_C) == []
+
+
+def test_regla_c_methodology_rechaza_sin_pasos_ni_clave():
+    texto = "Se cargó el archivo Excel tal como lo envió el equipo de operaciones."
+    assert _rule_required("methodology", texto, CTX_C) == [
+        "faltan pasos del método (1 de 3 grupos: importación, clasificación, sospecha)",
+        "falta clave original de severidad (p. ej. «Warning»)",
+    ]
+
+
+def test_regla_c_methodology_sin_mapping_no_exige_claves():
+    """Solo lo que los datos permiten: severity_mapping vacío → sin claves."""
+    ctx = dict(CTX_C, severity_mapping={})
+    texto = (
+        "Se cargó el archivo Excel, se clasificó la severidad "
+        "y se aplicaron reglas de sospecha."
+    )
+    assert _rule_required("methodology", texto, ctx) == []
+
+
+def test_regla_c_campos_sin_reglas_no_exigen_nada():
+    """Los campos fuera de los 4 (p. ej. findings) no tienen requisitos."""
+    assert _rule_required("findings", "Prosas libres sin requisitos.", CTX_C) == []
