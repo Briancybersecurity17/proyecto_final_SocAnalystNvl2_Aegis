@@ -859,29 +859,82 @@ def _http_errors(ctx: dict) -> dict:
     return ctx.get("http_errors") or ctx.get("result_errors") or {}
 
 
+# Fin de frase para acotar la atribución: corridas de «.!?;» seguidas de
+# espacio (o fin de texto) y saltos de línea. Los puntos de IP y los
+# decimales («10.10.2.15», «33.9») no separan: exigen blanco tras la raya.
+_SENT_END_RE = re.compile(r"[.!?;]+(?=\s|$)|\n+")
+
+
+def _frase_en(text: str, pos: int) -> Tuple[int, int]:
+    """[inicio, fin) de la frase que contiene la posición `pos`."""
+    inicio = 0
+    fin = len(text)
+    for m in _SENT_END_RE.finditer(text):
+        if m.end() <= pos:
+            inicio = m.end()
+        elif m.start() >= pos:
+            fin = m.start()
+            break
+    return inicio, fin
+
+
 def _sospechosos_de_ip_mencionada(text: str, value: float, ctx: dict) -> bool:
-    """¿`value` es el conteo de sospechosos de una IP mencionada en el texto?
+    """¿`value` es el conteo REAL de la IP a la que la frase lo atribuye?
 
     «La IP 10.10.2.15 ha generado 15 eventos sospechosos» es CORRECTO aunque
     15 ≠ 174 (el total global): la cifra se atribuye a la IP, no al total.
     Evidencia de la tarea 8 (aceptación): esa frase, verificada contra
     `suspicious_by_ip` del fixture (10.10.2.15 → 15), era rechazada por la
     regla B al resolver la etiqueta «sospechosos» contra el total global.
-    Solo sirve de contraejemplo una IP que aparece literalmente en el texto y
-    cuyo `events` coincide exactamente con `value`: un total global inventado
-    o el conteo de una IP no mencionada sigue rechazándose.
+
+    La atribución se acota para no abrir la clase de fallo histórica (#1,
+    misatribución entre varias IPs citadas). La cifra se respalda solo si:
+    - la IP coincide con límites de token en el texto («10.10.2.1» NO vale
+      dentro de «10.10.2.15»);
+    - la IP más cercana a ESA aparición de `value` DENTRO DE LA MISMA FRASE
+      es la que tiene `events == value`: que otra IP citada en el texto (en
+      otra frase o más lejos) tenga ese conteo no basta —«…10.10.2.15 y
+      10.10.1.44… La IP 10.10.2.15 ha generado 27 eventos…» sigue
+      rechazándose cuando el 27 es el conteo de 10.10.1.44—;
+    - el ctx trae `suspicious_by_ip` con esa IP: sin el bloque (o sin IPs
+      en la frase) la función degrada a False y rige el total global.
     """
-    for entry in ctx.get("suspicious_by_ip") or []:
-        if not isinstance(entry, dict):
-            continue
-        ip = str(entry.get("ip") or "")
-        if not ip or ip not in text:
-            continue
+    entradas = [
+        e for e in (ctx.get("suspicious_by_ip") or [])
+        if isinstance(e, dict) and str(e.get("ip") or "")
+    ]
+    if not entradas:
+        return False
+    # Ocurrencias reales de la cifra (los octetos de IP no cuentan).
+    cifras = [
+        (pos, pos + len(raw))
+        for pos, raw, num in _number_spans(text)
+        if num == value
+    ]
+    if not cifras:
+        return False
+    # Ocurrencias de cada IP del ctx con límites de token.
+    ocurrencias: List[Tuple[int, int, float]] = []
+    for entrada in entradas:
+        ip = str(entrada["ip"])
         try:
-            if float(entry.get("events")) == float(value):
-                return True
+            events = float(entrada["events"])
         except (TypeError, ValueError):
             continue
+        for m in re.finditer(rf"(?<![\d.]){re.escape(ip)}(?![\d.])", text):
+            ocurrencias.append((m.start(), m.end(), events))
+    if not ocurrencias:
+        return False
+    for inicio, fin in cifras:
+        frase_inicio, frase_fin = _frase_en(text, inicio)
+        cercanas = [
+            (max(istart - fin, inicio - iend, 0), events)
+            for istart, iend, events in ocurrencias
+            if frase_inicio <= istart and iend <= frase_fin
+        ]
+        # La IP más cercana de la frase respalda la cifra → atribución OK.
+        if cercanas and min(cercanas)[1] == value:
+            return True
     return False
 
 

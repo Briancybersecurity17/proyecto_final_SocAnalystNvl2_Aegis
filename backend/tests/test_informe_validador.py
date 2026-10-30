@@ -225,6 +225,54 @@ def test_regla_b_sospechosos_conteo_de_otra_ip_no_mencionada_cae():
     assert _rule_attribution(texto, ctx) == ["«15 … sospechosos» ≠ 174"]
 
 
+def test_regla_b_sospechosos_cifra_de_ip_no_adyacente_rechaza():
+    """Revisión tarea 8 (round 1): dos IPs citadas, la cifra de la NO
+    adyacente no vale.
+
+    «…10.10.2.15 y 10.10.1.44 son las más activas. La IP 10.10.2.15 ha
+    generado 27 eventos sospechosos» es FALSO (10.10.2.15 → 15; el 27 es de
+    10.10.1.44): el hecho de que OTRA IP mencionada tenga `events == 27` no
+    respalda la atribución a 10.10.2.15 (clase #1, misatribución)."""
+    ctx = {**CTX, "suspicious_events": 174,
+           "suspicious_by_ip": [
+               {"ip": "10.10.2.15", "events": 15, "hosts": 9},
+               {"ip": "10.10.1.44", "events": 27, "hosts": 7},
+           ]}
+    texto = ("10.10.2.15 y 10.10.1.44 son las más activas. La IP "
+             "10.10.2.15 ha generado 27 eventos sospechosos.")
+    assert _rule_attribution(texto, ctx) == ["«27 … sospechosos» ≠ 174"]
+
+
+def test_regla_b_sospechosos_ip_adyacente_correcta_pasa_con_dos_ips():
+    """Con dos IPs en la frase, la cifra de la adyacente SÍ pasa."""
+    ctx = {**CTX, "suspicious_events": 174,
+           "suspicious_by_ip": [
+               {"ip": "10.10.2.15", "events": 15, "hosts": 9},
+               {"ip": "10.10.1.44", "events": 27, "hosts": 7},
+           ]}
+    texto = ("La IP 10.10.1.44 ha generado 27 eventos sospechosos, "
+             "por delante de 10.10.2.15.")
+    assert _rule_attribution(texto, ctx) == []
+
+
+def test_regla_b_sospechosos_ip_subcadena_no_respaldan_cifra():
+    """Límites de token: «10.10.2.1» (events 15) NO respalda el 15 citado
+    junto a «10.10.2.15» — la subcadena no es la IP adyacente."""
+    ctx = {**CTX, "suspicious_events": 174,
+           "suspicious_by_ip": [{"ip": "10.10.2.1", "events": 15, "hosts": 9}]}
+    texto = "La IP 10.10.2.15 ha generado 15 eventos sospechosos."
+    assert _rule_attribution(texto, ctx) == ["«15 … sospechosos» ≠ 174"]
+
+
+def test_regla_b_sospechosos_ctx_sin_por_ip_degrada_al_total():
+    """Sin `suspicious_by_ip` en el ctx, la IP del texto no salva nada:
+    el helper degrada a False (`or []`) y rige el total global."""
+    ctx = {**CTX, "suspicious_events": 174}
+    ctx.pop("suspicious_by_ip", None)
+    texto = "La IP 10.10.2.15 ha generado 15 eventos sospechosos."
+    assert _rule_attribution(texto, ctx) == ["«15 … sospechosos» ≠ 174"]
+
+
 def test_regla_b_errores_http_total():
     assert _rule_attribution("El servidor devolvió 41 respuestas con errores HTTP.", CTX) == []
     assert _rule_attribution("El servidor devolvió 12 respuestas con errores HTTP.", CTX) == [
