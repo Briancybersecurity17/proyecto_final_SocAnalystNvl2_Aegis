@@ -2,10 +2,9 @@
 
 Reglas puras, sin Ollama ni red: el `ctx` sintético reproduce la forma real
 que devuelve `ai_service.build_context` (rows, level_counts, suspicious_*,
-risk_levels con percentage…), porque más adelante el validador se alimentará
-de análisis reales. `event_id_counts` y `severity_mapping` aún no los
-propaga `build_context` (llegan en la tarea 5): los tests los incluyen
-sintéticos para fijar el contrato de las reglas.
+risk_levels con percentage…). `event_id_counts` y `severity_mapping` ya los
+propaga `build_context` desde la tarea 5: aquí se siguen incluyendo
+sintéticos para fijar el contrato de las reglas de forma independiente.
 """
 
 from ai_service import (
@@ -221,6 +220,30 @@ def test_regla_b_http_errors_o_result_errors():
     ctx["http_errors"] = {"total": 41, "codes": {"404": 30}}
     texto = "El servidor devolvió 12 respuestas con errores HTTP."
     assert _rule_attribution(texto, ctx) == ["«12 … errores http» ≠ 41"]
+
+
+def test_regla_b_error_humano_no_es_error_http():
+    """Sin «http» ni código 4xx/5xx cerca, «errores» NO se reclama.
+
+    Falso positivo corregido (ruling de la tarea 5): «12 registros con error
+    humano» no es http_errors.total y rechazarlo por ≠41 era injusto.
+    """
+    texto = "Se observaron 12 registros con error humano en la ingesta."
+    assert _rule_attribution(texto, CTX) == []
+
+
+def test_regla_b_errores_http_con_cifra_correcta_sigue_atribuyendo():
+    """La pareja legítima «41 errores HTTP» se reclama y valida contra total."""
+    assert _rule_attribution("La ventana registró 41 errores HTTP en total.", CTX) == []
+    assert _rule_attribution("La ventana registró 12 errores HTTP en total.", CTX) == [
+        "«12 … errores http» ≠ 41"
+    ]
+
+
+def test_regla_b_errores_con_codigo_5xx_cerca_tambien_atribuye():
+    """Un código 4xx/5xx junto a «errores» habilita la atribución (sin «http»)."""
+    ctx = dict(CTX, result_errors={"codes": {"500": 41}, "total": 41})
+    assert _rule_attribution("Se contabilizaron 41 errores con código 500.", ctx) == []
 
 
 # --- Regla C -------------------------------------------------------------

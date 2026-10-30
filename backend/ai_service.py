@@ -141,6 +141,14 @@ def build_context(summary: Dict[str, Any]) -> Dict[str, Any]:
         "risk_label": LEVEL_LABELS.get(risk, risk),
         "risk_justification": summary.get("risk_justification", ""),
         "level_counts": summary.get("level_counts") or {},
+        # Top-20 de Event_ID con su conteo global (claves como texto): lo
+        # exigen la regla B («N … Event ID X») y el prompt. Sin esta entrada
+        # de la whitelist nunca llegaría ni al prompt ni al validador.
+        "event_id_counts": summary.get("event_id_counts", {}) or {},
+        # Correspondencia auditable Severity original → nivel: la metodología
+        # debe citar una clave original (regla C), solo si el mapping no
+        # está vacío.
+        "severity_mapping": summary.get("severity_mapping", {}) or {},
         # Éxito/fallo o código HTTP por registro (campo Result del archivo)
         "result_counts": summary.get("result_counts") or {},
         "risk_levels": risk_levels,
@@ -580,60 +588,48 @@ async def _remote_narrative(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return parsed
 
 
-def _merge(fallback: Dict[str, Any], remote: Dict[str, Any]) -> Dict[str, Any]:
-    """Usa la respuesta remota solo donde aporta contenido; nunca pierde datos."""
-    merged = dict(fallback)
-    merged["source"] = "llm"
-    merged["model"] = ai_config.get()["model"] or "modelo remoto"
+# Campos de prosa que el LLM puede aportar (los únicos que pide el prompt y
+# que el validador A–D evalúa) y los 6 campos del contrato del informe.
+_PROSE_FIELDS = ("executive_summary", "methodology", "correlation", "conclusions")
+_CAMPOS_INFORME = (
+    "executive_summary",
+    "methodology",
+    "findings",
+    "correlation",
+    "conclusions",
+    "action_plan",
+)
 
-    for key in ("executive_summary", "methodology", "correlation", "conclusions"):
-        value = remote.get(key)
+
+def _merge(fallback: Dict[str, Any], aceptados: Dict[str, str]) -> Dict[str, Any]:
+    """Overlay campo a campo: solo la prosa VALIDADA reemplaza al fallback.
+
+    Siempre produce los 6 campos del informe. `findings` y `action_plan` salen
+    del fallback POR CONSTRUCCIÓN: aunque `aceptados` los traiga (el prompt no
+    los pide y el validador los descarta), no se pisan — así mueren los
+    problemas de hallazgos/plan inventados. `field_sources` registra de dónde
+    salió cada campo: "llm" solo si el validador aceptó ese campo de prosa,
+    "local" en cualquier otro caso (siempre local en findings/action_plan).
+    `source` y `model` los decide `generate_report_narrative`.
+    """
+    out = {c: fallback[c] for c in _CAMPOS_INFORME}
+    for campo in _PROSE_FIELDS:
+        value = aceptados.get(campo)
         if isinstance(value, str) and value.strip():
-            merged[key] = value.strip()
-
-    # Hallazgos: se reutilizan las evidencias del fallback por id/posición
-    remote_findings = remote.get("findings")
-    if isinstance(remote_findings, list) and remote_findings:
-        findings: List[Dict[str, Any]] = []
-        for idx, item in enumerate(remote_findings):
-            if not isinstance(item, dict) or not item.get("title"):
-                continue
-            level = str(item.get("level", "")).lower()
-            if level not in LEVEL_ORDER:
-                level = fallback["findings"][idx]["level"] if idx < len(fallback["findings"]) else "medio"
-            base = fallback["findings"][idx] if idx < len(fallback["findings"]) else {}
-            findings.append(
-                {
-                    "id": item.get("id") or base.get("id") or f"H-{idx + 1:02d}",
-                    "title": str(item["title"]),
-                    "level": level,
-                    "explanation": str(item.get("explanation") or base.get("explanation") or ""),
-                    "evidence": base.get("evidence", []),
-                }
-            )
-        if findings:
-            merged["findings"] = findings
-
-    remote_plan = remote.get("action_plan")
-    if isinstance(remote_plan, list) and remote_plan:
-        plan = []
-        for item in remote_plan:
-            if not isinstance(item, dict) or not item.get("action"):
-                continue
-            priority = str(item.get("priority", "P3")).upper()
-            if priority not in ("P1", "P2", "P3", "P4"):
-                priority = "P3"
-            plan.append(
-                {
-                    "priority": priority,
-                    "action": str(item["action"]),
-                    "rationale": str(item.get("rationale") or ""),
-                }
-            )
-        if plan:
-            merged["action_plan"] = plan
-
-    return merged
+            out[campo] = value
+    out["field_sources"] = {
+        campo: (
+            "llm"
+            if campo in _PROSE_FIELDS and isinstance(aceptados.get(campo), str)
+            and aceptados[campo].strip()
+            else "local"
+        )
+        for campo in _CAMPOS_INFORME
+    }
+    # Claves del fallback que no se tocan: source, model, generated_at.
+    for key, value in fallback.items():
+        out.setdefault(key, value)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -787,6 +783,11 @@ _SUSPICIOUS_RE = re.compile(r"sospechos[oa]s?")
 _ERRORS_RE = re.compile(r"\berror(?:es)?\s*(?:http\b)?")
 # Códigos HTTP 4xx/5xx citados como palabra («404», «500»).
 _HTTP_CODE_RE = re.compile(r"\b[45]\d{2}\b")
+# Co-ocurrencia exigida para atribuir «N … errores» a errores HTTP: junto a la
+# mención debe haber «http» o un código 4xx/5xx (ventana ±_WINDOW). Sin esto,
+# «12 registros con error humano» se reclamaba como http_errors.total (falso
+# positivo corregido en la tarea 5, ruling del controller).
+_NEAR_HTTP_RE = re.compile(r"\bhttp\b|\b[45]\d{2}\b")
 
 
 def _norm_pos(text: str) -> str:
@@ -810,7 +811,11 @@ def _label_matches(norm: str) -> List[Tuple[int, str]]:
     for m in _SUSPICIOUS_RE.finditer(norm):
         found.append((m.start(), "sospechosos"))
     for m in _ERRORS_RE.finditer(norm):
-        found.append((m.start(), "errores http"))
+        # Solo es «errores HTTP» si junto a la mención hay «http» o un código
+        # 4xx/5xx: «12 registros con error humano» no atribuye nada a nadie.
+        ventana = norm[max(0, m.start() - _WINDOW): m.end() + _WINDOW]
+        if _NEAR_HTTP_RE.search(ventana):
+            found.append((m.start(), "errores http"))
     for m in _HTTP_CODE_RE.finditer(norm):
         found.append((m.start(), f"codigo:{m.group()}"))
     return found
@@ -1005,24 +1010,95 @@ def _rule_required(field: str, text: str, ctx: dict) -> List[str]:
 
 
 # ---------------------------------------------------------------------------
+# Validador del informe: composición de las reglas A–D campo a campo
+# ---------------------------------------------------------------------------
+# (etiqueta, regla) en el orden del brief: A ancla numérica, B atribución,
+# C contenido obligatorio por campo, D anti-redundancia. Cortocircuito: un
+# motivo basta para rechazar el campo. Las firmas de las reglas difieren en
+# los parámetros, así que cada entrada adapta la llamada; los lambdas resuelven
+# el nombre del módulo en tiempo de ejecución (monkeypatcheables en tests).
+_FIELD_RULES: Tuple[Tuple[str, Any], ...] = (
+    ("A", lambda text, field, ctx: _rule_anchor(text, ctx)),
+    ("B", lambda text, field, ctx: _rule_attribution(text, ctx)),
+    ("C", lambda text, field, ctx: _rule_required(field, text, ctx)),
+    ("D", lambda text, field, ctx: _rule_redundancy(text)),
+)
+
+
+def _validate_fields(ctx: Dict[str, Any], remote: Any) -> Dict[str, str]:
+    """Aplica las reglas A–D a cada campo de prosa; devuelve SOLO los aceptados.
+
+    Un campo ausente, vacío o rechazado no aparece en el resultado → la
+    orquestación usará el texto del fallback para él. Solo itera los 4 campos
+    de prosa: findings/action_plan no se evalúan (el sistema los genera).
+
+    Ninguna excepción se propaga al caller: una regla que lanza rechaza SOLO
+    su campo, con log de diagnóstico «campo <f> rechazado (regla X): <motivo>»
+    (ruling de la tarea 5: el informe jamás falla por el validador).
+    """
+    aceptados: Dict[str, str] = {}
+    if not isinstance(remote, dict):
+        return aceptados
+    for field in _PROSE_FIELDS:
+        text = remote.get(field)
+        if not isinstance(text, str) or not text.strip():
+            continue  # sin texto usable → ese campo sale del fallback
+        value = text.strip()
+        regla_actual = "?"
+        motivo: Optional[str] = None
+        try:
+            for etiqueta, regla in _FIELD_RULES:
+                regla_actual = etiqueta
+                motivos = regla(value, field, ctx)
+                if motivos:
+                    motivo = motivos[0]
+                    break  # un motivo basta: no se siguen evaluando reglas
+        except Exception as exc:  # noqa: BLE001 – rechazo del campo, no error
+            logger.warning(
+                "campo %s rechazado (regla %s): excepción al evaluarla "
+                "(%s: %s)",
+                field, regla_actual, type(exc).__name__, exc,
+            )
+            continue
+        if motivo is not None:
+            logger.warning(
+                "campo %s rechazado (regla %s): %s", field, regla_actual, motivo
+            )
+        else:
+            aceptados[field] = value
+    return aceptados
+
+
+# ---------------------------------------------------------------------------
 # API pública
 # ---------------------------------------------------------------------------
 async def generate_report_narrative(summary: Dict[str, Any]) -> Dict[str, Any]:
     """Redacta el informe técnico a partir del resumen calculado.
 
     Siempre devuelve un informe completo: primero se construye el basado en
-    reglas (100% anclado a los registros) y, si hay modelo remoto disponible,
-    se superpone su redacción sin perder evidencias ni cifras.
+    reglas (100% anclado a los registros) y, si el modelo remoto aporta prosa
+    que PASA las reglas A–D, se superpone campo a campo sin perder evidencias
+    ni cifras. Cualquier fallo total (LLM apagado, excepción del chat, JSON
+    inválido) deja `aceptados` vacío → fallback completo, idéntico al de hoy.
     """
     ctx = build_context(summary)
     fallback = _fallback_narrative(ctx)
-    remote = await _remote_narrative(ctx)
-    if remote:
-        try:
-            return _merge(fallback, remote)
-        except Exception:  # noqa: BLE001 – nunca romper el informe
-            return fallback
-    return fallback
+    try:
+        remote = await _remote_narrative(ctx)
+        aceptados = _validate_fields(ctx, remote)
+    except Exception as exc:  # noqa: BLE001 – nunca romper el informe
+        logger.warning(
+            "informe: fallo del modelo remoto (%s: %s); se usa el fallback",
+            type(exc).__name__, exc,
+        )
+        aceptados = {}
+    narrative = _merge(fallback, aceptados)
+    # source == "llm" SOLO con ≥1 campo de prosa aceptado; si no, el informe
+    # es 100% local y `model` sigue siendo el del motor determinista.
+    if any(aceptados.get(campo) for campo in _PROSE_FIELDS):
+        narrative["source"] = "llm"
+        narrative["model"] = ai_config.get()["model"] or "modelo remoto"
+    return narrative
 
 
 # ---------------------------------------------------------------------------

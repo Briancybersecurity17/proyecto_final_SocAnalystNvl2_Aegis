@@ -4,10 +4,10 @@ Estilo `test_chat_stream.py`: `ai_config.chat` se falsifica con
 `monkeypatch.setattr` para capturar el prompt y las opciones que envía
 `_remote_narrative`, devolviendo una respuesta fija — sin tocar Ollama.
 
-El `ctx` es sintético e incluye `event_id_counts` y `severity_mapping` (aún
-no los propaga `build_context`: llegan en la tarea 5); aquí se fija el
-contrato del PROMPT, no el del wiring — por eso `_remote_narrative` se
-invoca directamente con el ctx sintético.
+El `ctx` es sintético e incluye `event_id_counts` y `severity_mapping` (desde
+la tarea 5 los propaga `build_context`; aquí se fija el contrato del PROMPT,
+no el del wiring) — por eso `_remote_narrative` se invoca directamente con el
+ctx sintético.
 """
 
 import asyncio
