@@ -502,6 +502,14 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
                 }
     level_counts = {lvl: int((df["_level"] == lvl).sum()) for lvl in LEVEL_ORDER}
 
+    # Top-20 de Event_ID del archivo (o de la selección, si /summary viene
+    # filtrado): los IDs dominantes que el informe ejecutivo cita como
+    # patrón de ataque. Claves como texto (el Excel trae enteros).
+    event_id_counts: Dict[str, int] = {}
+    if "Event_ID" in df.columns:
+        event_id_counts = {str(k): int(v) for k, v in
+                           df["Event_ID"].value_counts().head(20).items()}
+
     # Correspondencia auditable: cada valor original del campo Severity y el
     # nivel de riesgo al que se traduce (misma función normalize_level que
     # alimenta todos los gráficos y el informe).
@@ -647,7 +655,8 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
         risk_justification = (
             f"Nivel «{LEVEL_LABELS[highest]}»: {level_counts[highest]} de {total} registros "
             f"({_pct(level_counts[highest], total)}%) clasificados en este nivel. "
-            f"Event IDs dominantes: {events_txt}. Hosts con más registros: {hosts_txt}."
+            f"Event IDs dominantes en este nivel: {events_txt}. "
+            f"Hosts con más registros en este nivel: {hosts_txt}."
         )
 
     # --- per-level blocks (count + justification + examples) ---------------
@@ -692,6 +701,7 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
         "result_counts": result_counts,
         "result_hosts": result_hosts,
         "level_counts": level_counts,
+        "event_id_counts": event_id_counts,
         "risk_levels": risk_levels,
         "unique_hosts": unique_hosts,
         "events_per_day": events_per_day,
