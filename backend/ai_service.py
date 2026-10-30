@@ -859,6 +859,32 @@ def _http_errors(ctx: dict) -> dict:
     return ctx.get("http_errors") or ctx.get("result_errors") or {}
 
 
+def _sospechosos_de_ip_mencionada(text: str, value: float, ctx: dict) -> bool:
+    """¿`value` es el conteo de sospechosos de una IP mencionada en el texto?
+
+    «La IP 10.10.2.15 ha generado 15 eventos sospechosos» es CORRECTO aunque
+    15 ≠ 174 (el total global): la cifra se atribuye a la IP, no al total.
+    Evidencia de la tarea 8 (aceptación): esa frase, verificada contra
+    `suspicious_by_ip` del fixture (10.10.2.15 → 15), era rechazada por la
+    regla B al resolver la etiqueta «sospechosos» contra el total global.
+    Solo sirve de contraejemplo una IP que aparece literalmente en el texto y
+    cuyo `events` coincide exactamente con `value`: un total global inventado
+    o el conteo de una IP no mencionada sigue rechazándose.
+    """
+    for entry in ctx.get("suspicious_by_ip") or []:
+        if not isinstance(entry, dict):
+            continue
+        ip = str(entry.get("ip") or "")
+        if not ip or ip not in text:
+            continue
+        try:
+            if float(entry.get("events")) == float(value):
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
 def _rule_attribution(text: str, ctx: dict) -> List[str]:
     """Regla B: la cifra pegada a una etiqueta debe ser la de su fuente.
 
@@ -894,6 +920,10 @@ def _rule_attribution(text: str, ctx: dict) -> List[str]:
         else:  # sospechosos
             label = tag
             truth = ctx.get("suspicious_events") or 0
+            # Cifra atribuida a una IP mencionada con SU conteo: la frase es
+            # correcta aunque no sea el total global (tarea 8, ruling 3).
+            if value != truth and _sospechosos_de_ip_mencionada(text, value, ctx):
+                continue
         if value != truth:
             reasons.append(f"«{_num(value)} … {label}» ≠ {_num(truth)}")
     return reasons

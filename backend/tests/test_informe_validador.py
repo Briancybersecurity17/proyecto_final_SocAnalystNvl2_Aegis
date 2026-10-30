@@ -185,6 +185,46 @@ def test_regla_b_sospechosos_correcto_y_reasignado():
     ]
 
 
+def test_regla_b_sospechosos_atribuido_a_ip_mencionada_pasa():
+    """Tarea 8 (ruling 3): cifra de una IP mencionada con SU conteo real.
+
+    Evidencia del harness sobre fixtures/sample.xlsx: «La IP 10.10.2.15 ha
+    generado 15 eventos sospechosos» es correcto (suspicious_by_ip[10.10.2.15]
+    = 15, total global 174) pero la regla lo rechazaba contra el total."""
+    ctx = {**CTX, "suspicious_events": 174,
+           "suspicious_by_ip": [{"ip": "10.10.2.15", "events": 15, "hosts": 9}]}
+    texto = "La IP 10.10.2.15 ha generado 15 eventos sospechosos."
+    assert _rule_attribution(texto, ctx) == []
+
+
+def test_regla_b_sospechosos_total_inventado_sin_ip_sigue_cayendo():
+    """Sin IP en la frase, la cifra sigue exigiendo el total global."""
+    ctx = {**CTX, "suspicious_events": 174,
+           "suspicious_by_ip": [{"ip": "10.10.2.15", "events": 15, "hosts": 9}]}
+    assert _rule_attribution("Se detectaron 15 eventos sospechosos.", ctx) == [
+        "«15 … sospechosos» ≠ 174"
+    ]
+
+
+def test_regla_b_sospechosos_conteo_erroneo_de_ip_mencionada_cae():
+    """La IP está mencionada pero su conteo real no es el citado → rechazo."""
+    ctx = {**CTX, "suspicious_events": 174,
+           "suspicious_by_ip": [{"ip": "10.10.2.15", "events": 15, "hosts": 9}]}
+    texto = "La IP 10.10.2.15 ha generado 99 eventos sospechosos."
+    assert _rule_attribution(texto, ctx) == ["«99 … sospechosos» ≠ 174"]
+
+
+def test_regla_b_sospechosos_conteo_de_otra_ip_no_mencionada_cae():
+    """El conteo pertenece a una IP ausente de la frase → no salva."""
+    ctx = {**CTX, "suspicious_events": 174,
+           "suspicious_by_ip": [
+               {"ip": "10.10.2.15", "events": 15, "hosts": 9},
+               {"ip": "10.10.1.44", "events": 27, "hosts": 7},
+           ]}
+    texto = "La IP 10.10.1.99 ha generado 15 eventos sospechosos."
+    assert _rule_attribution(texto, ctx) == ["«15 … sospechosos» ≠ 174"]
+
+
 def test_regla_b_errores_http_total():
     assert _rule_attribution("El servidor devolvió 41 respuestas con errores HTTP.", CTX) == []
     assert _rule_attribution("El servidor devolvió 12 respuestas con errores HTTP.", CTX) == [
