@@ -1,8 +1,8 @@
 """runner.py — orquestación del harness de evaluación RAG+LLM.
 
-Sube la muestra fija, puntuá los 24 casos con la verdad calculable de
-`cases.py` y devuelve un informe comparable entre corridas. Cuatro garantías
-(spec §4 y §9):
+Sube la muestra fija, puntúa los 24 casos —más los 7 de la sección `report`
+del informe ejecutivo— con la verdad calculable de `cases.py` y devuelve un
+informe comparable entre corridas. Cuatro garantías (spec §4 y §9):
 
 1. **Aislamiento**: la memoria real del analista (`feedback.json`) no se lee
    ni se escribe; `_isolated_store` la redirige a un temporal (junto a su
@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional
 
 from eval import scoring
-from eval.cases import CASES, FIXTURE, K, load_fixture
+from eval.cases import CASES, FIXTURE, K, REPORT_CASES, load_fixture
 
 # % máximo de casos de evidencia que pueden responder con el determinista en
 # una corrida «llm»: por encima, la puntuación mide el fallback, no el modelo.
@@ -268,11 +268,14 @@ def _asegurar_indice(analysis_id: str) -> None:
 def build_report(resultados: List[Dict[str, Any]], grounding: Dict[str, Any],
                  fewshot: Dict[str, Any], motor: str, hash_muestra: str,
                  modelo: str, num_ctx: int, temperatura: float,
-                 rutados_a_agregacion: Optional[List[str]] = None) -> Dict[str, Any]:
+                 rutados_a_agregacion: Optional[List[str]] = None,
+                 informe_meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Informe a partir de los resultados por caso (media macro por categoría).
 
     Un caso con `ok: None` (excepción) se cuenta en `errores` y NO entra al
     cómputo de aciertos: ni fallo de scoring, ni omisión silenciosa.
+    `informe_meta` lleva la meta del POST /report único (latencia y fuente);
+    los llamadores viejos que no lo pasan dejan la sección vacía.
     """
     por_categoria: Dict[str, Dict[str, Any]] = {}
     errores = 0
@@ -295,6 +298,7 @@ def build_report(resultados: List[Dict[str, Any]], grounding: Dict[str, Any],
         "fewshot": {**fewshot, "por_categoria": _cobertura_por_categoria(resultados)},
         "latencia": _latencia(resultados),
         "rutados_a_agregacion": rutados_a_agregacion or [],
+        "informe": informe_meta or {},
         "motor": motor,
         "hash_muestra": hash_muestra,
         "modelo": modelo,
@@ -329,14 +333,17 @@ def _elegibles_fewshot(resultados: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     """Casos que PUEDEN llevar criterio few-shot (exclusor único y compartido).
 
     Se excluye: casos con excepción (sin respuesta), la rama de agregación
-    (el conteo sale del resumen, sin prompt few-shot) y `retrieval` (puntúa
-    el retriever solo, sin LLM). Toda la métrica few-shot —global y por
-    categoría— debe pasar por aquí para que los denominadores coincidan.
+    (el conteo sale del resumen, sin prompt few-shot), `retrieval` (puntúa
+    el retriever solo, sin LLM) y la sección `report` (el informe ejecutivo
+    se genera con un único POST /report sin ejemplos inyectados: contar sus
+    casos hundiría el % sin discriminar nada). Toda la métrica few-shot
+    —global y por categoría— debe pasar por aquí para que los denominadores
+    coincidan.
     """
     return [r for r in resultados
             if r.get("ok") is not None
             and r.get("mode") != "aggregate"
-            and r.get("categoria") != "retrieval"]
+            and r.get("categoria") not in ("retrieval", "report")]
 
 
 def _latencia(resultados: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -532,14 +539,21 @@ def _score_case(case, expected, body: Optional[dict], cited: List[str]) -> Any:
 
 
 def _run_pasada(dataset_ids: set) -> Dict[str, Any]:
-    """Una pasada completa sobre los 24 casos (el motor ya está conmutado
-    por el caller: `LLM_OFF` o config real)."""
+    """Una pasada completa: los 24 casos y la sección `report` del informe
+    (el motor ya está conmutado por el caller: `LLM_OFF` o config real)."""
     from fastapi.testclient import TestClient
 
     import rag_store
-    from main import app
+    from main import analysis_store, app
 
     resultados: List[Dict[str, Any]] = []
+    # Informe ejecutivo de la pasada (7a): UN POST tras el índice y puntúe
+    # al final con los casos report. Inicializados por legibilidad; un fallo
+    # antes del POST propaga la excepción y la pasada no continúa.
+    informe: Optional[Dict[str, Any]] = None
+    informe_error: Optional[str] = None
+    informe_ms = 0
+    df_informe: Any = None
     with TestClient(app) as client:
         # Subida + índice RAG construido (sin índice, solo léxica: engañoso).
         with open(FIXTURE, "rb") as fh:
@@ -556,6 +570,24 @@ def _run_pasada(dataset_ids: set) -> Dict[str, Any]:
                                    "RAG confiable para evaluar")
             time.sleep(0.2)
         _asegurar_indice(analysis_id)
+
+        # El informe se puntuará contra el df REAL del análisis (mismo
+        # origen que el endpoint), guardado aquí, antes del finally.
+        df_informe = (analysis_store.get(analysis_id) or {}).get("dataframe")
+
+        # 7a: generación del informe ejecutivo, UN POST por pasada con el
+        # índice listo, midiendo `ms` con la misma mecánica que /ask. El
+        # motor ya está conmutado fuera (LLM_OFF o config real), así que
+        # esta pasada usa el vigente sin decidir nada aquí. Un fallo de
+        # MEDIDA no se esconde: informe_error marca la corrida (spec §7).
+        started = time.perf_counter()
+        try:
+            res = client.post(f"/api/analysis/{analysis_id}/report")
+            res.raise_for_status()
+            informe = res.json()
+        except Exception as exc:  # noqa: BLE001 – la medida del informe marca la corrida
+            informe_error = f"{type(exc).__name__}: {exc}"
+        informe_ms = int((time.perf_counter() - started) * 1000)
 
         try:
             for case in CASES:
@@ -625,8 +657,36 @@ def _run_pasada(dataset_ids: set) -> Dict[str, Any]:
         "fallos_con_1mas": sum(1 for r in elegibles_fewshot
                                if not r.get("ok") and (r.get("rag_examples_used") or 0) > 0),
     }
+    # 7b: los 7 casos `report` se puntúan con el informe del POST único
+    # contra el df real del análisis. Van DESPUÉS de los agregados para que
+    # grounding/fewshot sigan midiendo solo a /ask: el informe no pasa por
+    # el retriever ni lleva criterio few-shot (su latencia es la del POST,
+    # compartida por los 7 casos). Un fallo de medida deja los 7 con
+    # excepción: la corrida sale marcada, no publica una sección vacía.
+    informe_meta: Dict[str, Any] = {"ms": informe_ms}
+    if informe is not None and df_informe is not None:
+        informe_meta["source"] = informe.get("source")
+        if informe.get("model"):
+            informe_meta["model"] = informe["model"]
+        for caso in REPORT_CASES:
+            registro: Dict[str, Any] = {"id": caso.id, "categoria": "report",
+                                        "ms": informe_ms}
+            try:
+                registro["ok"] = bool(caso.verifica(informe, df_informe))
+            except Exception as exc:  # noqa: BLE001 – un caso nunca tumba la corrida
+                registro["ok"] = None
+                registro["error"] = f"{type(exc).__name__}: {exc}"
+            resultados.append(registro)
+    else:
+        informe_meta["error"] = (informe_error
+                                 or "sin df del análisis para puntuar el informe")
+        for caso in REPORT_CASES:
+            resultados.append({"id": caso.id, "categoria": "report", "ok": None,
+                               "ms": informe_ms,
+                               "error": informe_meta["error"]})
     return {"resultados": resultados, "grounding": grounding, "fewshot": fewshot,
-            "rutados_a_agregacion": rutados_a_agregacion}
+            "rutados_a_agregacion": rutados_a_agregacion,
+            "informe_meta": informe_meta}
 
 
 def _probe_ollama() -> None:
@@ -686,6 +746,7 @@ def run(motor: str = "llm", forzar: bool = False, tmp: Optional[Path] = None) ->
             modelo=cfg["model"], num_ctx=cfg["num_ctx"],
             temperatura=cfg["temperature"],
             rutados_a_agregacion=parcial["rutados_a_agregacion"],
+            informe_meta=parcial.get("informe_meta"),
         )
 
     if tmp is not None:

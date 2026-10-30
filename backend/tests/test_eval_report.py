@@ -8,6 +8,7 @@ import json
 import pytest
 
 from eval import runner
+from eval.cases import REPORT_CASES, load_fixture
 from eval.runner import build_report, compare_reports, motor_guard
 
 # Ids del snapshot few-shot versionado: el store aislado arranca con él
@@ -511,3 +512,203 @@ def test_un_caso_que_revienta_se_cuenta_y_no_contamina_el_score():
     )
     assert rep["errores"] == 1                   # se muestra, no se esconde
     assert rep["por_categoria"]["refusal"] == {"casos": 1, "aciertos": 1, "pct": 100.0}
+
+
+# --- Tarea 7: sección `report` cableada en el runner --------------------------
+# `_run_pasada` genera el informe UNA vez por pasada (POST /report con el
+# índice listo) y puntúa los 7 REPORT_CASES contra el df real del análisis.
+# Los tests de pasada ejercitan el `_run_pasada` REAL (subida del fixture
+# incluida) parcheando SOLO lo que requeriría Ollama/ChromaDB: LLM_OFF o un
+# `ai_config.chat` falso para el informe, y `_asegurar_indice` sin-op (el
+# POST /report no usa el índice RAG).
+
+def _prosa_informe(ctx: dict, bug: bool = False) -> dict:
+    """Prosa de las 4 claves construida desde el MISMO ctx que viaja en el
+    prompt (todas sus cifras son anclables → pasan las reglas A–D del
+    validador) y que además puntuúa los 7 REPORT_CASES contra el df.
+
+    Tres trampas de prosa evitadas a propósito (si se reescribe este
+    helper, respetarlas):
+
+    1. «715 registros … nivel Crítico» lo rechaza la regla B del validador
+       (atribuye 715 al conteo del nivel): el riesgo global se declara sin
+       «nivel» pegado a una cifra.
+    2. La distribución NO repite la palabra «registros» por nivel: el eval
+       (`number_in_answer` con unidad) exige que N sea el número MÁS
+       cercano a la palabra, y «8 registros» ganaría contra «715
+       registros».
+    3. correlation NO junto la cifra de la IP con «sospechosos»: la regla B
+       la atribuiría al total global de eventos sospechosos, no a la IP.
+
+    Con `bug=True` añade la atribución errónea histórica «N … Event ID X»:
+    N es la cifra REAL de otro id (ancla A) y la forma «Event IDs» (plural)
+    evade la regex de la regla B del validador, que exige «event id <n>» —
+    el defecto solo lo caza el eval con su camino INDEPENDIENTE
+    (`eventid_pairs_bad`), que es lo que el test end-to-end demuestra."""
+    from severity import LEVEL_LABELS, LEVEL_ORDER
+
+    levels = ctx["level_counts"]
+    label = LEVEL_LABELS[ctx["risk"]]
+    dist = ", ".join(
+        f"{int(levels[lvl])} en nivel {LEVEL_LABELS[lvl].lower()}"
+        for lvl in LEVEL_ORDER if int(levels.get(lvl, 0) or 0) > 0
+    )
+    raws = [str(e.get("raw")) for e in (ctx.get("severity_mapping") or [])
+            if isinstance(e, dict) and e.get("raw")]
+    ejemplo = f", por ejemplo «{raws[0]}»" if raws else ""
+    top = (ctx.get("suspicious_by_ip") or [{}])[0]
+    conclusions = (
+        f"El riesgo global asignado es {label}. Distribución: {dist}. "
+        f"Sobre {ctx['rows']} registros del archivo importado, toda cifra "
+        "procede de los datos analizados."
+    )
+    if bug:
+        counts = {k: int(v) for k, v in (ctx.get("event_id_counts") or {}).items()}
+        x_bug, n_bug = max(counts.items(), key=lambda kv: kv[1])
+        n_otro = next(v for k, v in counts.items() if k != x_bug and v != n_bug)
+        conclusions += f" Se revisaron {n_otro} eventos de Event IDs {x_bug}."
+    return {
+        "executive_summary": (
+            f"Se analizaron {int(ctx['rows'])} registros. El riesgo global "
+            f"asignado es {label}. Distribución: {dist}. Se detectaron "
+            f"{int(ctx['suspicious_events'])} eventos sospechosos."
+        ),
+        "methodology": (
+            "Importación del archivo Excel con lectura de todas las hojas."
+            f" Clasificación de la severidad original{ejemplo} a los niveles "
+            "del marco de la organización. Aplicación de reglas de sospecha "
+            "sobre los campos de cada registro."
+        ),
+        "correlation": (
+            f"La IP de origen {top.get('ip')} concentra "
+            f"{int(top.get('events') or 0)} eventos en "
+            f"{int(top.get('hosts') or 0)} hosts: debe validarse contra los "
+            "registros de autenticación de esos activos."
+        ),
+        "conclusions": conclusions,
+    }
+
+
+def _chat_informe(bug: bool = False):
+    """Falso `ai_config.chat`: solo contesta al prompt del informe (el ctx
+    viaja en él, así la prosa sale de los MISMOS datos reales); al resto de
+    llamadas (p. ej. /ask) devuelve «» para que el motor baje al
+    determinista y el test no dependa de la config real de la máquina."""
+
+    async def chat_falso(messages, **kwargs):
+        prompt = str(messages[-1].get("content") or "")
+        if "Redacta la prosa del informe" not in prompt:
+            return ""
+        ctx = json.loads(prompt[prompt.index("{"):])
+        return json.dumps(_prosa_informe(ctx, bug=bug), ensure_ascii=False)
+
+    return chat_falso
+
+
+def _activar_informe(monkeypatch, bug: bool = False):
+    """LLM «encendido» para /report con el chat falsificado, sin Ollama."""
+    import ai_service
+
+    original = ai_service.ai_config.get
+    monkeypatch.setattr(ai_service.ai_config, "get",
+                        lambda: {**original(), "enabled": True,
+                                 "api_url": "http://ollama-falso"})
+    monkeypatch.setattr(ai_service.ai_config, "chat", _chat_informe(bug))
+
+
+def _pasada_report(monkeypatch, tmp_path):
+    """`_run_pasada` REAL sobre el fixture, con el índice RAG sin-op (el
+    informe no lo usa) y el feedback aislado como en `run()`."""
+    monkeypatch.setattr(runner, "_asegurar_indice", lambda analysis_id: None)
+    ids = set(load_fixture()["Log_ID"].astype(str))
+    with runner._isolated_store(tmp_path):
+        return runner._run_pasada(ids)
+
+
+def _casos_report(pasada):
+    return [r for r in pasada["resultados"] if r["categoria"] == "report"]
+
+
+def test_pasada_llm_off_puntua_los_7_casos_report_con_el_fallback(monkeypatch, tmp_path):
+    # LLM_OFF parchea el chat globalmente: el POST /report de la pasada usa el
+    # fallback determinista (ya verificado contra los REPORT_CASES en
+    # test_eval_cases) y los 7 casos tienen que puntuar OK, ninguno con
+    # excepción. Prueba además que la categoría `report` entra sola a la
+    # pasada: nadie la lista de casos a mano.
+    with runner.LLM_OFF():
+        pasada = _pasada_report(monkeypatch, tmp_path)
+    casos = _casos_report(pasada)
+    assert [c["id"] for c in casos] == [c.id for c in REPORT_CASES]
+    assert all(c["ok"] is not None for c in casos), \
+        f"casos report con excepción: {[c for c in casos if c['ok'] is None]}"
+    assert all(c["ok"] for c in casos), \
+        f"el fallback determinista no pasa: {[c for c in casos if not c['ok']]}"
+    # Meta de la sección: ms del POST /report y fuente del informe.
+    assert pasada["informe_meta"]["ms"] >= 0
+    assert pasada["informe_meta"]["source"] == "local"
+
+
+def test_informe_valido_via_chat_pasa_los_7_y_el_bug_de_atribucion_no(monkeypatch,
+                                                                     tmp_path):
+    # End-to-end por el camino LLM: la prosa parcheada PASA las reglas A–D
+    # del validador (sale del mismo ctx real) y llega al payload mezclada.
+    # Sin bug los 7 casos pasan y la fuente es «llm»; con el bug de
+    # atribución histórico («N eventos de Event IDs X», forma plural que la
+    # regla B no detecta; N sale de las cifras reales del ctx) SOLO cae
+    # rep-atribucion-eventid — el eval caza por su camino independiente lo
+    # que el validador dejó pasar.
+    _activar_informe(monkeypatch, bug=False)
+    sana = {c["id"]: c["ok"] for c in _casos_report(
+        _pasada_report(monkeypatch, tmp_path))}
+    assert sana == {c.id: True for c in REPORT_CASES}, sana
+
+    _activar_informe(monkeypatch, bug=True)
+    bug = {c["id"]: c for c in _casos_report(_pasada_report(monkeypatch, tmp_path))}
+    assert bug["rep-atribucion-eventid"]["ok"] is False, bug
+    assert all(c["ok"] for cid, c in bug.items()
+               if cid != "rep-atribucion-eventid"), \
+        f"el bug de atribución contaminó otros casos: {bug}"
+
+
+def test_build_report_cuenta_la_seccion_report_y_llama_informe_meta():
+    # Cableado 7c: la sección `report` entra al build_report como una
+    # categoría más (7 casos), `informe_meta` lleva los ms a la meta y la
+    # cobertura few-shot NO cuenta los casos report (el informe ejecutivo no
+    # lleva ejemplos few-shot: contarlos hundiría el % sin discriminar).
+    resultados = [{"categoria": "report", "ok": True, "id": c.id,
+                   "ms": 1500} for c in REPORT_CASES]
+    rep = build_report(
+        resultados=resultados, grounding={"rechazo_pct": 0.0, "inventados": 0},
+        fewshot={"cobertura_pct": 50.0}, motor="llm", hash_muestra="abc",
+        modelo="qwen2.5:3b", num_ctx=4096, temperatura=0.2,
+        informe_meta={"ms": 1500, "source": "llm", "model": "qwen2.5:3b"},
+    )
+    assert rep["por_categoria"]["report"] == {"casos": 7, "aciertos": 7,
+                                             "pct": 100.0}
+    assert rep["informe"] == {"ms": 1500, "source": "llm", "model": "qwen2.5:3b"}
+    assert rep["latencia"]["por_categoria"]["report"] == 1500
+    assert "report" not in rep["fewshot"]["por_categoria"]
+
+
+def test_build_report_informe_meta_opcional_sin_cambio_para_llamadas_viejas():
+    rep = _informe([("report", True), ("report", False)])
+    assert rep["por_categoria"]["report"] == {"casos": 2, "aciertos": 1, "pct": 50.0}
+    assert rep["informe"] == {}                  # default: meta vacía
+    assert build_report(
+        resultados=[{"categoria": "report", "ok": True}],
+        grounding={"rechazo_pct": 0.0, "inventados": 0},
+        fewshot={"cobertura_pct": 0.0}, motor="llm", hash_muestra="abc",
+        modelo="qwen2.5:3b", num_ctx=4096, temperatura=0.2,
+        informe_meta={"ms": 1234, "source": "llm"},
+    )["informe"] == {"ms": 1234, "source": "llm"}
+
+
+def test_compare_reports_con_report_igual_no_marcado_diff():
+    # compare_reports recorre la UNIÓN de categorías: `report` entra al diff
+    # por el mismo mecanismo genérico, sin código especial.
+    antes = _informe([("report", True), ("filter_set", True)])
+    despues = _informe([("report", True), ("filter_set", True)])
+    cmp = compare_reports(despues, antes)
+    assert cmp["por_categoria"]["report"] == {"antes": 100.0, "despues": 100.0,
+                                              "delta": 0.0, "presente": True}
+    assert cmp["delta_global"] == 0.0
