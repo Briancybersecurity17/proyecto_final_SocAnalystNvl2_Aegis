@@ -57,7 +57,7 @@ proyecto_final_bootcamp_ComunidadDojo_SocAnalystNvl2/
 │  │  ├─ mitre_attack.json    # 79 técnicas (generada por scripts/build_kb.py)
 │  │  └─ event_ids.json       # 44 Event IDs de Windows (curado a mano)
 │  ├─ scripts/                # build_kb.py + benches de latencia, contexto y recuperación
-│  ├─ tests/                  # pytest: 173 tests (config, streaming SSE, few-shot…)
+│  ├─ tests/                  # pytest: 285 tests (config, streaming SSE, few-shot…)
 │  └─ requirements.txt
 └─ frontend/                  # React + Vite + TypeScript (puerto 5300)
    ├─ index.html
@@ -332,7 +332,7 @@ semántica («fuerza bruta» → T1110, «ransomware» → T1486) → alias renu
 citados en la pregunta → bloque «Referencia técnica» en la respuesta →
 degradación sin Chroma.
 
-Suite unitaria (173 tests: configuración del LLM, streaming SSE, memoria de
+Suite unitaria (285 tests: configuración del LLM, streaming SSE, memoria de
 criterio few-shot, presupuesto de ventana, scoring/casos/runner del eval):
 
 ```bash
@@ -376,13 +376,19 @@ ningún caso de evidencia puntuó: el guard es fail-closed).
 Resultados por corrida en `backend/eval/runs/` (ignorado por git).
 
 Medida (muestra de 715 filas, `qwen2.5:3b`, temp 0.15, con el seed few-shot
-versionado activo): **determinista 38.5 % macro · LLM 46.1 %** (Δ **+7.6**).
-El modelo gana en `refusal` (+66.7), empata en `aggregate`, `retrieval` y
-`evidence_qa`, y sigue perdiendo en `filter_set` (−28.6) — con el LLM, la
-cobertura few-shot es 100 % de los casos elegibles (§6: los 6 fallos del
-modelo tuvieron ejemplos inyectados, o sea fallo de CALIDAD del criterio, no
-de recall). La línea base determinista (38.5) no cambia con el seed: el
-determinista no lee few-shot. Corridas completas en `backend/eval/runs/`.
+versionado activo): **determinista 48.7 % macro · LLM 49.5 %** (Δ **+0.8**),
+con la categoría `report` incluida — **7/7 = 100 % en ambos motores** y
+`informe.source = llm` con prosa del modelo en la pasada LLM. El modelo gana
+en `refusal` (+66.7), empata en `aggregate` y `retrieval`, y pierde en
+`filter_set` (−28.6) y `evidence_qa` (−33.3, reproducible en las corridas
+versionadas). Excluyendo `report`, el determinista marca **38.5 %** — idéntico
+a la línea base previa, o sea que el cambio en el reconocimiento de números
+no movió la verdad determinista — y el LLM 39.4 %. Con el LLM, la cobertura
+few-shot es 100 % de los casos elegibles (§6: los 7 fallos del modelo en las
+categorías elegibles tuvieron ejemplos inyectados, o sea fallo de CALIDAD
+del criterio, no de recall). La línea base determinista no cambia con el
+seed: el determinista no lee few-shot. Corridas completas en
+`backend/eval/runs/`.
 
 > La comparación entre `--motor determinista` y `--motor llm` se sostiene
 > porque el aislamiento garantiza que ambas pasadas parten del mismo estado
