@@ -93,7 +93,41 @@ def _subir_y_esperar(client: TestClient, filename: str, contenido: io.BytesIO) -
 # corrida en vez de por test. Un fixture de sesión no puede depender de uno
 # de función, por eso `client` también es de sesión y se define primero.
 @pytest.fixture(scope="session")
-def client() -> TestClient:
+def rag_aislado(tmp_path_factory):
+    """Redirige el índice semántico a un Chroma temporal durante la suite.
+
+    Revisión funcional #4: `backend/data/rag` era COMPARTIDO con los tests.
+    Cada corrida subía los datasets sintéticos y `purge_except` (tras cada
+    ingesta en `_analyze_task`) borraba los eventos del análisis REAL del
+    analista: el asistente se quedó ~1 h respondiendo «Sin coincidencias en
+    el índice» hasta que la autoreparación volvió a indexar. Con este
+    fixture la suite escribe solo en un temporal que pytest borra al cerrar.
+    Los globals lazy de rag_store se resetean porque `feedback_store` y
+    `kb_store` comparten ese mismo cliente.
+    """
+    import rag_store
+
+    original_path = rag_store.RAG_DATA_PATH
+    rag_store.RAG_DATA_PATH = tmp_path_factory.mktemp("rag_index")
+    rag_store._client = None
+    rag_store._collection = None
+    rag_store._initialized = False
+    rag_store._init_error = None
+    try:
+        yield rag_store.RAG_DATA_PATH
+    finally:
+        # Restaurar el path real y soltar el cliente temporal: el proceso de
+        # la suite no debe dejar un Chroma colgado apuntando a un tmp que
+        # pytest va a borrar.
+        rag_store.RAG_DATA_PATH = original_path
+        rag_store._client = None
+        rag_store._collection = None
+        rag_store._initialized = False
+        rag_store._init_error = None
+
+
+@pytest.fixture(scope="session")
+def client(rag_aislado) -> TestClient:
     return TestClient(app)
 
 

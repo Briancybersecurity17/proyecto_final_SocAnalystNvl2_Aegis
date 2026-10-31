@@ -82,6 +82,29 @@ def test_regla_a_ip_y_fecha_no_generan_anclas_falsas():
     assert _rule_anchor(texto, CTX) == []
 
 
+def test_regla_a_anchorea_cifras_embebidas_en_prosa_del_ctx():
+    """Revisión funcional #2: el LLM escribía «4625 (33)» porque 33 aparece
+    en el ctx embebido en prosa (justificación/evidencia), pero `_anchors`
+    solo anclaba enteros sueltos → la regla A lo rechazaba con el falso
+    positivo «número 33 sin ancla» y el informe entero caía al local.
+
+    Las IP y fechas de esas cadenas NO generan anclas (los octetos ya los
+    descarta `_numbers`), y una cifra que no aparece en ninguna parte del
+    ctx sigue rechazándose igual."""
+    ctx = {
+        "rows": 715,
+        "level_counts": {"critico": 97, "alto": 8, "medio": 7, "bajo": 603},
+        "risk_justification": (
+            "Nivel «Crítico»: 97 de 715 registros. El Event ID 4625 (33) "
+            "concentra intentos de logon fallidos en DC-01 (10.10.2.15)."
+        ),
+    }
+    assert _rule_anchor("El Event ID 4625 sumó 33 registros.", ctx) == []
+    assert _rule_anchor("El Event ID 4625 sumó 34 registros.", ctx) == [
+        "número 34 sin ancla"
+    ]
+
+
 def test_numbers_formats_y_descarte_ip():
     """«1.234», «1,234», «1234» → 1234; IP y fecha quedan descartadas."""
     assert _numbers("vino 1.234, luego 1,234 y 1234") == [

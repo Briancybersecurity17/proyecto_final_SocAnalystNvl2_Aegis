@@ -636,6 +636,23 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
             for ip, n in grouped_ip.items()
         ]
 
+    # --- totales sin truncar de hosts e IPs sospechosos ---------------------
+    # Revisión funcional #1: las listas de arriba son top-6 (head(6)) y el
+    # dashboard las estaba mostrando como si fueran los totales («6 hosts»
+    # cuando el archivo real tenía 11). Los conteos distinct reales viajan
+    # aparte, sin tocar las listas que alimentan las gráficas.
+    suspicious_hosts_total = 0
+    suspicious_ips_total = 0
+    if suspicious_events:
+        if "Hostname" in df.columns:
+            hosts_series = suspicious_rows["Hostname"].astype(str).str.strip()
+            hosts_series = hosts_series[(hosts_series != "") & (hosts_series.str.lower() != "nan")]
+            suspicious_hosts_total = int(hosts_series.nunique())
+        if "Source_IP" in df.columns:
+            ips_series = suspicious_rows["Source_IP"].astype(str).str.strip()
+            ips_series = ips_series[(ips_series != "") & (ips_series.str.lower() != "nan")]
+            suspicious_ips_total = int(ips_series.nunique())
+
     # --- risk level with data-grounded justification -----------------------
     highest = next((lvl for lvl in LEVEL_ORDER if level_counts[lvl] > 0), None)
     if highest is None:
@@ -714,6 +731,8 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
         "http_errors": http_errors,
         "suspicious_correlations": suspicious_correlations,
         "suspicious_by_ip": suspicious_by_ip,
+        "suspicious_hosts_total": suspicious_hosts_total,
+        "suspicious_ips_total": suspicious_ips_total,
     }
 
 

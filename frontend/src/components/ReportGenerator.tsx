@@ -30,6 +30,11 @@ const LEVEL_META: Record<string, { label: string; color: string; chip: string }>
   bajo: { label: 'Bajo', color: '#059669', chip: 'bg-emerald-500 text-white' },
 }
 
+// Los 4 campos de prosa que el validador puede aceptar del LLM (los mismos
+// que define el backend en `_PROSE_FIELDS`): su presencia en `field_sources`
+// distingue un informe 100 % IA de uno con prosa mixta.
+const PROSE_FIELDS = ['executive_summary', 'methodology', 'correlation', 'conclusions']
+
 const fmt = (v: unknown): string => {
   if (v === null || v === undefined || v === '') return '—'
   const s = String(v)
@@ -291,12 +296,15 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
             </View>
           </View>
         )}
-        <Text style={pdf.para}>{summary.risk_justification}</Text>
-        {report.source === 'llm' && (
+        {/* La justificación del riesgo vive solo en §3 (junto a la tabla de
+            niveles): en §1 se repetía tras la misma distribución (revisión #3). */}
+        {report.field_sources?.executive_summary === 'llm' ? (
           <View style={pdf.aiBox}>
             <Text style={pdf.aiLabel}>Lectura del análisis</Text>
             <Text style={pdf.para}>{report.executive_summary}</Text>
           </View>
+        ) : (
+          <Text style={pdf.para}>{report.executive_summary}</Text>
         )}
 
         {/* 2. Alcance y metodología */}
@@ -473,10 +481,28 @@ const ReportGenerator: React.FC = () => {
     )
   }
 
-  const aiBadge =
-    report?.source === 'llm'
-      ? { text: `IA remota · ${report.model}`, color: '#10b981' }
-      : { text: `IA local grounded · ${report?.model ?? ''}`, color: '#1fc8ff' }
+  const aiBadge = (() => {
+    // `source === 'llm'` significa «al menos un campo de prosa pasó el
+    // validador»: sin desglosar por campo, la UI enseñaba «IA remota» y la
+    // caja «Lectura del análisis» con texto LOCAL cuando solo había pasado
+    // correlation (revisión funcional #2). `field_sources` da el detalle.
+    const prosa = PROSE_FIELDS.filter(campo => report?.field_sources?.[campo] === 'llm')
+    if (!report || report.source !== 'llm' || prosa.length === 0) {
+      return { text: `IA local grounded · ${report?.model ?? ''}`, color: '#1fc8ff' }
+    }
+    if (prosa.length === PROSE_FIELDS.length) {
+      return { text: `IA remota · ${report.model}`, color: '#10b981' }
+    }
+    return {
+      text: `IA remota parcial · ${prosa.length}/${PROSE_FIELDS.length} campos (${prosa.join(', ')}) · ${report.model}`,
+      color: '#f59e0b',
+    }
+  })()
+
+  // El resumen ejecutivo se muestra SIEMPRE en §1: la caja azul solo si la
+  // IA lo redactó; si es el fallback local, va como párrafo normal (antes,
+  // con `source === 'llm'` no se pintaba nada si solo correlation pasaba).
+  const executiveFromAi = report?.field_sources?.executive_summary === 'llm'
 
   return (
     <section className="space-y-6">
@@ -577,7 +603,15 @@ const ReportGenerator: React.FC = () => {
                 ['Sospechosos', String(summary.suspicious_events)],
                 ['Hojas', (summary.sheet_names || []).join(', ') || '—'],
                 ['Generado', (report.generated_at || '').replace('T', ' ')],
-                ['Fuente IA', report.source === 'llm' ? 'Remota' : 'Local'],
+                [
+                  'Fuente IA',
+                  report.source === 'llm'
+                    ? report.field_sources &&
+                      PROSE_FIELDS.every(c => report.field_sources?.[c] === 'llm')
+                      ? 'Remota'
+                      : `Remota parcial (${PROSE_FIELDS.filter(c => report.field_sources?.[c] === 'llm').length}/${PROSE_FIELDS.length} campos)`
+                    : 'Local',
+                ],
               ].map(([k, v]) => (
                 <div key={k} className="bg-gray-50 rounded p-2">
                   <dt className="text-[11px] uppercase text-gray-500">{k}</dt>
@@ -631,13 +665,11 @@ const ReportGenerator: React.FC = () => {
               </div>
             )}
 
-            {summary.risk_justification && (
-              <p className="text-sm leading-relaxed text-gray-700 text-justify">
-                {summary.risk_justification}
-              </p>
-            )}
-
-            {report.source === 'llm' && (
+            {/* El resumen ejecutivo se pinta SIEMPRE: la caja azul «Lectura
+                del análisis» solo cuando la IA lo redactó; si es el fallback
+                local, va como párrafo normal (antes, con `source === 'llm'`
+                no se veía nada si solo pasaba correlation — revisión #2). */}
+            {executiveFromAi ? (
               <div className="mt-3 rounded border border-blue-100 bg-blue-50/50 p-3">
                 <p className="text-[11px] uppercase tracking-wide text-blue-800 font-semibold mb-1">
                   Lectura del análisis
@@ -646,6 +678,10 @@ const ReportGenerator: React.FC = () => {
                   {report.executive_summary}
                 </p>
               </div>
+            ) : (
+              <p className="text-sm leading-relaxed text-gray-700 text-justify">
+                {report.executive_summary}
+              </p>
             )}
           </section>
 

@@ -93,6 +93,16 @@ export const SecurityAnalysis: React.FC = () => {
     ? hostData.find(item => item.host === focusSuspHost) ?? null
     : null
   const totalSuspicious = toCount(summary.suspicious_events)
+  // Los KPIs enseñan los TOTALES distinct de hosts/IPs sospechosos, no la
+  // longitud de las listas de gráfica (que el backend recorta a top-6):
+  // con el archivo real eran 11 hosts / 10 IPs y aquí se enseñaba «6».
+  // El fallback a la longitud de la lista cubre summaries antiguos en caché.
+  const totalSuspHosts = summary.suspicious_hosts_total ?? hostData.length
+  const totalSuspIps = summary.suspicious_ips_total ?? ipData.length
+  // Si el total supera lo que las gráficas pueden mostrar, se avisa: el
+  // analista debe saber que las barras son una selección, no el universo.
+  const hostsTruncated = totalSuspHosts > hostData.length
+  const ipsTruncated = totalSuspIps > ipData.length
   // La columna «Resultado» solo existe si el archivo la trae: si no, no se
   // muestra, para no dar a entender que todos los eventos carecen de resultado.
   const hasResult = summary.columns.includes('Result')
@@ -124,12 +134,12 @@ export const SecurityAnalysis: React.FC = () => {
         </div>
         <div className="border border-hud-soft bg-inset/80 p-4 text-center [clip-path:var(--chamfer-sm)]">
           <h3 className="hud-label mb-2">Hosts afectados</h3>
-          <p className="font-display text-3xl font-bold text-[#dc2626]">{hostData.length}</p>
+          <p className="font-display text-3xl font-bold text-[#dc2626]">{totalSuspHosts}</p>
           <p className="mt-1 font-mono text-[12px] text-[var(--text-dim)]">con eventos sospechosos</p>
         </div>
         <div className="border border-hud-soft bg-inset/80 p-4 text-center [clip-path:var(--chamfer-sm)]">
           <h3 className="hud-label mb-2">IPs de origen</h3>
-          <p className="font-display text-3xl font-bold text-hud-line">{ipData.length}</p>
+          <p className="font-display text-3xl font-bold text-hud-line">{totalSuspIps}</p>
           <p className="mt-1 font-mono text-[12px] text-[var(--text-dim)]">
             con actividad marcada para revisión
           </p>
@@ -142,6 +152,12 @@ export const SecurityAnalysis: React.FC = () => {
           El alcance entre hosts ayuda a priorizar la investigación, pero el volumen por sí
           solo no demuestra que una IP sea maliciosa.
         </p>
+        {ipsTruncated && (
+          <p className="mb-3 font-mono text-[12px] text-[#f97316]">
+            Mostrando las {ipData.length} IP con más volumen · hay {totalSuspIps} IPs
+            sospechosas en total (el KPI de arriba refleja el total real).
+          </p>
+        )}
         {ipData.length ? (
           <ResponsiveContainer width="100%" height={Math.max(280, ipData.length * 48)}>
             <BarChart
@@ -217,6 +233,12 @@ export const SecurityAnalysis: React.FC = () => {
 
       {/* Correlation: suspicious per host */}
       <DashboardSection title="Eventos sospechosos por host">
+        {hostsTruncated && (
+          <p className="mb-3 font-mono text-[12px] text-[#f97316]">
+            Mostrando los {hostData.length} hosts con más volumen · hay {totalSuspHosts}
+            hosts con eventos sospechosos en total (el KPI de arriba refleja el total real).
+          </p>
+        )}
         {hostData.length ? (
           <ResponsiveContainer width="100%" height={Math.max(280, hostData.length * 46)}>
             <BarChart

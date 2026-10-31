@@ -39,9 +39,14 @@ COLLECTION_NAME = "soc_events"
 EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
 
 # Orden de los campos del Excel dentro del documento (si existen en la fila).
+# Process_CommandLine va después de Event_Description a propósito: es la
+# prueba más directa de QUÉ ejecutó un proceso (powershell.exe -enc …) y sin
+# ella el asistente respondía «no encontré procesos PowerShell» teniendo el
+# evento 4688/4104 delante (revisión funcional #4).
 CONTEXT_FIELDS = [
     "Log_ID", "Timestamp", "Hostname", "Event_ID", "User", "Source_IP",
     "Destination", "Log_Source", "Result", "Severity", "Event_Description",
+    "Process_CommandLine",
 ]
 
 # Claves enriquecidas que calcula main.py antes de indexar.
@@ -102,6 +107,14 @@ QUERY_LEXICON: List[tuple[str, str]] = [
     ("instalación de servicio", "new service installed"),
     ("proceso nuevo", "new process created"),
     ("proceso creado", "new process created"),
+    # PowerShell: el archivo real trae 4688 «powershell.exe» y 4104 «Script
+    # Block Logging»; sin esta puente la pregunta en español recuperaba mal
+    # los eventos de ejecución de scripts (revisión funcional #4).
+    ("powershell", "powershell script block powershell.exe"),
+    ("script block", "powershell script block logging"),
+    ("bloque de script", "powershell script block logging"),
+    ("codificado", "powershell -enc encoded command"),
+    ("encoded", "powershell -enc encoded command"),
     ("privilegios", "special privileges assigned"),
     ("permisos especiales", "special privileges assigned"),
     ("cuenta nueva", "new account created"),
@@ -350,6 +363,11 @@ def build_metadata(row: Dict[str, Any], analysis_id: str, position: int) -> Dict
         ("Log_Source", "log_source"),
         ("Result", "result"),
         ("Event_Description", "description"),
+        # Línea de comando del proceso: la evidencia directa de QUÉ se
+        # ejecutó (powershell.exe -enc …). Sin ella en metadata, el prompt
+        # del LLM (que se arma desde aquí, no desde el documento) nunca la
+        # veía y el asistente negaba la existencia de procesos PowerShell.
+        ("Process_CommandLine", "command_line"),
     ):
         value = _clean(row.get(key))
         if value and out == "result":

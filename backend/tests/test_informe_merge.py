@@ -157,6 +157,17 @@ def _generar(monkeypatch, **chat):
 # ---------------------------------------------------------------------------
 
 
+def test_resumen_ejecutivo_no_embebe_la_justificacion_del_riesgo():
+    """Revisión funcional #3: la misma justificación de riesgo (233 car.)
+    aparecía 3 veces en el informe — §1, embebida en el executive_summary
+    («Justificación global: …») y §3—. La prosa del resumen debe resumir,
+    no replicar el párrafo que §3 ya explica junto a la tabla."""
+    fallback = _fallback()
+    justificacion = _SUMMARY["risk_justification"]
+    assert justificacion not in fallback["executive_summary"]
+    assert "Justificación global" not in fallback["executive_summary"]
+
+
 def test_merge_nunca_pisa_findings_ni_action_plan():
     """Aunque `aceptados` traiga findings/action_plan, mandan los del fallback."""
     fallback = _fallback()

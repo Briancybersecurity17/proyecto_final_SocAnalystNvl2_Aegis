@@ -64,6 +64,13 @@ export interface ReportNarrative {
   findings: ReportFinding[]
   action_plan: ActionItem[]
   source: 'local' | 'llm'
+  /**
+   * De dónde salió CADA campo: 'llm' solo si el validador aceptó esa prosa,
+   * 'local' en el resto. `source: 'llm'` significa «al menos un campo» — sin
+   * este mapa la UI no puede distinguir un informe 100 % IA de uno donde
+   * solo pasó un campo (p. ej. correlation) y el resto es el fallback local.
+   */
+  field_sources?: Record<string, 'llm' | 'local'>
   model: string
   generated_at: string
 }
@@ -99,6 +106,13 @@ export interface AnalysisSummary {
   suspicious_details: SuspiciousDetail[]
   suspicious_correlations: Record<string, number>
   suspicious_by_ip: SuspiciousIp[]
+  /**
+   * Totales reales (sin el recorte top-6 de las listas anteriores): el
+   * dashboard debe enseñar el número de hosts/IPs distintos que tocan
+   * eventos sospechosos, aunque las gráficas solo muestren los 6 primeros.
+   */
+  suspicious_hosts_total?: number
+  suspicious_ips_total?: number
   sheet_names?: string[]
   missing_columns?: string[]
   file_name?: string

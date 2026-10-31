@@ -84,6 +84,29 @@ def test_summary_sin_filtros_es_identico_al_global(client, analysis_id):
     assert res["total"] == 12 and res["filtered_total"] == 12 and res["rows"] == 12
     assert res["level_counts"] == {"critico": 2, "alto": 3, "medio": 2, "bajo": 5}
 
+def test_summary_totales_sospechosos_no_estan_truncados(client, analysis_id):
+    # Revisión funcional #1: el dashboard enseñaba «6 hosts / 6 IPs» como si
+    # fueran los totales, pero en realidad eran el top-6 de las listas
+    # (head(6)) del builder. Los totales reales deben viajar aparte, sin
+    # truncar, para que la UI no mienta cuando hay más de 6 hosts/IPs.
+    # Verdad del dataset de 12 filas: las 6 filas sospechosas (2,3,4,6,8,11)
+    # tocan 3 hosts (WS-018, WEB-01, DC-01) y 3 IPs (10.10.2.15, .40, .20).
+    res = client.get(f"/api/analysis/{analysis_id}/summary").json()
+    assert res["suspicious_hosts_total"] == 3
+    assert res["suspicious_ips_total"] == 3
+
+
+def test_summary_totales_sospechosos_respetan_el_filtrado(client, analysis_id):
+    # Los totales describen lo que el analista está viendo (misma selección
+    # que las listas top-6), no el archivo crudo: con filtro de nivel alto
+    # solo quedan las filas 2,3,6 → 2 hosts (WS-018, WEB-01) y 2 IPs
+    # (10.10.2.15, 10.10.2.40).
+    res = client.get(f"/api/analysis/{analysis_id}/summary",
+                     params={"level": "alto"}).json()
+    assert res["suspicious_hosts_total"] == 2
+    assert res["suspicious_ips_total"] == 2
+
+
 def test_summary_ventana_temporal_acota(client, analysis_id):
     res = client.get(f"/api/analysis/{analysis_id}/summary",
                      params={"from": "2026-01-11T00:00:00", "to": "2026-01-12T23:59:59"}).json()

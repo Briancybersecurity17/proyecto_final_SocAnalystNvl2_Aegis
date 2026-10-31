@@ -218,14 +218,16 @@ def _fallback_narrative(ctx: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     # --- Resumen ejecutivo -------------------------------------------------
+    # La justificación del riesgo NO se embebe aquí: el frontend la pinta en
+    # §3 junto a la tabla de niveles (revisión funcional #3: la misma prosa
+    # de 233 caracteres aparecía 3 veces — §1, resumen y §3—).
     executive = (
         f"Se analizaron {total} registros de seguridad del archivo "
         f"«{ctx['file_name']}» (hojas: {sheets}), correspondientes a {hosts} hosts "
         f"y {len(ctx['columns'])} campos. El nivel de riesgo global asignado es "
         f"«{highest_label}». Distribución por criticidad — {breakdown}. "
         f"El motor detectó {ctx['suspicious_events']} eventos sospechosos "
-        f"({_pct(ctx['suspicious_events'], total)} del total). "
-        f"Justificación global: {ctx['risk_justification']}"
+        f"({_pct(ctx['suspicious_events'], total)} del total)."
     )
 
     # --- Metodología -------------------------------------------------------
@@ -683,8 +685,13 @@ def _anchors(ctx: Any) -> set[float]:
     """Cifras anclables del contexto: barrido recursivo (dicts/listas/scalars).
 
     Se anclan todos los enteros de conteos y los strings ENTERAMENTE
-    numéricos (Event_ID «4625», código HTTP «404»). Las IP («10.10.2.15») no
-    casan con \\d+ y sus octetos no se anclan.
+    numéricos (Event_ID «4625», código HTTP «404»). Además, las cifras
+    EMBEBIDAS en prosa del ctx («El Event ID 4625 (33) concentra…» en una
+    justificación o evidencia) también se anclan: si el dato está escrito en
+    el contexto, el modelo puede citarlo sin que la regla A lo tache de
+    inventado (revisión funcional #2: «número 33 sin ancla» con el 33 a la
+    vista en la prosa). Los octetos de IP y las partes de fecha quedan
+    fuera igual que en el texto: `_numbers` ya los descarta.
     """
     found: set[float] = set()
     if isinstance(ctx, dict):
@@ -701,8 +708,12 @@ def _anchors(ctx: Any) -> set[float]:
         pass  # bool es int en Python: True/False no son cifras del informe
     elif isinstance(ctx, int):
         found.add(float(ctx))
-    elif isinstance(ctx, str) and re.fullmatch(r"\d+", ctx.strip()):
-        found.add(float(ctx))
+    elif isinstance(ctx, str):
+        if re.fullmatch(r"\d+", ctx.strip()):
+            found.add(float(ctx.strip()))
+        else:
+            for _raw, value in _numbers(ctx):
+                found.add(value)
     return found
 
 
@@ -1394,6 +1405,10 @@ def build_qa_context(
             "suspicious": bool(hit.get("suspicious")),
             "description": meta.get("description", "—"),
             "result": meta.get("result", "—"),
+            # Línea de comando del proceso (si el archivo la trae): permite
+            # al modelo citar «powershell.exe -enc …» en vez de negar la
+            # existencia del proceso por no verla.
+            "command_line": meta.get("command_line", "—"),
             "relevance": float(hit.get("score", 0.0)),
             "document": hit.get("document", ""),
         })
@@ -1411,6 +1426,10 @@ def build_qa_context(
         "result_counts": summary.get("result_counts") or {},
         "result_hosts": summary.get("result_hosts") or {},
         "suspicious_events": int(summary.get("suspicious_events") or 0),
+        # IPs que concentran eventos sospechosos (eventos + nº de hosts que
+        # toca cada una): permite responder «¿qué IP concentra...?» con la
+        # IP exacta en vez de una lista de hosts sin nombres de origen.
+        "suspicious_by_ip": summary.get("suspicious_by_ip") or [],
         "unique_hosts": summary.get("unique_hosts"),
         # Aviso del backend: el índice semántico aún se está construyendo y la
         # recuperación de esta consulta ha sido solo léxica.
@@ -1780,6 +1799,34 @@ def _aggregate_lines(ctx: Dict[str, Any]) -> List[str]:
             )
         elif "sospechoso" in _level_terms(ctx["question"]):
             lines.append(f"Ningún registro quedó marcado como sospechoso (0 de {rows}).")
+
+    # 3b) IPs de origen que concentran eventos sospechosos: si la consulta
+    # menciona IP/origen, o si el reparto general la incluye, se citan las
+    # principales con sus eventos y el nº de hosts que tocan. Antes una
+    # pregunta como «¿qué IP concentra más eventos?» se respondía sin
+    # mencionar ninguna IP (revisión funcional #4).
+    by_ip = ctx.get("suspicious_by_ip") or []
+    question_low = _norm_text(ctx["question"])
+    # Límite de palabra para «ip»: como subcadena casaría dentro de
+    # «equipos»/«tipos» y añadiría la línea sin que la consulta la pida.
+    wants_ip = bool(re.search(r"\bip\b", question_low)) or any(
+        term in question_low for term in ("origen", "direccion", "direcciones")
+    )
+    if by_ip and (wants_ip or not requested):
+        top_ips = [
+            entry for entry in by_ip
+            if isinstance(entry, dict) and entry.get("ip") and int(entry.get("events", 0) or 0) > 0
+        ][:3]
+        if top_ips:
+            lines.append(
+                "IPs de origen con más eventos sospechosos: "
+                + ", ".join(
+                    f"{entry['ip']} ({int(entry['events'])} eventos, "
+                    f"{int(entry.get('hosts', 0) or 0)} hosts)"
+                    for entry in top_ips
+                )
+                + "."
+            )
     unique_hosts = ctx.get("unique_hosts")
     if unique_hosts:
         lines.append(f"Hosts distintos en la carga: {int(unique_hosts)}.")
@@ -2074,6 +2121,10 @@ def _slim_for_prompt(evidence: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "level": item.get("level"),
             "suspicious": item.get("suspicious"),
             "result": item.get("result"),
+            # Línea de comando del proceso: es la prueba directa de la
+            # ejecución (powershell.exe -enc …); sin ella el modelo negaba
+            # procesos PowerShell teniendo el 4688 recuperado.
+            "command_line": item.get("command_line"),
             "description": str(item.get("description") or "")[:200],
         })
     return slim
