@@ -287,6 +287,46 @@ def test_regla_b_codigo_http_contra_codes():
     ]
 
 
+def test_regla_b_listado_etiqueta_antes_rechaza_cifra_ajena():
+    """Forma del listado del spec (§4, «Etiqueta: N (P %)»): la cifra va
+    DESPUÉS de la etiqueta. La regla B era solo «hacia delante» y no
+    emparejaba esta forma: el 4.625 se anclaba en la regla A (es la clave
+    «4625» de event_id_counts) pero NO es el conteo del nivel crítico — la
+    clase histórica 97→4625 en forma de listado."""
+    texto = "Distribución: Nivel Crítico: 4.625 (64,6 %) del total."
+    assert _rule_attribution(texto, CTX) == ["«4625 … nivel crítico» ≠ 59"]
+
+
+def test_regla_b_listado_etiqueta_antes_cifra_correcta_pasa():
+    """El listado correcto sí pasa, incluida la forma multi-fila: la cifra
+    pegada con «:» a SU etiqueta gana aunque la fila anterior esté cerca."""
+    assert _rule_attribution("Distribución: Nivel Crítico: 59 (33,9 %).",
+                             CTX) == []
+    multi = ("Distribución: Nivel Crítico: 59 (33,9 %), "
+             "Nivel Medio: 40 (22,9 %).")
+    assert _rule_attribution(multi, CTX) == []
+
+
+def test_regla_b_event_ids_plural_rechaza_cifra_ajena_y_acepta_la_correcta():
+    """El plural «Event IDs 4625» (spec: «Event ID(s) X») debe formar pareja:
+    la regex exigía «event id <n>» sin plural y la atribución errónea evadía
+    la regla B (solo la cazaba el eval con `eventid_pairs_bad`)."""
+    assert _rule_attribution("Se revisaron 40 eventos de Event IDs 4625.",
+                             CTX) == ["«40 … Event ID 4625» ≠ 102"]
+    assert _rule_attribution("Se revisaron 102 eventos de Event IDs 4625.",
+                             CTX) == []
+
+
+def test_regla_b_paso_numerado_tras_etiqueta_no_atribuye():
+    """El parejo «hacia atrás» no confunde el número de PASO siguiente con la
+    cifra de la etiqueta: «…normaliza al nivel crítico. 3) Aplicación de
+    reglas…» — el 3 pertenece al paso, no al nivel (regresión que rechazaba
+    prosa correcta con pasos numerados, la forma que pide el prompt)."""
+    texto = ("2) Clasificación de la severidad original: el valor Warning se "
+             "normaliza al nivel crítico. 3) Aplicación de reglas de sospecha.")
+    assert _rule_attribution(texto, CTX) == []
+
+
 def test_regla_b_mas_de_40_chars_no_atribuye():
     """Fuera de la ventana de 40 chars la etiqueta no atribuye al número."""
     texto = (
@@ -373,6 +413,22 @@ def test_regla_c_executive_rechaza_sin_etiqueta_de_riesgo():
     assert "falta etiqueta de riesgo «Alto»" in motivos
 
 
+def test_regla_c_nivel_mediatrico_no_cuenta_como_nivel_medio():
+    """Hallazgo 3: «nivel mediático» (de repercusión en prensa) no menciona
+    el nivel medio — el patrón medi[oa]s? casaba «media» dentro de
+    «mediatico» sin límite de palabra a la derecha (el eval ya usaba \\b)."""
+    base = (
+        "Se analizaron 174 registros con riesgo alto. "
+        "La distribución: nivel crítico, nivel alto y nivel bajo. "
+        "El incidente tuvo repercusión de nivel {x}. "
+        "Se detectaron 23 eventos sospechosos."
+    )
+    assert _rule_required("executive_summary", base.format(x="mediático"),
+                          CTX) == ["falta nivel medio de la distribución"]
+    assert _rule_required("executive_summary", base.format(x="medio"),
+                          CTX) == []
+
+
 def test_regla_c_conclusions_acepta_y_rechaza():
     bueno = (
         "El riesgo general es alto sobre 174 registros. "
@@ -425,6 +481,23 @@ def test_regla_c_methodology_sin_mapping_no_exige_claves():
         "y se aplicaron reglas de sospecha."
     )
     assert _rule_required("methodology", texto, ctx) == []
+
+
+def test_regla_c_clave_severidad_con_limite_de_palabra():
+    """Hallazgo 4: la clave raw se busca con límites de palabra — «Warning»
+    dentro de «warnings» (plural genérico) no satisface el requisito."""
+    bueno = (
+        "Se importó el archivo Excel y se normalizó la severidad Warning "
+        "al nivel alto; después se aplicaron reglas de sospecha."
+    )
+    assert _rule_required("methodology", bueno, CTX) == []
+    malo = (
+        "Se importó el archivo Excel; se revisó la salida warnings del "
+        "sistema y se aplicaron reglas de sospecha por severidad."
+    )
+    assert _rule_required("methodology", malo, CTX) == [
+        "falta clave original de severidad (p. ej. «Warning»)"
+    ]
 
 
 def test_regla_c_campos_sin_reglas_no_exigen_nada():

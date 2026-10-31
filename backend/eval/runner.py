@@ -347,12 +347,21 @@ def _elegibles_fewshot(resultados: List[Dict[str, Any]]) -> List[Dict[str, Any]]
 
 
 def _latencia(resultados: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Media de `ms` por categoría y global (solo casos con latencia medida)."""
+    """Media de `ms` por categoría y global (solo casos con latencia medida).
+
+    Los 7 casos `report` comparten UN solo POST /report: sus registros
+    repiten la misma `ms`, así que la media global la cuenta UNA vez (la de
+    su categoría), no 7 — el promedio global no se infla por el reparto del
+    informe único (hallazgo 8 de la revisión final).
+    """
     latencias: Dict[str, List[int]] = {}
     for r in resultados:
         if r.get("ms") is not None:
             latencias.setdefault(r["categoria"], []).append(int(r["ms"]))
-    total = [ms for v in latencias.values() for ms in v]
+    total = [ms for cat, v in latencias.items() if cat != "report" for ms in v]
+    if "report" in latencias:
+        v = latencias["report"]
+        total.append(round(sum(v) / len(v)))
     return {
         "media_ms": round(sum(total) / len(total)) if total else 0,
         "por_categoria": {c: round(sum(v) / len(v)) for c, v in latencias.items()},
@@ -463,6 +472,21 @@ def print_report(report: dict) -> None:
         print(f"latencia media: {lat['media_ms']} ms "
               + " · ".join(f"{c} {v} ms" for c, v in lat["por_categoria"].items()))
 
+    # Spec §7: la meta del POST único (fuente, latencia, modelo, error de
+    # medida) debe verse en la corrida, no solo quedar en el JSON.
+    informe = report.get("informe") or {}
+    if informe:
+        partes = []
+        if informe.get("source"):
+            partes.append(f"fuente {informe['source']}")
+        if informe.get("ms") is not None:
+            partes.append(f"{informe['ms']} ms")
+        if informe.get("model"):
+            partes.append(f"modelo {informe['model']}")
+        if informe.get("error"):
+            partes.append(f"ERROR: {informe['error']}")
+        print("informe: " + " · ".join(partes))
+
     if report["errores"]:
         print(f"! {report['errores']} caso(s) con excepción (ver detalle en el JSON)")
     rutados = report.get("rutados_a_agregacion") or []
@@ -536,6 +560,43 @@ def _score_case(case, expected, body: Optional[dict], cited: List[str]) -> Any:
     if scoring.is_wide(expected):
         return scoring.precision_at_k(cited, expected) >= 0.5
     return scoring.hit_at_k(cited, expected)
+
+
+def _meta_informe(informe: Any, df_informe: Any, informe_ms: int,
+                  informe_error: Optional[str]
+                  ) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """Meta y registros de los 7 casos `report` del POST único de la pasada.
+
+    El /report devuelve lo que el LLM produjo: si el JSON no es un objeto
+    (p. ej. una lista), no hay nada que puntuar y se trata como fallo de
+    medida — los 7 casos quedan con excepción marcada en vez de tumbar la
+    corrida con AttributeError (hallazgo 9 de la revisión final).
+    """
+    meta: Dict[str, Any] = {"ms": informe_ms}
+    registros: List[Dict[str, Any]] = []
+    if isinstance(informe, dict) and df_informe is not None:
+        meta["source"] = informe.get("source")
+        if informe.get("model"):
+            meta["model"] = informe["model"]
+        for caso in REPORT_CASES:
+            registro: Dict[str, Any] = {"id": caso.id, "categoria": "report",
+                                        "ms": informe_ms}
+            try:
+                registro["ok"] = bool(caso.verifica(informe, df_informe))
+            except Exception as exc:  # noqa: BLE001 – un caso nunca tumba la corrida
+                registro["ok"] = None
+                registro["error"] = f"{type(exc).__name__}: {exc}"
+            registros.append(registro)
+    else:
+        if informe is not None and not isinstance(informe, dict):
+            meta["error"] = "el /report devolvió JSON que no es un objeto"
+        else:
+            meta["error"] = (informe_error
+                             or "sin df del análisis para puntuar el informe")
+        for caso in REPORT_CASES:
+            registros.append({"id": caso.id, "categoria": "report", "ok": None,
+                              "ms": informe_ms, "error": meta["error"]})
+    return meta, registros
 
 
 def _run_pasada(dataset_ids: set) -> Dict[str, Any]:
@@ -663,27 +724,9 @@ def _run_pasada(dataset_ids: set) -> Dict[str, Any]:
     # el retriever ni lleva criterio few-shot (su latencia es la del POST,
     # compartida por los 7 casos). Un fallo de medida deja los 7 con
     # excepción: la corrida sale marcada, no publica una sección vacía.
-    informe_meta: Dict[str, Any] = {"ms": informe_ms}
-    if informe is not None and df_informe is not None:
-        informe_meta["source"] = informe.get("source")
-        if informe.get("model"):
-            informe_meta["model"] = informe["model"]
-        for caso in REPORT_CASES:
-            registro: Dict[str, Any] = {"id": caso.id, "categoria": "report",
-                                        "ms": informe_ms}
-            try:
-                registro["ok"] = bool(caso.verifica(informe, df_informe))
-            except Exception as exc:  # noqa: BLE001 – un caso nunca tumba la corrida
-                registro["ok"] = None
-                registro["error"] = f"{type(exc).__name__}: {exc}"
-            resultados.append(registro)
-    else:
-        informe_meta["error"] = (informe_error
-                                 or "sin df del análisis para puntuar el informe")
-        for caso in REPORT_CASES:
-            resultados.append({"id": caso.id, "categoria": "report", "ok": None,
-                               "ms": informe_ms,
-                               "error": informe_meta["error"]})
+    informe_meta, registros_informe = _meta_informe(
+        informe, df_informe, informe_ms, informe_error)
+    resultados.extend(registros_informe)
     return {"resultados": resultados, "grounding": grounding, "fewshot": fewshot,
             "rutados_a_agregacion": rutados_a_agregacion,
             "informe_meta": informe_meta}

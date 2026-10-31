@@ -540,11 +540,12 @@ def _prosa_informe(ctx: dict, bug: bool = False) -> dict:
     3. correlation NO junto la cifra de la IP con «sospechosos»: la regla B
        la atribuiría al total global de eventos sospechosos, no a la IP.
 
-    Con `bug=True` añade la atribución errónea histórica «N … Event ID X»:
-    N es la cifra REAL de otro id (ancla A) y la forma «Event IDs» (plural)
-    evade la regex de la regla B del validador, que exige «event id <n>» —
-    el defecto solo lo caza el eval con su camino INDEPENDIENTE
-    (`eventid_pairs_bad`), que es lo que el test end-to-end demuestra."""
+    Con `bug=True` añade la atribución errónea histórica «N … Event IDs X»:
+    N es la cifra REAL de OTRO id (ancla A). Desde la revisión final la
+    regla B del validador casa el plural «Event IDs» y RECHAZA el campo
+    conclusions; el caso eval rep-atribucion-eventid sigue siendo la red
+    independiente para un payload que esquidara al validador (su verdad
+    derivada del df se prueba en test_eval_cases)."""
     from severity import LEVEL_LABELS, LEVEL_ORDER
 
     levels = ctx["level_counts"]
@@ -648,26 +649,29 @@ def test_pasada_llm_off_puntua_los_7_casos_report_con_el_fallback(monkeypatch, t
     assert pasada["informe_meta"]["source"] == "local"
 
 
-def test_informe_valido_via_chat_pasa_los_7_y_el_bug_de_atribucion_no(monkeypatch,
-                                                                     tmp_path):
+def test_informe_valido_via_chat_pasa_los_7_y_el_bug_de_atribucion_es_rechazado(
+        monkeypatch, tmp_path, caplog):
     # End-to-end por el camino LLM: la prosa parcheada PASA las reglas A–D
     # del validador (sale del mismo ctx real) y llega al payload mezclada.
-    # Sin bug los 7 casos pasan y la fuente es «llm»; con el bug de
-    # atribución histórico («N eventos de Event IDs X», forma plural que la
-    # regla B no detecta; N sale de las cifras reales del ctx) SOLO cae
-    # rep-atribucion-eventid — el eval caza por su camino independiente lo
-    # que el validador dejó pasar.
+    # Sin bug los 7 casos pasan y la fuente es «llm».
     _activar_informe(monkeypatch, bug=False)
     sana = {c["id"]: c["ok"] for c in _casos_report(
         _pasada_report(monkeypatch, tmp_path))}
     assert sana == {c.id: True for c in REPORT_CASES}, sana
 
+    # Con el bug de atribución histórico («N eventos de Event IDs X» con la
+    # cifra de OTRO id): desde la revisión final la regla B casa el plural
+    # «Event IDs» y RECHAZA el campo conclusions ANTES de que entre al
+    # payload — los 7 casos vuelven a pasar con el respaldo determinista.
+    # El caso eval rep-atribucion-eventid sigue siendo la red INDEPENDIENTE
+    # para payloads que esquidan al validador (verdad en test_eval_cases).
     _activar_informe(monkeypatch, bug=True)
-    bug = {c["id"]: c for c in _casos_report(_pasada_report(monkeypatch, tmp_path))}
-    assert bug["rep-atribucion-eventid"]["ok"] is False, bug
-    assert all(c["ok"] for cid, c in bug.items()
-               if cid != "rep-atribucion-eventid"), \
-        f"el bug de atribución contaminó otros casos: {bug}"
+    with caplog.at_level("WARNING"):
+        bug = {c["id"]: c for c in _casos_report(_pasada_report(monkeypatch,
+                                                               tmp_path))}
+    assert all(c["ok"] for c in bug.values()), bug
+    assert any("regla B" in r.getMessage() for r in caplog.records), \
+        "la atribución errónea «N … Event IDs X» no la rechazó la regla B"
 
 
 def test_build_report_cuenta_la_seccion_report_y_llama_informe_meta():
@@ -701,6 +705,69 @@ def test_build_report_informe_meta_opcional_sin_cambio_para_llamadas_viejas():
         modelo="qwen2.5:3b", num_ctx=4096, temperatura=0.2,
         informe_meta={"ms": 1234, "source": "llm"},
     )["informe"] == {"ms": 1234, "source": "llm"}
+
+
+def test_latencia_global_no_pesa_el_post_del_informe_siete_veces():
+    # Los 7 casos report miden el MISMO POST /report: sus 7 ms idénticas no
+    # pueden pesar 7 veces en la media global (hallazgo 8 de la revisión
+    # final) — la global cuenta la latencia del informe UNA vez, mientras
+    # `por_categoria["report"]` sigue reflejando la del POST.
+    resultados = [{"categoria": "filter_set", "ok": True, "ms": 100}]
+    resultados += [{"categoria": "report", "ok": True, "ms": 1500}] * 7
+    rep = build_report(
+        resultados=resultados, grounding={"rechazo_pct": 0.0, "inventados": 0},
+        fewshot={"cobertura_pct": 0.0}, motor="llm", hash_muestra="abc",
+        modelo="qwen2.5:3b", num_ctx=4096, temperatura=0.2,
+        informe_meta={"ms": 1500, "source": "llm"},
+    )
+    assert rep["latencia"]["por_categoria"] == {"filter_set": 100, "report": 1500}
+    assert rep["latencia"]["media_ms"] == 800    # (100 + 1500) / 2, no 7×1500
+
+
+def test_print_report_imprime_la_meta_del_informe(capsys):
+    # Hallazgo 6: print_report mostraba la sección report sin su meta — la
+    # fuente (llm/local), la latencia del POST y los errores de medida
+    # quedaban solo en el JSON, invisibles en la corrida.
+    resultados = [{"categoria": "report", "ok": True, "id": c.id, "ms": 1500}
+                  for c in REPORT_CASES]
+    rep = build_report(
+        resultados=resultados, grounding={"rechazo_pct": 0.0, "inventados": 0},
+        fewshot={"cobertura_pct": 0.0}, motor="llm", hash_muestra="abc",
+        modelo="qwen2.5:3b", num_ctx=4096, temperatura=0.2,
+        informe_meta={"ms": 1500, "source": "llm", "model": "qwen2.5:3b"},
+    )
+    runner.print_report(rep)
+    out = capsys.readouterr().out
+    assert "informe" in out and "1500 ms" in out and "qwen2.5:3b" in out, \
+        f"la meta del informe no se imprime:\n{out}"
+    # Un fallo de medida también se imprime: la corrida sale marcada.
+    runner.print_report(dict(rep, informe={"ms": 0,
+                                           "error": "TimeoutError: sin respuesta"}))
+    out = capsys.readouterr().out
+    assert "ERROR" in out and "TimeoutError" in out, \
+        f"el error de medida del informe no se imprime:\n{out}"
+
+
+def test_meta_informe_json_que_no_es_objeto_marca_los_7_sin_reventar():
+    # Hallazgo 9: el bloque de meta corría `informe.get(...)` sin isinstance —
+    # un /report con JSON que no es objeto (p. ej. lista) tumbaba la pasada
+    # entera con AttributeError en vez de marcar los 7 casos.
+    meta, registros = runner._meta_informe(
+        informe=[], df_informe="df", informe_ms=12, informe_error=None)
+    assert "no es un objeto" in meta["error"]
+    assert len(registros) == 7
+    assert all(r["categoria"] == "report" and r["ok"] is None and r["ms"] == 12
+               for r in registros)
+    # Los caminos previos no cambian: excepción del POST y df ausente.
+    meta_exc, _ = runner._meta_informe(
+        informe=None, df_informe=None, informe_ms=5,
+        informe_error="RuntimeError: 500")
+    assert meta_exc == {"ms": 5, "error": "RuntimeError: 500"}
+    meta_df, _ = runner._meta_informe(
+        informe={"source": "llm"}, df_informe=None, informe_ms=7,
+        informe_error=None)
+    assert meta_df == {"ms": 7,
+                       "error": "sin df del análisis para puntuar el informe"}
 
 
 def test_compare_reports_con_report_igual_no_marcado_diff():

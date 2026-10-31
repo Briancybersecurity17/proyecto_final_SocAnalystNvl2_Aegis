@@ -537,6 +537,9 @@ _REPORT_USER_PROMPT = (
     "  - Sin frases repetidas: ninguna frase de 5 palabras o más aparece dos veces.\n"
     "  - Sin inventar tooling: es un archivo importado, no un SIEM en vivo; no "
     "menciones consultas, agentes ni consolas que no consten en DATOS.\n"
+    "  - Sin recomendaciones genéricas vacías: cada recomendación se apoya en un "
+    "hallazgo concreto de los DATOS (p. ej. «revisar la IP 10.10.2.15»), nunca "
+    "un consejo estándar sin sustento en la evidencia.\n"
     "  - Español formal y verificable; si un dato no está en DATOS, no lo "
     "menciones ni lo infieras.\n"
     "\n"
@@ -773,11 +776,18 @@ def _rule_redundancy(text: str) -> List[str]:
 # --- Regla B: atribución número ↔ etiqueta --------------------------------
 # Ventana de atribución: la etiqueta debe caer a ≤40 chars tras el número.
 _WINDOW = 40
+# Parejo «hacia atrás» (listado «Etiqueta: N» del spec §4): entre la etiqueta
+# y su cifra solo puede haber puntuación o espacio. Una letra o una coma
+# marcan prosa u otro artículo del listado («8 en nivel crítico, 68 en nivel
+# medio»: el 68 pertenece al medio, no al crítico). El texto ya llega en
+# minúsculas sin tildes (`_norm_pos`), así que [a-z] cubre las letras.
+_ATRAS_SEP_RE = re.compile(r"[a-z,]")
 # Minúsculas sin tildes PRESERVANDO posiciones (las ventanas se miden sobre
 # el texto original); a diferencia de `_norm_text` (NFD), la tabla es 1:1.
 _DEACC_TABLE = str.maketrans("áéíóúüñ", "aeiouun")
 
-_EVENT_ID_RE = re.compile(r"event[\s_]+id\s+(\d+)")
+# El spec cita «Event ID(s) X»: el plural «Event IDs 4625» forma etiqueta.
+_EVENT_ID_RE = re.compile(r"event[\s_]+id[s]?\s+(\d+)")
 _SUSPICIOUS_RE = re.compile(r"sospechos[oa]s?")
 # \b inicial evita que «terror» suene a «error»; «http» va pegado a la palabra.
 _ERRORS_RE = re.compile(r"\berror(?:es)?\s*(?:http\b)?")
@@ -795,53 +805,84 @@ def _norm_pos(text: str) -> str:
     return (text or "").lower().translate(_DEACC_TABLE)
 
 
-def _label_matches(norm: str) -> List[Tuple[int, str]]:
-    """(posición, etiqueta_canónica) de cada etiqueta atribuible del texto.
+def _label_matches(norm: str) -> List[Tuple[int, int, str]]:
+    """(inicio, fin, etiqueta_canónica) de cada etiqueta atribuible del texto.
 
     Etiquetas: `event_id:X`, `nivel:L`, `sospechosos`, `errores http` y
     `codigo:C`. Los patrones de nivel son los de `_LEVEL_PATTERNS` (definido
     más abajo, en el bloque de chat: se resuelven en tiempo de ejecución).
+    El fin acota el parejo «hacia atrás» del listado «Etiqueta: N» (§4).
     """
-    found: List[Tuple[int, str]] = []
+    found: List[Tuple[int, int, str]] = []
     for m in _EVENT_ID_RE.finditer(norm):
-        found.append((m.start(), f"event_id:{m.group(1)}"))
+        found.append((m.start(), m.end(), f"event_id:{m.group(1)}"))
     for lvl in LEVEL_ORDER:
         for m in re.finditer(rf"nivel\s+({_LEVEL_PATTERNS[lvl]})", norm):
-            found.append((m.start(), f"nivel:{lvl}"))
+            found.append((m.start(), m.end(), f"nivel:{lvl}"))
     for m in _SUSPICIOUS_RE.finditer(norm):
-        found.append((m.start(), "sospechosos"))
+        found.append((m.start(), m.end(), "sospechosos"))
     for m in _ERRORS_RE.finditer(norm):
         # Solo es «errores HTTP» si junto a la mención hay «http» o un código
         # 4xx/5xx: «12 registros con error humano» no atribuye nada a nadie.
         ventana = norm[max(0, m.start() - _WINDOW): m.end() + _WINDOW]
         if _NEAR_HTTP_RE.search(ventana):
-            found.append((m.start(), "errores http"))
+            found.append((m.start(), m.end(), "errores http"))
     for m in _HTTP_CODE_RE.finditer(norm):
-        found.append((m.start(), f"codigo:{m.group()}"))
+        found.append((m.start(), m.end(), f"codigo:{m.group()}"))
     return found
 
 
 def _pairs(text: str) -> List[Tuple[float, str]]:
-    """(número, etiqueta) con etiqueta en ventana ≤40 chars tras el número.
+    """(número, etiqueta) con etiqueta en ventana ≤40 chars, en AMBAS
+    direcciones.
 
-    Los literales de % se retiran primero (igual que en la regla A): «33,9 %
-    del nivel crítico» no es una atribución del 33 ni del 9 al nivel. Si dos
-    números compiten por la misma etiqueta, queda el más cercano (criterio de
-    `number_in_answer` con unidades); un número que YA es un código HTTP no
-    reclama otro código («los códigos 404 y 500» enumera, no atribuye).
+    - Hacia delante (prosa): la etiqueta cae a ≤40 chars tras el número
+      («4625 en nivel crítico»).
+    - Hacia atrás (listado del spec §4, «Etiqueta: N (P %)»): el número cae
+      a ≤40 chars tras la etiqueta y entre ambos solo hay puntuación o
+      espacio («Nivel Crítico: 4.625»); una letra o coma intermedia descarta
+      el parejo para no confundir el listado con prosa («8 en nivel crítico,
+      68 en nivel medio»: la coma separa artículos, el 68 es del medio).
+
+    Cuando una etiqueta tiene candidato en ambas direcciones gana el de
+    atrás: su cifra va pegada al signo y es la atribución explícita del
+    listado (así la multi-fila «Nivel Crítico: 59 …, Nivel Medio: 40 …»
+    empareja cada etiqueta con SU cifra). El resto no cambia: los literales
+    de % se retiran primero («33,9 % del nivel crítico» no atribuye el 33 ni
+    el 9), un código HTTP no réclama otro código («los códigos 404 y 500»
+    enumera, no atribuye) y entre dos números gana el más cercano (criterio
+    de `number_in_answer` con unidades).
     """
     norm = _PCT_RE.sub(" ", _norm_pos(text))
     labels = _label_matches(norm)
-    best: Dict[int, Tuple[int, float, str]] = {}  # por posición de etiqueta
+    # por posición de etiqueta: (distancia, valor, tag, dirección); dirección
+    # 0 = hacia delante (prosa), 1 = hacia atrás (listado «Etiqueta: N»).
+    best: Dict[int, Tuple[int, float, str, int]] = {}
     for pos, raw, value in _number_spans(norm):
-        for lpos, tag in labels:
-            dist = lpos - (pos + len(raw))
-            if not 0 <= dist <= _WINDOW:
-                continue
+        for lpos, lend, tag in labels:
             if tag.startswith("codigo:") and re.fullmatch(r"[45]\d{2}", raw):
                 continue  # «404 y 500» son los códigos, no la cifra atribuida
-            if lpos not in best or dist < best[lpos][0]:
-                best[lpos] = (dist, value, tag)
+            dist = lpos - (pos + len(raw))
+            if 0 <= dist <= _WINDOW:
+                direccion = 0
+            else:
+                dist = pos - lend
+                if not 0 <= dist <= _WINDOW:
+                    continue
+                if _ATRAS_SEP_RE.search(norm[lend:pos]):
+                    continue
+                # «…al nivel crítico. 3) Aplicación de reglas…»: un número
+                # pegado a «)» o «.» es el PASO de la lista siguiente (la
+                # forma de methodology que pide el prompt), no la cifra de
+                # la etiqueta.
+                if norm[pos + len(raw): pos + len(raw) + 1] in ").":
+                    continue
+                direccion = 1
+            previa = best.get(lpos)
+            # El listado (dirección 1) gana a la prosa de la MISMA etiqueta;
+            # dentro de una dirección, manda la distancia más corta.
+            if previa is None or (direccion, -dist) > (previa[3], -previa[0]):
+                best[lpos] = (dist, value, tag, direccion)
     return [
         (best[lpos][1], best[lpos][2]) for lpos in sorted(best)
     ]
@@ -996,9 +1037,11 @@ def _mentions_level(norm: str, lvl: str) -> bool:
     """¿El texto nombra el nivel CONCRETO («nivel crítico»), no un pronombre?
 
     Comparte el patrón con `_label_matches`: «…clasificados en este nivel»
-    no menciona nivel alguno y no cuenta como distribución presentada.
+    no menciona nivel alguno y no cuenta como distribución presentada. El
+    \b final acota la palabra: «nivel mediático» (de repercusión en prensa)
+    no es «nivel medio» — el eval ya usaba este límite (scoring._level_pattern).
     """
-    return re.search(rf"nivel\s+({_LEVEL_PATTERNS[lvl]})", norm) is not None
+    return re.search(rf"nivel\s+({_LEVEL_PATTERNS[lvl]})\b", norm) is not None
 
 
 def _has_number(text: str, value: Any) -> bool:
@@ -1085,7 +1128,10 @@ def _rule_required(field: str, text: str, ctx: dict) -> List[str]:
             for entry in (ctx.get("severity_mapping") or [])
             if isinstance(entry, dict) and entry.get("raw")
         ]
-        if raws and not any(_norm_text(raw) in norm for raw in raws):
+        # Con límite de palabra: «Warning» dentro de «warnings» no cuenta.
+        if raws and not any(
+            re.search(rf"\b{re.escape(_norm_text(raw))}\b", norm) for raw in raws
+        ):
             reasons.append(
                 f"falta clave original de severidad (p. ej. «{raws[0]}»)"
             )

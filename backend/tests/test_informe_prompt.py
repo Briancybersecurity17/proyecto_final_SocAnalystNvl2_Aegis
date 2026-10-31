@@ -111,10 +111,12 @@ def test_prompt_pide_solo_las_cuatro_claves_de_prosa(informe):
 
 
 def test_prompt_bloque_reglas_duras_completas(informe):
-    """Bloque 3: sin frases repetidas, sin tooling inventado, español formal."""
+    """Bloque 3: sin frases repetidas, sin tooling inventado, sin
+    recomendaciones genéricas vacías (spec §6.3), español formal."""
     prompt = _user_prompt(informe())
     assert "repetid" in prompt
     assert "SIEM" in prompt
+    assert "genéricas" in prompt
     assert "formal" in prompt
 
 
