@@ -11,18 +11,6 @@ import {
   type FeedbackStats,
 } from '../api/client'
 
-/** Bytes → GB legibles (tamaños de modelo de Ollama). */
-const fmtGB = (bytes?: number): string =>
-  typeof bytes === 'number' && bytes > 0 ? `${(bytes / 1e9).toFixed(1)} GB` : '—'
-
-const KEEP_ALIVE_OPTIONS = [
-  { value: '-1', label: 'Siempre en VRAM (no descargar nunca)' },
-  { value: '30m', label: '30 minutos tras responder' },
-  { value: '10m', label: '10 minutos tras responder' },
-  { value: '5m', label: '5 minutos (default de Ollama)' },
-  { value: '0', label: 'Liberar VRAM al terminar' },
-]
-
 const CTX_OPTIONS = [2048, 4096, 8192, 16384, 32768]
 
 /** Mensaje legible de un error axios (detail del backend si existe). */
@@ -35,18 +23,17 @@ const detailOf = (err: unknown): string => {
 type SaveState = 'idle' | 'saving' | 'saved'
 
 /**
- * Panel «Opciones IA»: conexión con Ollama, modelo y parámetros de generación.
+ * Panel «Opciones IA»: conexión con el proveedor cloud (endpoint compatible
+ * con OpenAI: Groq, etc.), modelo y parámetros de generación.
  *
- * Todo se aplica SIN reiniciar: Ollama recibe las opciones en cada request y
- * el backend las relee del JSON en disco en la próxima llamada. Si Ollama está
- * caído, el asistente y el informe siguen funcionando con el motor
- * determinista (degradación elegente, igual que siempre).
+ * Todo se aplica SIN reiniciar: el backend relee el JSON de configuración en
+ * la próxima llamada. Si el proveedor está caído, el asistente y el informe
+ * siguen funcionando con el motor determinista (degradación elegente).
  */
 const AiOptions: React.FC = () => {
   const [cfg, setCfg] = useState<AiConfig | null>(null)
   const [saved, setSaved] = useState<AiConfig | null>(null)
   const [status, setStatus] = useState<AiStatus | null>(null)
-  const [installed, setInstalled] = useState<boolean | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [save, setSave] = useState<SaveState>('idle')
@@ -82,7 +69,6 @@ const AiOptions: React.FC = () => {
     setCfg(data.config)
     setSaved(data.config)
     setStatus(data.status)
-    setInstalled(data.model_installed)
     return data
   }
 
@@ -130,7 +116,6 @@ const AiOptions: React.FC = () => {
       setCfg(data.config)
       setSaved(data.config)
       setStatus(data.status)
-      setInstalled(data.model_installed)
       setSave('saved')
       window.setTimeout(() => setSave((s) => (s === 'saved' ? 'idle' : s)), 4000)
     } catch (err) {
@@ -170,19 +155,18 @@ const AiOptions: React.FC = () => {
     )
   }
 
-  const ollamaUp = status?.kind === 'ollama' && status.reachable === true
-  const vramBytes = (status?.loaded ?? []).reduce((sum, m) => sum + (m.size ?? 0), 0)
+  const remoteUp = status?.kind === 'remote' && status.reachable === true
   const selectedModel = status?.models.find((m) => m.name === cfg.model)
 
   const chip = !cfg.enabled
     ? { color: '#7280a3', label: 'LLM apagado · motor determinista' }
     : status === null
-      ? { color: '#7280a3', label: 'Sondeando Ollama…' }
+      ? { color: '#7280a3', label: 'Sondeando el proveedor…' }
       : status.reachable === true
-        ? { color: '#10b981', label: `Ollama conectado · ${status.models.length} modelos` }
+        ? { color: '#10b981', label: `Proveedor conectado · ${status.models.length} modelos` }
         : status.reachable === false
-          ? { color: '#f87171', label: 'Ollama no responde' }
-          : { color: '#38bdf8', label: 'API remota (sin inspección local)' }
+          ? { color: '#f87171', label: 'Proveedor no responde' }
+          : { color: '#38bdf8', label: 'Proveedor cloud (sin inspección local)' }
 
   return (
     <div className="mx-auto max-w-5xl space-y-5">
@@ -234,7 +218,7 @@ const AiOptions: React.FC = () => {
             {/* Modelo */}
             <div>
               <label className="hud-label" htmlFor="ai-model">
-                Modelo local
+                Modelo
               </label>
               <input
                 id="ai-model"
@@ -242,7 +226,7 @@ const AiOptions: React.FC = () => {
                 className="hud-input mt-2 w-full"
                 value={cfg.model}
                 onChange={(e) => patch({ model: e.target.value })}
-                placeholder="qwen2.5:3b"
+                placeholder="openai/gpt-oss-120b"
                 spellCheck={false}
               />
               <datalist id="ai-models">
@@ -251,17 +235,14 @@ const AiOptions: React.FC = () => {
                 ))}
               </datalist>
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                {installed === false && (
-                  <span className="chip text-amber-400" style={{ background: '#ffb02014' }}>
-                    No instalado · ollama pull {cfg.model}
+                {remoteUp && selectedModel && (
+                  <span className="chip text-emerald-400" style={{ background: '#10b98114' }}>
+                    Disponible en el proveedor
                   </span>
                 )}
-                {installed && selectedModel && (
-                  <span className="chip text-emerald-400" style={{ background: '#10b98114' }}>
-                    Instalado · {selectedModel.details?.parameter_size ?? fmtGB(selectedModel.size)}
-                    {selectedModel.details?.quantization_level
-                      ? ` · ${selectedModel.details.quantization_level}`
-                      : ''}
+                {cfg.enabled && status?.reachable === true && !selectedModel && (
+                  <span className="chip text-amber-400" style={{ background: '#ffb02014' }}>
+                    No figura en la lista del proveedor
                   </span>
                 )}
               </div>
@@ -280,22 +261,44 @@ const AiOptions: React.FC = () => {
                 spellCheck={false}
               />
               <p className="mt-2 text-xs text-[var(--text-dim)]">
-                Ollama nativo (opciones por request) o cualquier endpoint compatible con OpenAI.
+                Endpoint compatible con OpenAI (Groq, OpenRouter, Together…). Ej.:{' '}
+                <code>https://api.groq.com/openai/v1/chat/completions</code>
               </p>
             </div>
+          </div>
+
+          {/* API key (proveedor cloud) */}
+          <div>
+            <label className="hud-label" htmlFor="ai-apikey">
+              API key del proveedor
+            </label>
+            <input
+              id="ai-apikey"
+              type="password"
+              className="hud-input mt-2 w-full md:w-96"
+              value={cfg.api_key}
+              onChange={(e) => patch({ api_key: e.target.value })}
+              placeholder="gsk_… (obligatoria para probar y usar el proveedor)"
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <p className="mt-2 text-xs text-[var(--text-dim)]">
+              Viaja como <code>Authorization: Bearer</code> en cada llamada. Se guarda en el JSON
+              de configuración del backend, en claro: usala solo en tu máquina.
+            </p>
           </div>
 
           {/* Avisos degradación / caída */}
           <div className="border border-hud-soft bg-inset/60 px-4 py-3 text-xs leading-relaxed text-[var(--text-dim)] [clip-path:var(--chamfer-sm)]">
             {status?.reachable === false ? (
               <span className="text-amber-400">
-                ⚠ Ollama no responde en {status.base ?? cfg.api_url} ({status.reason}). El
+                ⚠ El proveedor no responde en {status.base ?? cfg.api_url} ({status.reason}). El
                 asistente y el informe siguen funcionando con el motor determinista local; nada se
-                pierde. Para activar el LLM: abre la app de Ollama (debe correr en el puerto 11434).
+                pierde. Revisá la URL, la API key y el modelo.
               </span>
             ) : (
               <>
-                Los cambios se aplican al instante, sin reiniciar nada: Ollama recibe las opciones
+                Los cambios se aplican al instante, sin reiniciar nada: el motor recibe las opciones
                 en cada petición y el backend relee la configuración guardada en la próxima
                 consulta.
               </>
@@ -338,7 +341,7 @@ const AiOptions: React.FC = () => {
           {/* Num ctx */}
           <div>
             <label className="hud-label" htmlFor="ai-ctx">
-              Ventana de contexto (num_ctx)
+              Presupuesto del prompt (num_ctx)
             </label>
             <select
               id="ai-ctx"
@@ -356,51 +359,9 @@ const AiOptions: React.FC = () => {
               ))}
             </select>
             <p className="mt-2 text-xs text-[var(--text-dim)]">
-              Cada token consume KV cache en VRAM: 4096 alcanza para la pregunta + 8 evidencias.
-            </p>
-          </div>
-
-          {/* Num predict */}
-          <div>
-            <label className="hud-label" htmlFor="ai-predict">
-              Tokens máximos por respuesta (num_predict)
-            </label>
-            <input
-              id="ai-predict"
-              type="number"
-              min={-1}
-              max={8192}
-              className="hud-input mt-2 w-full"
-              value={cfg.num_predict}
-              onChange={numberChange('num_predict')}
-            />
-            <p className="mt-2 text-xs text-[var(--text-dim)]">
-              Corta respuestas largas y limita latencia (−1 = sin límite).
-            </p>
-          </div>
-
-          {/* Keep alive */}
-          <div>
-            <label className="hud-label" htmlFor="ai-keepalive">
-              Permanencia en VRAM (keep_alive)
-            </label>
-            <select
-              id="ai-keepalive"
-              className="hud-input mt-2 w-full"
-              value={cfg.keep_alive}
-              onChange={(e) => patch({ keep_alive: e.target.value })}
-            >
-              {!KEEP_ALIVE_OPTIONS.some((o) => o.value === cfg.keep_alive) && (
-                <option value={cfg.keep_alive}>{cfg.keep_alive} (valor guardado)</option>
-              )}
-              {KEEP_ALIVE_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-            <p className="mt-2 text-xs text-[var(--text-dim)]">
-              Evita pagar 10–20 s de recarga entre consultas si el modelo sigue cargado.
+              De cuántos tokens dispone la consulta: historial + evidencias + ejemplos few-shot.
+              4096 alcanza para la pregunta + 8 evidencias; si el historial crece demasiado, se
+              recortan los ejemplos antes que las instrucciones.
             </p>
           </div>
 
@@ -418,6 +379,9 @@ const AiOptions: React.FC = () => {
               value={cfg.timeout}
               onChange={numberChange('timeout')}
             />
+            <p className="mt-2 text-xs text-[var(--text-dim)]">
+              El proveedor cloud responde en 2–6 s con gpt-oss-120b; 60 s deja margen holgado.
+            </p>
           </div>
         </div>
       </div>
@@ -446,8 +410,8 @@ const AiOptions: React.FC = () => {
               {testing ? 'Probando…' : 'Probar conexión'}
             </button>
             <span className="text-xs text-[var(--text-dim)]">
-              Mide latencia real con los valores del panel (aún sin guardar) y muestra la VRAM en
-              uso.
+              Mide latencia real con los valores del panel (aún sin guardar) y confirma qué modelo
+              respondió.
             </span>
           </div>
 
@@ -455,14 +419,10 @@ const AiOptions: React.FC = () => {
             <p className="hud-data text-sm text-rose-400">{test.error}</p>
           )}
           {test?.ok && (
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
               <div className="border border-hud-soft bg-inset/60 px-3 py-2 [clip-path:var(--chamfer-sm)]">
                 <p className="hud-label">Latencia</p>
                 <p className="hud-data mt-1 text-lg">{test.latency_ms} ms</p>
-              </div>
-              <div className="border border-hud-soft bg-inset/60 px-3 py-2 [clip-path:var(--chamfer-sm)]">
-                <p className="hud-label">VRAM en uso</p>
-                <p className="hud-data mt-1 text-lg">{fmtGB(vramBytes)}</p>
               </div>
               <div className="border border-hud-soft bg-inset/60 px-3 py-2 [clip-path:var(--chamfer-sm)]">
                 <p className="hud-label">Modelo</p>
@@ -471,9 +431,9 @@ const AiOptions: React.FC = () => {
                 </p>
               </div>
               <div className="border border-hud-soft bg-inset/60 px-3 py-2 [clip-path:var(--chamfer-sm)]">
-                <p className="hud-label">En VRAM</p>
-                <p className="hud-data mt-1 truncate text-sm" title={(status?.loaded ?? []).map((m) => m.name).join(', ')}>
-                  {(status?.loaded ?? []).map((m) => m.name).join(', ') || '—'}
+                <p className="hud-label">Proveedor</p>
+                <p className="hud-data mt-1 truncate text-sm" title={status?.base ?? cfg.api_url}>
+                  {status?.base ?? cfg.api_url}
                 </p>
               </div>
               <div className="col-span-full border border-emerald-400/30 bg-emerald-500/5 px-3 py-2 [clip-path:var(--chamfer-sm)]">
@@ -486,37 +446,44 @@ const AiOptions: React.FC = () => {
       </div>
 
       {/* ------------------------------------------------------------- */}
-      {/* Requisitos mínimos                                            */}
+      {/* Checklist del proveedor cloud                                 */}
       {/* ------------------------------------------------------------- */}
       <div className="panel">
         <div className="panel-head">
-          <h2 className="panel-title">Requisitos mínimos (motor local)</h2>
+          <h2 className="panel-title">Checklist del proveedor cloud</h2>
         </div>
         <div className="panel-body">
           <ul className="grid grid-cols-1 gap-2 text-sm text-[var(--text-dim)] md:grid-cols-2">
             <li>
-              <span className={ollamaUp ? 'text-emerald-400' : 'text-rose-400'}>
-                {ollamaUp ? '✓' : '✗'}
+              <span
+                className={
+                  remoteUp ? 'text-emerald-400' : status?.reachable === false ? 'text-rose-400' : 'text-hud-muted'
+                }
+              >
+                {remoteUp ? '✓' : status?.reachable === false ? '✗' : '…'}
               </span>{' '}
-              Ollama instalado y corriendo (localhost:11434)
+              Proveedor reachable ({status?.base ?? cfg.api_url})
             </li>
             <li>
-              <span className="text-emerald-400">✓</span> GPU con ≥ 4 GB VRAM (GTX 1060 6 GB:
-              suficiente) — qwen2.5:3b Q4 ≈ 1.9 GB
-            </li>
-            <li>
-              <span className="text-emerald-400">✓</span> ≥ 8 GB de RAM (15.2 GB: holgado)
-            </li>
-            <li>
-              <span className={installed === false ? 'text-amber-400' : installed ? 'text-emerald-400' : 'text-hud-muted'}>
-                {installed === false ? '!' : '✓'}
+              <span className={cfg.api_key ? 'text-emerald-400' : 'text-amber-400'}>
+                {cfg.api_key ? '✓' : '!'}
               </span>{' '}
-              Modelo descargado (<code>ollama list</code>)
+              API key configurada (viaja como <code>Authorization: Bearer</code>)
+            </li>
+            <li>
+              <span className={selectedModel ? 'text-emerald-400' : 'text-hud-muted'}>
+                {selectedModel ? '✓' : '…'}
+              </span>{' '}
+              Modelo en el catálogo del proveedor ({cfg.model || 'sin definir'})
+            </li>
+            <li>
+              <span className="text-emerald-400">✓</span> Sin hardware local: GPU, RAM y VRAM no
+              aplican — la inferencia corre en la nube
             </li>
           </ul>
           <p className="mt-4 text-xs text-[var(--text-dim)]">
-            Sin Ollama, el proyecto funciona igual con el motor determinista: la IA es un plus, no
-            un requisito.
+            Sin proveedor, el proyecto funciona igual con el motor determinista: la IA es un plus,
+            no un requisito.
           </p>
         </div>
       </div>

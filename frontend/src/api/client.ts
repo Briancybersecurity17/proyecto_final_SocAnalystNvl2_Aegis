@@ -685,30 +685,35 @@ export const listenAnalysisEvents = (analysisId: string, onStatus: (status: stri
 }
 
 /* ===========================================================================
-   Panel «Opciones IA» — configuración del LLM (Ollama local por defecto)
+   Panel «Opciones IA» — configuración del LLM (proveedor cloud por defecto:
+   endpoint compatible con OpenAI, p. ej. Groq)
    =========================================================================== */
 
 /** Configuración persistida en el backend (JSON en disco, aplica al instante). */
 export interface AiConfig {
   /** LLM apagado ⇒ el asistente y el informe usan el motor determinista. */
   enabled: boolean
-  /** Ollama nativo (`http://localhost:11434/api/chat`) u otro compatible OpenAI. */
+  /** Endpoint compatible con OpenAI (`…/v1/chat/completions`) u Ollama nativo. */
   api_url: string
   api_key: string
   model: string
-  /** Ventana de contexto: cada token consume KV cache en VRAM. */
+  /** Presupuesto del prompt: historial + evidencias + ejemplos few-shot. */
   num_ctx: number
   /** Creatividad: en SOC, evidencia y no ficción ⇒ 0–0.2 lo habitual. */
   temperature: number
-  /** Cuánto sigue el modelo cargado en VRAM («-1» eterno, «30m», «0» ya). */
+  /** Solo dialecto Ollama: cuánto sigue el modelo cargado en VRAM. Ignorado en endpoints OpenAI-compatibles. */
   keep_alive: string
-  /** Tope de tokens generados (−1 = sin límite). */
+  /** Solo dialecto Ollama: tope de tokens generados (−1 = sin límite). Ignorado en endpoints OpenAI-compatibles. */
   num_predict: number
   /** Segundos de espera máxima por llamada al LLM. */
   timeout: number
 }
 
-/** Modelo listado por Ollama (`/api/tags` / `/api/ps`). */
+/**
+ * Modelo listado por el motor: Ollama (`/api/tags` / `/api/ps`) incluye
+ * `size`/`details`; un proveedor compatible con OpenAI normaliza a `{name}`
+ * (solo `id` del catálogo `GET {base}/models`).
+ */
 export interface OllamaModel {
   name: string
   size?: number
@@ -724,13 +729,13 @@ export interface OllamaModel {
 /** Sonda de estado del motor de IA. */
 export interface AiStatus {
   kind: 'ollama' | 'remote' | 'none'
-  /** true/false si es Ollama inspeccionado; null si la URL es remota. */
+  /** true/false si el motor respondió a la sonda; null si la URL no es inspeccionable. */
   reachable: boolean | null
   reason?: string | null
   base?: string
   latency_ms?: number
   models: OllamaModel[]
-  /** Modelos residentes en VRAM en este momento. */
+  /** Modelos residentes en VRAM (solo Ollama; vacío en proveedor cloud). */
   loaded: OllamaModel[]
 }
 
@@ -751,7 +756,7 @@ export interface AiTestResponse {
   status?: AiStatus | null
 }
 
-/** Configuración vigente + estado real de Ollama (modelos, VRAM, latencia). */
+/** Configuración vigente + estado real del motor (modelos, latencia). */
 export const getAiConfig = async (): Promise<AiConfigResponse> => {
   const response = await API.get<AiConfigResponse>('/ai/config')
   return response.data

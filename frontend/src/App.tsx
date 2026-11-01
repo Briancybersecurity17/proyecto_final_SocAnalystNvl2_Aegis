@@ -36,7 +36,7 @@ const SECTION_META: Record<Section, { title: string; subtitle: string }> = {
   },
   ai: {
     title: 'Opciones IA',
-    subtitle: 'Conexión con Ollama, modelo local y parámetros de generación',
+    subtitle: 'Proveedor cloud (compatible OpenAI), modelo y parámetros de generación',
   },
   risk: {
     title: 'Clasificación de riesgos',
