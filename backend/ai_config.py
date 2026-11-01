@@ -206,6 +206,24 @@ def ollama_base(api_url: str) -> Optional[str]:
     return f"{parts.scheme}://{parts.hostname}{port}"
 
 
+def openai_base(api_url: str) -> Optional[str]:
+    """Base de un endpoint compatible con OpenAI, sin el sufijo de chat.
+
+    ``https://api.groq.com/openai/v1/chat/completions`` →
+    ``https://api.groq.com/openai/v1`` (de donde cuelga ``/models``).
+    """
+    parts = urlsplit((api_url or "").strip())
+    if not parts.scheme or not parts.hostname:
+        return None
+    path = parts.path.rstrip("/")
+    for sufijo in ("/chat/completions", "/completions"):
+        if path.endswith(sufijo):
+            path = path[: -len(sufijo)]
+            break
+    port = f":{parts.port}" if parts.port else ""
+    return f"{parts.scheme}://{parts.hostname}{port}{path}"
+
+
 def _payload(cfg: Dict[str, Any], messages: List[Dict[str, str]], temperature: float) -> Dict[str, Any]:
     """Payload según el dialecto de la URL configurada."""
     if is_ollama(cfg["api_url"]):
@@ -222,7 +240,10 @@ def _payload(cfg: Dict[str, Any], messages: List[Dict[str, str]], temperature: f
                 "num_predict": cfg["num_predict"],
             },
         }
-    # Compatible con OpenAI (proveedor remoto).
+    # Compatible con OpenAI (proveedor remoto). Sin max_tokens: num_predict
+    # es un tope de Ollama local (VRAM + ~35 tok/s); acá lo acota el
+    # proveedor, y mandarlo recortaba las salidas de los modelos con
+    # reasoning a mitad de redacción (JSON del informe truncado).
     return {
         "model": cfg["model"],
         "temperature": temperature,
@@ -345,21 +366,21 @@ async def chat_stream(
 
 
 async def probe(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Sonda rápida de Ollama: modelos instalados (tags), cargados (ps) y latencia.
+    """Sonda rápida del motor: modelos disponibles y latencia.
 
-    Responde siempre 200: si no es Ollama o no responde, devuelve
-    ``reachable: false`` con el motivo y la app sigue operativa.
+    Ollama local: inspecciona ``/api/tags`` y ``/api/ps`` (modelos instalados
+    y residentes en VRAM). Endpoint compatible con OpenAI (Groq, etc.):
+    consulta ``GET {base}/models`` con Bearer — la API key inválida o la cuota
+    agotada aparecen como ``reachable: false`` con el motivo, en vez de fingir
+    «sin inspección local».
+
+    Responde siempre 200: si nada responde, devuelve ``reachable: false`` con
+    el motivo y la app sigue operativa.
     """
     cfg = cfg or get()
     base = ollama_base(cfg["api_url"])
     if not base:
-        return {
-            "kind": "remote" if cfg["api_url"] else "none",
-            "reachable": None,
-            "reason": None,
-            "models": [],
-            "loaded": [],
-        }
+        return await _probe_openai(cfg)
 
     start = time.perf_counter()
     try:
@@ -393,12 +414,64 @@ async def probe(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     }
 
 
+async def _probe_openai(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Sonda de un endpoint compatible con OpenAI: ``GET {base}/models``."""
+    url = (cfg.get("api_url") or "").strip()
+    if not url:
+        return {"kind": "none", "reachable": None, "reason": None,
+                "models": [], "loaded": []}
+    base = openai_base(url)
+    if not base:
+        return {"kind": "remote", "reachable": None, "reason": None,
+                "models": [], "loaded": []}
+
+    headers = {"Accept": "application/json"}
+    if cfg.get("api_key"):
+        headers["Authorization"] = f"Bearer {cfg['api_key']}"
+
+    start = time.perf_counter()
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{base}/models", headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "kind": "remote",
+            "reachable": False,
+            "reason": str(exc) or "sin respuesta",
+            "base": base,
+            "models": [],
+            "loaded": [],
+        }
+
+    # Formato OpenAI: {"data": [{"id": "..."}]}. Se normaliza a {name} para
+    # que el panel use el mismo datalist que con Ollama.
+    raw = data.get("data") if isinstance(data, dict) else None
+    models = [
+        {"name": str(m.get("id", ""))}
+        for m in (raw if isinstance(raw, list) else [])
+        if isinstance(m, dict) and m.get("id")
+    ]
+    return {
+        "kind": "remote",
+        "reachable": True,
+        "reason": None,
+        "base": base,
+        "latency_ms": int((time.perf_counter() - start) * 1000),
+        "models": models,
+        "loaded": [],
+    }
+
+
 async def test_connection(override: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Prueba real: sonda de estado + un «ping» al modelo midiendo latencia.
 
     Acepta un parche de configuración para probar los valores del panel ANTES
     de guardarlos. El ping ignora ``enabled`` (probar es explícito) y recorta
-    ``num_predict`` para que la respuesta sea instantánea.
+    ``num_predict`` para que la respuesta sea instantánea. Aplica a cualquier
+    dialecto (Ollama local o compatible OpenAI): la sonda lista los modelos y
+    el ping mide latencia real contra el mismo endpoint que usaría la app.
     """
     allowed = {k: v for k, v in (override or {}).items() if k in DEFAULTS}
     try:
@@ -410,17 +483,21 @@ async def test_connection(override: Optional[Dict[str, Any]] = None) -> Dict[str
     if status.get("reachable") is False:
         return {
             "ok": False,
-            "error": f"Ollama no responde en {status.get('base')}: {status.get('reason')}",
+            "error": f"El motor no responde en {status.get('base')}: {status.get('reason')}",
             "status": status,
         }
     if status.get("reachable") is None:
         return {
             "ok": False,
-            "error": "La URL configurada no es un Ollama local: la sonda de "
-                     "estado solo aplica a localhost:11434",
+            "error": "No se pudo interpretar la URL configurada: usá una URL "
+                     "de Ollama (localhost:11434) o de un proveedor compatible "
+                     "con OpenAI (…/v1/chat/completions).",
             "status": status,
         }
 
+    # Ping con tope mínimo: en Ollama local 16 tokens bastan para «OK»; en un
+    # proveedor remoto num_predict no viaja al payload (lo acota el proveedor),
+    # así que la misma línea sirve para ambos dialectos.
     ping_cfg = {**cfg, "enabled": True, "num_predict": min(cfg["num_predict"], 16)}
     start = time.perf_counter()
     reply = await chat(
@@ -430,10 +507,13 @@ async def test_connection(override: Optional[Dict[str, Any]] = None) -> Dict[str
     )
     latency_ms = int((time.perf_counter() - start) * 1000)
     if reply is None:
+        if status.get("kind") == "ollama":
+            hint = f" El modelo no respondió. ¿Está instalado? (lista: ollama list)"
+        else:
+            hint = " El proveedor rechazó la llamada: revisá la API key y el nombre del modelo."
         return {
             "ok": False,
-            "error": f"El modelo «{cfg['model']}» no respondió. ¿Está instalado? "
-                     "(lista: ollama list)",
+            "error": f"El modelo «{cfg['model']}» no respondió.{hint}",
             "latency_ms": latency_ms,
             "status": status,
         }

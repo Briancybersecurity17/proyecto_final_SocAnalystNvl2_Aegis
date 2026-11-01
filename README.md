@@ -112,35 +112,39 @@ No se usan puertos adicionales: backend **8500**, frontend **5300**.
 
 ---
 
-## IA integrada (Ollama local + panel «Opciones IA»)
+## IA integrada (proveedor cloud + panel «Opciones IA»)
 
 `backend/ai_service.py` redacta el informe y las respuestas del asistente a
 partir de un contexto que contiene **únicamente datos calculados** de los
 registros (estadísticas + evidencias).
 
-- **Modo local determinista (siempre disponible):** generador con plantillas
+- **Modo determinista (siempre disponible):** generador con plantillas
   basadas en los mismos números → nunca falta informe ni respuesta.
-- **Modo LLM (por defecto):** Ollama local en `localhost:11434` con
-  **qwen2.5:3b** (Q4_K_M, ≈1.9 GB → GTX 1060 de 6 GB holgada). Se configura
-  desde la sección **Opciones IA** del sidebar (modelo, `num_ctx`,
-  `temperature`, `keep_alive`, `num_predict`, on/off) y **aplica al instante,
-  sin reiniciar**: Ollama recibe las opciones en cada petición y el backend
-  relee `backend/data/ai_config.json` en la próxima llamada. El botón
-  **Probar conexión** mide latencia real y muestra la VRAM en uso.
+- **Modo LLM (por defecto):** proveedor cloud compatible con OpenAI — por
+  defecto **Groq** con `openai/gpt-oss-120b` (≈3 s por respuesta, sin
+  hardware local). Se configura desde la sección **Opciones IA** del sidebar
+  (endpoint, API key, modelo, `temperature`, presupuesto del prompt
+  `num_ctx`, `timeout`, on/off) y **aplica al instante, sin reiniciar**: el
+  backend relee `backend/data/ai_config.json` en la próxima llamada. El
+  botón **Probar conexión** mide latencia real contra el mismo endpoint que
+  usaría la app. El dialecto Ollama local sigue soportado en el backend si
+  alguna vez hiciera falta (los parámetros solo-Ollama `keep_alive`/
+  `num_predict` se ignoran en endpoints compatibles con OpenAI).
 - **Configuración por entorno (opcional):** las variables siguen aportando
   los valores por defecto si preferís configurar por entorno:
 
 ```bash
-export AI_API_URL="http://localhost:11434/api/chat"  # u otro compatible OpenAI
-export AI_API_KEY="sk-..."          # opcional
-export AI_MODEL="qwen2.5:3b"        # opcional
-export AI_ENABLED=0                 # opcional: 0 desactiva el LLM
-export AI_TIMEOUT=60                # opcional (segundos)
+export AI_API_URL="https://api.groq.com/openai/v1/chat/completions"
+export AI_API_KEY="gsk_..."          # obligatoria para el proveedor
+export AI_MODEL="openai/gpt-oss-120b"  # opcional
+export AI_ENABLED=0                  # opcional: 0 desactiva el LLM
+export AI_TIMEOUT=60                 # opcional (segundos)
 ```
 
 Si el LLM está apagado, no responde o la respuesta no es JSON válido, el
-servicio **cae automáticamente al modo local**: el informe nunca queda vacío.
-La interfaz muestra en todo momento la fuente utilizada (LLM / motor determinista).
+servicio **cae automáticamente al modo determinista**: el informe nunca queda
+vacío. La interfaz muestra en todo momento la fuente utilizada (LLM / motor
+determinista).
 
 ---
 
@@ -358,7 +362,7 @@ propio Excel.
 
 ```bash
 # desde la raíz del proyecto
-backend\.venv\Scripts\python.exe backend\scripts\eval_rag.py --motor determinista   # línea base barata (sin Ollama)
+backend\.venv\Scripts\python.exe backend\scripts\eval_rag.py --motor determinista   # línea base barata (sin LLM)
 backend\.venv\Scripts\python.exe backend\scripts\eval_rag.py --motor ambos          # determinista + LLM y delta entre ambos
 backend\.venv\Scripts\python.exe backend\scripts\eval_rag.py --motor llm --contra backend\eval\runs\baseline.json
 ```
@@ -404,7 +408,7 @@ seed: el determinista no lee few-shot. Corridas completas en
 - **Frontend:** React, TypeScript, Vite, Tailwind CSS, Zustand, Recharts, Framer Motion, SheetJS, `@react-pdf/renderer`, `file-saver`.
 - **Backend:** FastAPI, pandas, openpyxl, httpx, sse-starlette.
 - **RAG (opcional):** ChromaDB, sentence-transformers (multilingüe, local y gratuito).
-- **LLM (opcional):** Ollama + `qwen2.5:3b` (Q4_K_M, ≈1,9 GB). Un reranker cross-encoder (`ms-marco-MiniLM-L6-v2`) reordena los candidatos antes de armar el prompt.
+- **LLM (opcional):** proveedor cloud compatible con OpenAI (Groq por defecto: `openai/gpt-oss-120b`; el dialecto Ollama local sigue soportado). Un reranker cross-encoder (`ms-marco-MiniLM-L6-v2`, local) reordena los candidatos antes de armar el prompt.
 
 ---
 
