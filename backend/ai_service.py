@@ -526,9 +526,10 @@ _REPORT_USER_PROMPT = (
     "«raw» literal, sin traducir).\n"
     "  - correlation: la PRIMERA IP de suspicious_by_ip con SU conteo de eventos, "
     "tal como figura en DATOS.\n"
-    "  - conclusions: etiqueta de riesgo, total de registros, distribución completa "
-    "de niveles y la reproducibilidad (todo procede de los datos importados; nada "
-    "externo a ellos).\n"
+    "  - conclusions: etiqueta de riesgo, total de registros, distribución "
+    "completa de niveles (cada nivel con count > 0 nombrado de forma concreta "
+    "con «nivel» + su nombre) y la reproducibilidad (todo procede de los datos "
+    "importados; nada externo a ellos).\n"
     "\n"
     "3) REGLAS DURAS:\n"
     "  - Todo número sale de los DATOS tal cual: prohibido recalcular, aproximar o "
@@ -883,10 +884,17 @@ def _pairs(text: str) -> List[Tuple[float, str]]:
                 if _ATRAS_SEP_RE.search(norm[lend:pos]):
                     continue
                 # «…al nivel crítico. 3) Aplicación de reglas…»: un número
-                # pegado a «)» o «.» es el PASO de la lista siguiente (la
-                # forma de methodology que pide el prompt), no la cifra de
-                # la etiqueta.
-                if norm[pos + len(raw): pos + len(raw) + 1] in ").":
+                # pegado a «)» o «.» que ARRANCA frase es el PASO de la lista
+                # siguiente (la forma de methodology que pide el prompt), no
+                # la cifra de la etiqueta. Pero la última cifra de un listado
+                # («Nivel Bajo: 603.») también va seguida de «.» y NO es paso:
+                # va tras «:», sin cierre de frase delante. Descartarla por
+                # el «.» posterior hacía ganar al 7 de «Nivel Medio: 7» por
+                # la ventana (falso positivo que rechazaba conclusions).
+                if (
+                    norm[pos + len(raw): pos + len(raw) + 1] in ")."
+                    and _starts_sentence(norm, pos)
+                ):
                     continue
                 direccion = 1
             previa = best.get(lpos)
@@ -897,6 +905,21 @@ def _pairs(text: str) -> List[Tuple[float, str]]:
     return [
         (best[lpos][1], best[lpos][2]) for lpos in sorted(best)
     ]
+
+
+def _starts_sentence(norm: str, pos: int) -> bool:
+    """¿El texto en `pos` arranca una frase (viene tras un cierre de frase)?
+
+    Un número de paso de metodología («…al nivel crítico. 3) Aplicación…»)
+    va pegado a «)»/«.» Y arranca frase: el carácter previo, sin espacios
+    finales, es «.» (o el texto empieza ahí). En cambio la última cifra de
+    un listado («Nivel Bajo: 603.») va seguida de punto pero NO arranca
+    frase: su carácter previo es «:». Distinguir por el contexto ANTERIOR
+    evita descartar cifras legítimas a pie de frase (falso positivo que
+    rechazaba conclusions con la distribución completa).
+    """
+    antes = norm[:pos].rstrip()
+    return not antes or antes[-1] in ".!?\n"
 
 
 def _num(value: Any) -> str:

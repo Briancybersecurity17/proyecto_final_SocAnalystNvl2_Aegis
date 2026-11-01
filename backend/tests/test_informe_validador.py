@@ -350,6 +350,27 @@ def test_regla_b_paso_numerado_tras_etiqueta_no_atribuye():
     assert _rule_attribution(texto, CTX) == []
 
 
+def test_regla_b_cifra_a_pie_de_frase_con_punto_no_es_paso():
+    """La cifra seguida de «.» a pie de frase NO es número de paso.
+
+    El descarte de «)»/«.» existe para no confundir el paso de metodología
+    («…al nivel crítico. 3) Aplicación…», el 3 arranca frase) con la cifra
+    de la etiqueta. Pero el listado de distribución del prompt cierra la
+    última fila con punto («…Nivel Bajo: 603 (84,3 %).»): el 603 iba
+    descartado como «paso», ganaba el 7 de «Nivel Medio: 7» por la ventana
+    de 40 chars y la regla B rechazaba «7 … nivel bajo ≠ 603» — un falso
+    positivo que tumbaba conclusions con la distribución completa correcta.
+    """
+    ctx = {"level_counts": {"critico": 97, "alto": 8, "medio": 7, "bajo": 603}}
+    texto = ("Distribución: Nivel Crítico: 97, Nivel Alto: 8, "
+             "Nivel Medio: 7, Nivel Bajo: 603.")
+    assert _rule_attribution(texto, ctx) == []
+    # Y la atribución es la correcta: cada etiqueta con SU cifra.
+    parejas = dict((tag, val) for val, tag in _pairs(texto))
+    assert parejas["nivel:bajo"] == 603.0
+    assert parejas["nivel:medio"] == 7.0
+
+
 def test_regla_b_mas_de_40_chars_no_atribuye():
     """Fuera de la ventana de 40 chars la etiqueta no atribuye al número."""
     texto = (

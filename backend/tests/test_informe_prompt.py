@@ -146,6 +146,38 @@ def test_prompt_bloque_estructura_espeja_la_regla_c(informe):
     assert "reproducib" in prompt         # conclusions: reproducibilidad
 
 
+def _seccion(prompt: str, campo: str) -> str:
+    """La línea del bloque 2 correspondiente a un campo concreto."""
+    idx = prompt.index(f"- {campo}:")
+    return prompt[idx:prompt.index("\n", idx)]
+
+
+def test_prompt_conclusions_pide_el_literal_nivel_por_nivel(informe):
+    """Regla C exige «nivel X» (regex `_mentions_level`) TAMBIÉN en conclusions.
+
+    El prompt solo pedía ese formato en executive_summary; en conclusions
+    decía «distribución completa de niveles» sin exigir la palabra «nivel».
+    El modelo entonces escribía «Crítico: 97 ▸ Alto: 8 …» (sin «nivel») y el
+    validador rechazaba el campo con la misma función → 3/4. El espejo
+    prompt↔validador debe ser completo: conclusions también pide «nivel» +
+    su nombre.
+    """
+    prompt = _user_prompt(informe())
+    seccion = _seccion(prompt, "conclusions")
+    assert "«nivel»" in seccion, (
+        "la sección conclusions no pide nombrar cada nivel con «nivel» + su "
+        "nombre, pero el validador (regla C / _mentions_level) lo exige"
+    )
+    assert "+ su nombre" in seccion
+
+
+def test_prompt_executive_sigue_pidiendo_el_literal_nivel(informe):
+    """El espejo existente en executive_summary no se rompe con el fix."""
+    prompt = _user_prompt(informe())
+    seccion = _seccion(prompt, "executive_summary")
+    assert "«nivel»" in seccion
+
+
 # ---------------------------------------------------------------------------
 # 4b. Payload y presupuesto
 # ---------------------------------------------------------------------------
