@@ -794,8 +794,10 @@ async def process_analysis(analysis_id: str, file_bytes: bytes, file_name: str =
     # Nunca invalida el análisis: si falla, la app sigue en modo determinista.
     # ------------------------------------------------------------------
     records = _enrich_records(df)
+    # is_available() consulta el cliente de Chroma: a un hilo, porque otra
+    # indexación en curso retiene su candado y esto no debe congelar la API.
     analysis_store[analysis_id]["rag"] = {
-        "available": rag_store.is_available(),
+        "available": await asyncio.to_thread(rag_store.is_available),
         "indexed": 0,
         "total": len(records),
         "reason": "indexando",
@@ -1096,7 +1098,7 @@ class FeedbackRequest(BaseModel):
     bad_answer: str = ""        # respuesta del modelo que se descarta (auditable)
 
 
-def _ensure_semantic_index(
+async def _ensure_semantic_index(
     analysis_id: str, entry: Dict[str, Any], df: pd.DataFrame | None
 ) -> bool:
     """Autorepara el índice semántico si ha desaparecido; no bloquea.
@@ -1106,13 +1108,17 @@ def _ensure_semantic_index(
     indexados, se reconstruye en un hilo. Devuelve ``True`` si hay una
     indexación en curso (la propia de la subida o esta), para que el llamador
     pueda advertir de que la respuesta usa solo recuperación léxica.
+
+    Las consultas al cliente de Chroma (`is_available`, `has_index`) van a
+    hilos: mientras el índice se reconstruye, Chroma retiene su candado y
+    ejecutar esas llamadas dentro del event loop congelaría TODA la API.
     """
     running = _INDEX_TASKS.get(analysis_id)
     if running is not None and not running.done():
         return True
-    if df is None or df.empty or not rag_store.is_available():
+    if df is None or df.empty or not await asyncio.to_thread(rag_store.is_available):
         return False
-    if rag_store.has_index(analysis_id):
+    if await asyncio.to_thread(rag_store.has_index, analysis_id):
         return False
 
     entry["rag"] = {"available": True, "indexed": 0, "total": len(df), "reason": "indexando"}
@@ -1125,8 +1131,8 @@ def _ensure_semantic_index(
             logger.info("Índice semántico reconstruido para %s", analysis_id[:8])
         except Exception as exc:  # noqa: BLE001 – nunca invalida la consulta
             logger.warning("Autoreparación del índice falló para %s: %s", analysis_id[:8], exc)
-            entry["rag"] = {"available": rag_store.is_available(), "indexed": 0,
-                            "total": len(df), "reason": str(exc)}
+            entry["rag"] = {"available": await asyncio.to_thread(rag_store.is_available),
+                            "indexed": 0, "total": len(df), "reason": str(exc)}
         finally:
             _INDEX_TASKS.pop(analysis_id, None)
 
@@ -1134,12 +1140,17 @@ def _ensure_semantic_index(
     return True
 
 
-def _ask_prep(analysis_id: str, payload: AskRequest) -> Dict[str, Any]:
+async def _ask_prep(analysis_id: str, payload: AskRequest) -> Dict[str, Any]:
     """Valida una consulta del asistente y prepara el contexto compartido.
 
     Lo usan el endpoint normal (/ask) y el de streaming (/ask/stream) para que
     ambas rutas apliquen exactamente las mismas reglas: validación, aviso de
     índice en construcción y recuperación híbrida idéntica.
+
+    Las consultas a Chroma (`get_stats`, `status`, `has_index`) se ejecutan en
+    hilos: mientras el índice se reconstruye (~2.5 min embebiendo 715 eventos),
+    Chroma retiene su candado y llamarlo dentro del event loop congelaría toda
+    la API, hasta peticiones sin relación con RAG.
     """
     if analysis_id not in analysis_store:
         raise HTTPException(status_code=404, detail="Analysis not found")
@@ -1158,21 +1169,23 @@ def _ask_prep(analysis_id: str, payload: AskRequest) -> Dict[str, Any]:
         "analysis_id": analysis_id,
         "question": question,
         "filters": filters,
-        "rag": rag_store.get_stats(analysis_id),
-        "kb": kb_store.status(),
+        "rag": await asyncio.to_thread(rag_store.get_stats, analysis_id),
+        "kb": await asyncio.to_thread(kb_store.status),
     }
 
     # Autoreparación del índice (no bloquea): se comprueba SIEMPRE, también en
     # las consultas de agregación, para que el índice vuelva a estar completo.
     df: pd.DataFrame | None = entry.get("dataframe")
     rag_state = entry.get("rag") or {}
-    indexing = _ensure_semantic_index(analysis_id, entry, df)
+    indexing = await _ensure_semantic_index(analysis_id, entry, df)
 
     # Si el índice semántico todavía no está listo (acaba de subirse o se está
     # reconstruyendo), se avisa en la respuesta: lo recuperado procede solo de
     # la búsqueda léxica. Nunca se bloquea la petición esperando al índice.
     index_note = ""
-    if (indexing or rag_state.get("reason") == "indexando") and not rag_store.has_index(analysis_id):
+    if (indexing or rag_state.get("reason") == "indexando") and not await asyncio.to_thread(
+        rag_store.has_index, analysis_id
+    ):
         total = int(rag_state.get("total") or len(df) or 0)
         index_note = (
             f"El índice semántico local se está construyendo ({total} eventos); "
@@ -1239,7 +1252,7 @@ async def ask_question(analysis_id: str, payload: AskRequest):
     La conversación tiene memoria multi-turno (últimos turnos en RAM por
     análisis), así que se puede preguntar «¿y esos mismos con IP externa?».
     """
-    prep = _ask_prep(analysis_id, payload)
+    prep = await _ask_prep(analysis_id, payload)
     entry, question, common = prep["entry"], prep["question"], prep["common"]
 
     # --- Consulta de agregación: cifras exactas, sin recuperación -----------
@@ -1281,7 +1294,7 @@ async def ask_question_stream(analysis_id: str, payload: AskRequest):
     respuesta completa, más el tipo en la clave `kind`.
     """
     t0 = time.perf_counter()
-    prep = _ask_prep(analysis_id, payload)
+    prep = await _ask_prep(analysis_id, payload)
     t_prep = time.perf_counter() - t0
     entry, question, common = prep["entry"], prep["question"], prep["common"]
 
@@ -1363,20 +1376,26 @@ async def submit_feedback(analysis_id: str, payload: FeedbackRequest):
         feedback_store.add_correction,
         question, corrected, (payload.bad_answer or "").strip(), analysis_id,
     )
-    return {"ok": saved is not None, "example": saved, "stats": feedback_store.status()}
+    stats = await asyncio.to_thread(feedback_store.status)
+    return {"ok": saved is not None, "example": saved, "stats": stats}
 
 
 @app.get("/api/feedback")
 async def feedback_status():
-    """Conteo de la memoria de criterio para el panel «Opciones IA»."""
-    return feedback_store.status()
+    """Conteo de la memoria de criterio para el panel «Opciones IA».
+
+    `status()` consulta Chroma: fuera del event loop, que el índice de
+    feedback esté ocupado no debe congelar la API.
+    """
+    return await asyncio.to_thread(feedback_store.status)
 
 
 @app.delete("/api/feedback")
 async def feedback_clear():
     """Vacía la memoria de criterio aprendido (ejemplos few-shot)."""
-    removed = feedback_store.clear()
-    return {"ok": True, "removed": removed, "stats": feedback_store.status()}
+    removed = await asyncio.to_thread(feedback_store.clear)
+    stats = await asyncio.to_thread(feedback_store.status)
+    return {"ok": True, "removed": removed, "stats": stats}
 
 
 @app.delete("/api/analysis/{analysis_id}/chat")
@@ -1470,8 +1489,9 @@ async def kb_status():
 
     Responde siempre 200: si faltan dependencias opcionales devuelve
     `available: false` con el motivo y la app sigue operativa.
+    `status()` consulta Chroma: va a un hilo para no congelar el event loop.
     """
-    return kb_store.status()
+    return await asyncio.to_thread(kb_store.status)
 
 
 @app.get("/api/rag/status")
@@ -1480,8 +1500,10 @@ async def rag_status(analysis_id: str = Query("", description="Análisis concret
 
     Responde siempre 200: si el motor no está instalado devuelve
     `available: false` y la app sigue operativa en modo determinista.
+    `get_stats()` consulta Chroma: va a un hilo para no congelar el event
+    loop mientras el índice se reconstruye.
     """
-    info = rag_store.get_stats(analysis_id or None)
+    info = await asyncio.to_thread(rag_store.get_stats, analysis_id or None)
     if analysis_id and analysis_id not in analysis_store:
         info["known_analysis"] = False
     return info
