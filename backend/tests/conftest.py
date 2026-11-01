@@ -1,5 +1,6 @@
 import os, sys
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "backend")))
+_BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "backend"))
+sys.path.insert(0, _BACKEND_DIR)
 
 import io
 import time
@@ -8,7 +9,43 @@ import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
+# --- Un solo mundo de módulos -----------------------------------------------
+# main.py y feedback_store.py importan con patrón dual: `from backend import
+# rag_store` si el paquete está en el path, si no `import rag_store`. Con
+# `python -m pytest` desde la raíz del repo el paquete SÍ está disponible, así
+# que la app se enlaza a `backend.*` mientras los tests parchean los módulos
+# sueltos: DOS instancias por módulo. Consecuencias reales observadas (31/10):
+# los fixtures de aislamiento no afectaban a la app, los runs escribían en el
+# índice y el feedback REALES de producción (soc_feedback/soc_events) y el
+# test few-shot nunca veía la corrección que acababa de guardar.
+# Fix: precargar los módulos sueltos y publicarlos bajo el nombre de paquete
+# ANTES de importar main — el try de main enlaza entonces a los módulos que
+# los fixtures ya parchean, en ambos sentidos de ejecución (con y sin el repo
+# raíz en sys.path).
+import importlib as _importlib
+
+# Orden por dependencias: los hojas primero — si `ai_service` se cargara antes
+# que `rag_store`/`ai_config`, su dual `from backend import X` crearía la
+# instancia de paquete antes que este alias y el mundo se partiría otra vez.
+_MODULOS_DUALES = ("rag_store", "ai_config", "filters", "severity", "rerank",
+                   "kb_store", "feedback_store", "ai_service")
+for _name in _MODULOS_DUALES:
+    sys.modules.setdefault(f"backend.{_name}", _importlib.import_module(_name))
+try:
+    import backend as _backend_pkg  # noqa: F401 – atributos visibles vía from-import
+    for _name in _MODULOS_DUALES:
+        setattr(_backend_pkg, _name, sys.modules[f"backend.{_name}"])
+except ImportError:  # pragma: no cover – raíz del repo fuera del path
+    _backend_pkg = None
+
 from main import app
+
+# filters importa perezosamente `from backend.main import …` dentro de
+# funciones: sin este alias se cargaría backend/main.py una SEGUNDA vez
+# (otro app FastAPI y otro mundo). Se apunta a main ya cargado.
+sys.modules.setdefault("backend.main", sys.modules["main"])
+if _backend_pkg is not None:
+    _backend_pkg.main = sys.modules["main"]
 
 # Columnas del dataset sintético, en el mismo orden que un Excel real.
 COLUMNAS = [

@@ -85,8 +85,16 @@ def _patched_modules(nombre: str, attr: str, valor: Any) -> Iterator[List[Any]]:
         except ImportError:
             pass
 
-    mods = [m for name, m in sys.modules.items()
-            if (name == nombre or name == f"backend.{nombre}") and m is not None]
+    # Deduplica POR IDENTIDAD: con alias de un solo mundo (sys.modules
+    #["backend.X"] es el mismo objeto que ["X"]) el escaneo devuelve la misma
+    # instancia bajo dos nombres — parchearla dos veces duplicaría el wrapper
+    # y rompería la aserción de integridad de LLM_OFF. En un mundo dual (dos
+    # cargas reales) cada instancia distinta se parchea una sola vez.
+    mods: List[Any] = []
+    for name, m in sys.modules.items():
+        if (name == nombre or name == f"backend.{nombre}") and m is not None:
+            if not any(m is seen for seen in mods):
+                mods.append(m)
     originals = [(mod, getattr(mod, attr)) for mod in mods]
     try:
         for mod in mods:

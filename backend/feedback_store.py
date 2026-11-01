@@ -345,6 +345,13 @@ def similar(question: str, limit: int = MAX_EXAMPLES) -> List[Dict[str, Any]]:
             continue   # índice desfasado con el JSON: se ignora el hit
         hits.append({**example, "score": round(max(0.0, 1.0 - float(dist)), 4)})
 
+    if not hits:
+        # Índice semántico desfasado con el JSON (edición manual a mano — la
+        # herramienta lo publica — o un `_reindex` a medias): el JSON es la
+        # fuente de verdad, así que se cae a léxico en vez de devolver 0
+        # ejemplos y apagar el few-shot en silencio.
+        return _lexical(question, examples, limit)
+
     return _pick(hits, limit)
 
 

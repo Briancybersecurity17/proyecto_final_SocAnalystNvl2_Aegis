@@ -187,6 +187,30 @@ def test_similar_limite_respetado():
     assert len(feedback_store.similar(Q, limit=2)) <= 2
 
 
+def test_similar_con_indice_semantico_desfasado_cae_a_lexico(monkeypatch):
+    """El JSON es la fuente de verdad: si el índice semántico devuelve solo
+    ids que ya no están en el JSON (edición manual a mano — la herramienta lo
+    publica — o un `_reindex` a medias), la recuperación cae a léxico en vez
+    de devolver 0 ejemplos y apagar el few-shot en silencio."""
+    feedback_store.add_correction(Q, A)
+
+    class _IndiceDesfasado:
+        def count(self):
+            return 1
+
+        def query(self, query_texts, n_results, include):
+            # Formato real de Chroma: una lista por cada query_texts.
+            return {"metadatas": [[{"example_id": "fb-eliminado-hace-rato"}]],
+                    "distances": [[0.01]]}
+
+    monkeypatch.setattr(feedback_store, "_get_collection", lambda: _IndiceDesfasado())
+
+    hits = feedback_store.similar(Q, limit=1)
+
+    assert hits, "el índice desfasado anuló el few-shot en vez de caer a léxico"
+    assert hits[0]["question"] == Q
+
+
 # ---------------------------------------------------------------------------
 # Límites y persistencia
 # ---------------------------------------------------------------------------
