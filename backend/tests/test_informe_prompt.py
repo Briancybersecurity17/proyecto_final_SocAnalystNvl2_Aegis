@@ -178,6 +178,24 @@ def test_prompt_executive_sigue_pidiendo_el_literal_nivel(informe):
     assert "«nivel»" in seccion
 
 
+def test_prompt_da_plantilla_literal_de_distribucion(informe):
+    """El prompt debe dar un EJEMPLO literal del formato «nivel X: N».
+
+    Pedir «nivel» + su nombre de forma abstracta («nombrado de forma concreta
+    con «nivel» + su nombre») solo lo obedece el modelo ~57 % de las veces:
+    a veces escribe «97 en crítico» o «crítico 97» sin la palabra «nivel», y
+    `_mentions_level` (regex `nivel\\s+X`) lo rechaza → conclusions cae a
+    regla C y el informe se queda en 3/4. Una plantilla literal («nivel
+    crítico: 97, nivel alto: 8…») ancla el formato y sube la obediencia.
+    """
+    prompt = _user_prompt(informe())
+    # La plantilla debe mostrar el literal «nivel <nombre>: <cifra>».
+    assert re.search(r"nivel\s+cr[íi]tico\s*:\s*\d", prompt), (
+        "el prompt no incluye una plantilla literal «nivel crítico: <n>» del "
+        "formato de distribución que exige _mentions_level"
+    )
+
+
 # ---------------------------------------------------------------------------
 # 4b. Payload y presupuesto
 # ---------------------------------------------------------------------------
