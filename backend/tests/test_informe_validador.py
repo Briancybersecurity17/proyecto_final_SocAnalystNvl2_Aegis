@@ -1,6 +1,6 @@
 """Tarea 3: validador del informe — reglas B (atribución) y C (contenido obligatorio).
 
-Reglas puras, sin Ollama ni red: el `ctx` sintético reproduce la forma real
+Reglas puras, sin proveedor ni red: el `ctx` sintético reproduce la forma real
 que devuelve `ai_service.build_context` (rows, level_counts, suspicious_*,
 risk_levels con percentage…). `event_id_counts` y `severity_mapping` ya los
 propaga `build_context` desde la tarea 5: aquí se siguen incluyendo

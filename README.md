@@ -48,7 +48,7 @@ proyecto_final_bootcamp_ComunidadDojo_SocAnalystNvl2/
 ├─ backend/
 │  ├─ main.py                 # FastAPI: /analyze, /rows, /report, /ask, SSE, feedback (8500)
 │  ├─ ai_service.py           # IA de redacción con grounding estricto + fallback local
-│  ├─ ai_config.py            # config del LLM en caliente (modelo, num_ctx, keep_alive…)
+│  ├─ ai_config.py            # config del LLM en caliente (endpoint, modelo, temperature…)
 │  ├─ feedback_store.py       # criterio aprendido del analista (RAG few-shot)
 │  ├─ rerank.py               # reranker cross-encoder sobre los candidatos del RAG
 │  ├─ rag_store.py            # índice semántico de los eventos (ChromaDB, colección soc_events)
@@ -123,13 +123,13 @@ registros (estadísticas + evidencias).
 - **Modo LLM (por defecto):** proveedor cloud compatible con OpenAI — por
   defecto **Groq** con `openai/gpt-oss-120b` (≈3 s por respuesta, sin
   hardware local). Se configura desde la sección **Opciones IA** del sidebar
-  (endpoint, API key, modelo, `temperature`, presupuesto del prompt
-  `num_ctx`, `timeout`, on/off) y **aplica al instante, sin reiniciar**: el
-  backend relee `backend/data/ai_config.json` en la próxima llamada. El
-  botón **Probar conexión** mide latencia real contra el mismo endpoint que
-  usaría la app. El dialecto Ollama local sigue soportado en el backend si
-  alguna vez hiciera falta (los parámetros solo-Ollama `keep_alive`/
-  `num_predict` se ignoran en endpoints compatibles con OpenAI).
+  (endpoint, API key, modelo, `temperature`, `timeout`, on/off) y **aplica al
+  instante, sin reiniciar**: el backend relee `backend/data/ai_config.json`
+  en la próxima llamada. El botón **Probar conexión** mide latencia real
+  contra el mismo endpoint que usaría la app. El proyecto es 100% cloud: no
+  hay soporte de Ollama local ni parámetros de VRAM (`keep_alive`, `num_ctx`,
+  `num_predict`); la ventana de contexto y el tope de generación los aplica el
+  proveedor.
 - **Configuración por entorno (opcional):** las variables siguen aportando
   los valores por defecto si preferís configurar por entorno:
 
@@ -262,7 +262,7 @@ que se respondan**, y lo hace sin tocar los pesos del modelo.
 | Pieza | Archivo | Qué hace |
 |---|---|---|
 | Memoria | `backend/feedback_store.py` | captura, persiste y recupera los ejemplos de criterio |
-| Inyección | `backend/ai_service.py` → `_feedback_note()` | inserta los ejemplos afines en el prompt, presupuestados contra `num_ctx` |
+| Inyección | `backend/ai_service.py` → `_feedback_note()` | inserta los ejemplos afines en el prompt, presupuestados contra la ventana del modelo |
 | Endpoints | `backend/main.py` | `POST /api/analysis/{id}/feedback`, `GET/DELETE /api/feedback` |
 | UI | `AssistantChat.tsx` (botón «Corregir») · `AiOptions.tsx` (panel) | captura explícita y estado de la memoria |
 
@@ -282,8 +282,9 @@ del RAG). Sin Chroma la recuperación cae a léxica. El JSON está en
 `.gitignore` porque es aprendizaje propio de cada máquina.
 
 **Prioridad deliberada del presupuesto:** el bloque few-shot se inyecta
-**antes** de la evidencia, pero se ajusta al espacio libre de `num_ctx`. Si
-la memoria de turnos ya llenó la ventana, se inyectan **cero ejemplos**.
+**antes** de la evidencia, pero se ajusta al espacio libre de la ventana del
+modelo (131072 tokens en `gpt-oss-120b`). Si el prompt ya desborda esa
+ventana, se inyectan **cero ejemplos**.
 Perder el few-shot cuesta estilo; perder el system prompt cuesta las reglas
 de no inventar Log_ID. Un plus nunca puede ser lo que rompa las
 instrucciones.
@@ -408,7 +409,7 @@ seed: el determinista no lee few-shot. Corridas completas en
 - **Frontend:** React, TypeScript, Vite, Tailwind CSS, Zustand, Recharts, Framer Motion, SheetJS, `@react-pdf/renderer`, `file-saver`.
 - **Backend:** FastAPI, pandas, openpyxl, httpx, sse-starlette.
 - **RAG (opcional):** ChromaDB, sentence-transformers (multilingüe, local y gratuito).
-- **LLM (opcional):** proveedor cloud compatible con OpenAI (Groq por defecto: `openai/gpt-oss-120b`; el dialecto Ollama local sigue soportado). Un reranker cross-encoder (`ms-marco-MiniLM-L6-v2`, local) reordena los candidatos antes de armar el prompt.
+- **LLM (opcional):** proveedor cloud compatible con OpenAI (Groq por defecto: `openai/gpt-oss-120b`). Un reranker cross-encoder (`ms-marco-MiniLM-L6-v2`, local) reordena los candidatos antes de armar el prompt.
 
 ---
 

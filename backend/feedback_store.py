@@ -55,10 +55,10 @@ FEEDBACK_PATH = BASE / "data" / "feedback.json"
 
 FEEDBACK_COLLECTION = "soc_feedback"
 
-# Presupuesto de ventana: con num_ctx=2048 la evidencia ya ocupa ~1200 tokens.
-# 2 ejemplos × ~140 tokens dejan margen sin desbordar la ventana ni encarecer
-# el prefill. Medido: pasar de 2 a 4 ejemplos empuja el prompt a ~2400 tokens
-# y, peor, el modelo empieza a copiar el estilo del ejemplo en vez de redactar.
+# Presupuesto del bloque: la evidencia ya ocupa ~1200 tokens y 2 ejemplos ×
+# ~140 tokens dejan margen sin encarecer el prefill. Medido: pasar de 2 a 4
+# ejemplos empuja el prompt a ~2400 tokens y, peor, el modelo empieza a copiar
+# el estilo del ejemplo en vez de redactar.
 MAX_EXAMPLES = 2
 # Tamaño máximo del texto de un ejemplo guardado (chars). Acota el JSON y el
 # prompt a la vez.

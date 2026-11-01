@@ -377,7 +377,8 @@ def _llm_activo(monkeypatch, respuesta):
     """Activa el LLM (config aislada) con `chat` falso que devuelve `respuesta`."""
     from main import ai_config
 
-    ai_config.update({"enabled": True})
+    ai_config.update({"enabled": True,
+                      "api_url": "https://api.test/openai/v1/chat/completions"})
 
     async def fake_chat(messages, cfg=None):
         return respuesta

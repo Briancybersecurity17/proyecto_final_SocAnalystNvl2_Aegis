@@ -9,10 +9,10 @@ Diseño (rigor analítico):
 
 Dos modos de operación:
     1. LLM (opcional): la configuración vive en ``ai_config`` (panel «Opciones
-       IA», persistido en disco): por defecto Ollama local con qwen2.5:3b vía
-       ``/api/chat`` y opciones por request (num_ctx, temperature…); también
-       acepta cualquier endpoint compatible con OpenAI (``AI_API_URL`` y cía.
-       siguen aportando los defaults por entorno).
+       IA», persistido en disco): un proveedor cloud compatible con OpenAI
+       (Groq por defecto, ``openai/gpt-oss-120b`` vía
+       ``…/v1/chat/completions``); ``AI_API_URL`` y cía. siguen aportando los
+       defaults por entorno.
     2. Generador local determinista (fallback): si el LLM está apagado, no
        responde o la respuesta no es JSON válido, se redacta el informe con
        plantillas basadas en los mismos números. Nunca se queda sin informe.
@@ -37,7 +37,7 @@ logger = logging.getLogger("soc.ai")
 # Configuración del LLM (panel «Opciones IA»)
 # ---------------------------------------------------------------------------
 # Fuente de verdad única: ai_config lee/valida el JSON en disco y arma el
-# payload según el dialecto de la URL (Ollama nativo o compatible OpenAI).
+# payload compatible con OpenAI (Groq u otro proveedor cloud).
 # Los cambios del panel aplican al instante, sin reiniciar el backend.
 try:
     from backend import ai_config
@@ -492,12 +492,6 @@ def _clean_json(text: str) -> Optional[Dict[str, Any]]:
     return data if isinstance(data, dict) else None
 
 
-# Presupuesto de generación SOLO para la llamada del informe: los demás usos
-# de num_predict no se tocan. El informe es largo: con el tope del chat (512)
-# el JSON llegaba truncado y se descartaba. Contingencia documentada, no
-# activa: si en la corrida de aceptación el JSON llega truncado, subir a 12288.
-_REPORT_NUM_PREDICT = 1600
-
 # User prompt endurecido en 4 bloques, alineado con las reglas A–D del
 # validador (bloque 2 = regla C campo a campo; bloque 3 = reglas A/B/D y
 # honestidad de la fuente). Solo pide los 4 campos de prosa: findings y
@@ -575,18 +569,11 @@ async def _remote_narrative(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     text = await ai_config.chat(
         messages,
         temperature=0.2,
-        # El informe es largo: con el tope del chat (512) el JSON llega
-        # truncado y se descarta. Para SOLO esta llamada se aplica el suelo
-        # _REPORT_NUM_PREDICT (sin mutar lo guardado en el panel); -1 =
-        # sin límite.
-        cfg={
-            **cfg,
-            "num_ctx": max(cfg["num_ctx"], 8192),
-        },
-        num_predict=(
-            -1 if cfg["num_predict"] == -1
-            else max(cfg["num_predict"], _REPORT_NUM_PREDICT)
-        ),
+        # Sin tope de generación propio: la salida la acota el proveedor.
+        # Cualquier `max_tokens` nuestro recortaba el JSON del informe a mitad
+        # de string (los modelos con reasoning gastan tokens redactando) y el
+        # validador descartaba la narrativa entera.
+        cfg=cfg,
     )
     if not text:
         return None
@@ -1387,9 +1374,9 @@ QA_MAX_EVIDENCE = 8
 QA_MIN_SCORE = 0.30  # por debajo de esto avisamos de baja confianza
 # Memoria multi-turno: turnos de conversación que se inyectan en el prompt
 # (por análisis, en RAM) y tope de caracteres de cada respuesta recordada.
-# Acotados a propósito: con num_ctx=2048 la ventana es finita y el prompt
-# actual (evidencias + referencia) ya ocupa ~1200 tokens; 4 turnos × 350
-# chars dejan margen sin desbordar ni truncar la pregunta vigente.
+# Acotados a propósito: el prompt actual (evidencias + referencia) ya ocupa
+# ~1200 tokens; 4 turnos × 350 chars dejan margen holgado y, de paso, mantienen
+# la respuesta del asistente acotada en la pantalla del chat.
 CHAT_HISTORY_TURNS = 4
 QA_HISTORY_ANSWER_CHARS = 350
 QA_SYSTEM_PROMPT = (
@@ -2050,7 +2037,12 @@ def _cited_log_ids(text: str) -> List[str]:
     return re.findall(r"\b[A-Za-z]{2,12}[-_]\d{2,}\b", text or "")
 
 
-# --- Presupuesto del bloque few-shot contra num_ctx -------------------------
+# --- Presupuesto del bloque few-shot contra la ventana del modelo ------------
+# Ventana de contexto del modelo configurado (gpt-oss-120b en Groq: 131072).
+# Es una constante y no un ajuste del panel porque el tope lo fija el
+# proveedor, no la app: sirve para presupuestar el few-shot sin desbordar el
+# prompt, y el límite práctico lo marca feedback_store.MAX_EXAMPLES.
+MODEL_CONTEXT_WINDOW = 131072
 # Aproximación chars→tokens medida sobre prompts REALES de este proyecto (no
 # la regla genérica de «4 chars/tok», que se queda corta con JSON):
 #   5818 chars ↔ 2253 tok   y   6753 chars ↔ 2545 tok   ⇒  ~2,6 chars/tok
@@ -2068,12 +2060,14 @@ FEEDBACK_PER_EXAMPLE_CHARS = 140
 def _feedback_note(question: str, base_chars: int, history_chars: int) -> Tuple[str, int]:
     """Bloque few-shot con el criterio del analista sobre consultas afines.
 
-    **Presupuestado contra `num_ctx`.** El prompt NO debe pasar de la ventana:
-    si pasa, Ollama recorta los mensajes MÁS VIEJOS —el system prompt con las
-    reglas de no inventar Log_ID— en vez de acortar la respuesta, y el modelo
-    deja de seguir las instrucciones justo cuando la conversación se pone
-    larga. Por eso, si la memoria de turnos ya se comió la ventana, se inyectan
-    CERO ejemplos: el few-shot es un plus, nunca lo que haga perder instrucciones.
+    **Presupuestado contra la ventana del modelo (`MODEL_CONTEXT_WINDOW`).**
+    El prompt NO debe desbordar la ventana: si la desborda, el proveedor
+    recorta los mensajes MÁS VIEJOS —el system prompt con las reglas de no
+    inventar Log_ID— en vez de acortar la respuesta, y el modelo deja de
+    seguir las instrucciones justo cuando la conversación se pone larga. Con
+    131072 tokens el límite práctico lo marca `feedback_store.MAX_EXAMPLES`,
+    no la ventana; el cálculo sigue acotando por si crece el historial o
+    cambia el modelo a uno con ventana corta.
 
     Vacío si no hay ejemplos aprendidos todavía: la app responde igual que
     antes (cero regresión). Es criterio de redacción, nunca un hallazgo, y el
@@ -2085,9 +2079,10 @@ def _feedback_note(question: str, base_chars: int, history_chars: int) -> Tuple[
     `feedback_store.prompt_block`) para que el número nunca mienta.
     """
     try:
-        num_ctx = int(ai_config.get()["num_ctx"])
         used_tok = (len(QA_SYSTEM_PROMPT) + history_chars + base_chars) / CHARS_PER_TOKEN
-        free_chars = (num_ctx - used_tok - CTX_MARGIN_TOKENS) * CHARS_PER_TOKEN
+        free_chars = (
+            (MODEL_CONTEXT_WINDOW - used_tok - CTX_MARGIN_TOKENS) * CHARS_PER_TOKEN
+        )
         budget = free_chars - FEEDBACK_BLOCK_OVERHEAD_CHARS
         per_example = feedback_store.EXAMPLE_CHARS + FEEDBACK_PER_EXAMPLE_CHARS
         if budget < per_example:
@@ -2132,8 +2127,8 @@ def _slim_for_prompt(evidence: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
     NOTA: se descartó que el prefill corriera en CPU por VRAM insuficiente
     (medido en la GTX 1060 de 6 GB: prefill en GPU a ~30 ms incluso con
-    num_ctx=16384). El motivo real para adelgazar es el tamaño del prompt,
-    no un desplazamiento a CPU.
+    prompts de miles de tokens). El motivo real para adelgazar es el tamaño
+    del prompt, no un desplazamiento a CPU.
     """
     slim: List[Dict[str, Any]] = []
     for item in evidence:
@@ -2201,9 +2196,10 @@ def _qa_messages(
     eventos» («¿y esos mismos con IP externa?»): los últimos
     ``CHAT_HISTORY_TURNS`` turnos viajan como pares user/assistant antes de la
     pregunta vigente. Cada respuesta inyectada se acorta a
-    ``QA_HISTORY_ANSWER_CHARS`` porque la ventana de contexto (num_ctx) es
-    finita. La RECUPERACIÓN sigue usando solo la pregunta actual: los
-    embeddings no entienden contexto conversacional (limitación conocida).
+    ``QA_HISTORY_ANSWER_CHARS`` para no inflar el prompt con prosa que no
+    aporta contexto nuevo. La RECUPERACIÓN sigue usando solo la pregunta
+    actual: los embeddings no entienden contexto conversacional (limitación
+    conocida).
     """
     messages: List[Dict[str, str]] = [
         {"role": "system", "content": QA_SYSTEM_PROMPT}
@@ -2232,8 +2228,9 @@ def _qa_messages(
         + _ref_note(ctx.get("reference"))
     )
     # Criterio del analista sobre consultas afines: va ANTES de la evidencia
-    # (para que el modelo lo use al redactar) pero presupuestado contra
-    # num_ctx: los ejemplos nunca pueden ser lo que desborde la ventana.
+    # (para que el modelo lo use al redactar) pero presupuestado contra la
+    # ventana del modelo: los ejemplos nunca pueden ser lo que desborde el
+    # prompt.
     note, used = _feedback_note(ctx.get("question", ""), len(head) + len(tail), history_chars)
     messages.append({"role": "user", "content": head + note + tail})
     return messages, used

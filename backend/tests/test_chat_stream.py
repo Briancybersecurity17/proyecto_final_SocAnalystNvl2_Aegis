@@ -8,7 +8,7 @@ Cubre los endpoints nuevos de la Fase 2:
 
 Los tests aíslan `ai_config.CONFIG_PATH` en un tmp y APAGAN el LLM: así el
 camino determinista (el 100 % del contrato SSE sin modelo) se prueba siempre
-igual, sin depender de que Ollama esté corriendo. El camino con modelo se
+igual, sin depender de un proveedor real. El camino con modelo se
 prueba con `chat_stream` falsificado: tokens reales de verdad y, sobre todo,
 que UN Log_ID inventado invalida el texto transmitido entero.
 """
@@ -262,7 +262,7 @@ def test_endpoints_stream_en_openapi(client):
 
 
 # ---------------------------------------------------------------------------
-# Camino con LLM: chat_stream falsificado (sin tocar Ollama)
+# Camino con LLM: chat_stream falsificado (sin red)
 # ---------------------------------------------------------------------------
 
 
@@ -294,7 +294,7 @@ async def _colectar(generador):
 
 def test_stream_llm_emite_tokens_y_final_validado(ai, monkeypatch):
     """Con el modelo activo: meta → tokens → final con el texto del LLM."""
-    ai.update({"enabled": True})
+    ai.update({"enabled": True, "api_url": "https://api.test/openai/v1/chat/completions"})
 
     async def chat_stream_falso(messages, cfg=None):
         yield "Se detectaron "
@@ -318,7 +318,7 @@ def test_stream_llm_emite_tokens_y_final_validado(ai, monkeypatch):
 
 def test_stream_llm_con_log_id_inventado_usa_fallback(ai, monkeypatch):
     """Un solo Log_ID inventado invalida TODO el texto transmitido."""
-    ai.update({"enabled": True})
+    ai.update({"enabled": True, "api_url": "https://api.test/openai/v1/chat/completions"})
 
     async def chat_stream_falso(messages, cfg=None):
         yield "El evento "
@@ -340,11 +340,11 @@ def test_stream_llm_con_log_id_inventado_usa_fallback(ai, monkeypatch):
 
 def test_stream_llm_caido_a_mitad_usa_fallback(ai, monkeypatch):
     """Si el stream del modelo revienta a la mitad, llega el fallback con aviso."""
-    ai.update({"enabled": True})
+    ai.update({"enabled": True, "api_url": "https://api.test/openai/v1/chat/completions"})
 
     async def chat_stream_falso(messages, cfg=None):
         yield "Texto parcial "
-        raise RuntimeError("ollama se cayó")
+        raise RuntimeError("el proveedor se cayó")
 
     monkeypatch.setattr(ai, "chat_stream", chat_stream_falso)
 
@@ -360,7 +360,7 @@ def test_stream_llm_caido_a_mitad_usa_fallback(ai, monkeypatch):
 
 def test_stream_llm_respetar_historial_en_el_prompt(ai, monkeypatch):
     """Los turnos previos viajan al modelo como pares user/assistant."""
-    ai.update({"enabled": True})
+    ai.update({"enabled": True, "api_url": "https://api.test/openai/v1/chat/completions"})
     capturado = {}
 
     async def chat_stream_falso(messages, cfg=None):

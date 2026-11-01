@@ -693,56 +693,37 @@ export const listenAnalysisEvents = (analysisId: string, onStatus: (status: stri
 export interface AiConfig {
   /** LLM apagado ⇒ el asistente y el informe usan el motor determinista. */
   enabled: boolean
-  /** Endpoint compatible con OpenAI (`…/v1/chat/completions`) u Ollama nativo. */
+  /** Endpoint compatible con OpenAI (`…/v1/chat/completions`). Vacío = sin configurar. */
   api_url: string
   api_key: string
   model: string
-  /** Presupuesto del prompt: historial + evidencias + ejemplos few-shot. */
-  num_ctx: number
   /** Creatividad: en SOC, evidencia y no ficción ⇒ 0–0.2 lo habitual. */
   temperature: number
-  /** Solo dialecto Ollama: cuánto sigue el modelo cargado en VRAM. Ignorado en endpoints OpenAI-compatibles. */
-  keep_alive: string
-  /** Solo dialecto Ollama: tope de tokens generados (−1 = sin límite). Ignorado en endpoints OpenAI-compatibles. */
-  num_predict: number
   /** Segundos de espera máxima por llamada al LLM. */
   timeout: number
 }
 
-/**
- * Modelo listado por el motor: Ollama (`/api/tags` / `/api/ps`) incluye
- * `size`/`details`; un proveedor compatible con OpenAI normaliza a `{name}`
- * (solo `id` del catálogo `GET {base}/models`).
- */
-export interface OllamaModel {
+/** Modelo listado por el proveedor (catálogo `GET {base}/models`, normalizado a `{name}`). */
+export interface RemoteModel {
   name: string
-  size?: number
-  details?: {
-    parameter_size?: string
-    quantization_level?: string
-    family?: string
-    [key: string]: unknown
-  }
   [key: string]: unknown
 }
 
 /** Sonda de estado del motor de IA. */
 export interface AiStatus {
-  kind: 'ollama' | 'remote' | 'none'
-  /** true/false si el motor respondió a la sonda; null si la URL no es inspeccionable. */
+  kind: 'remote' | 'none'
+  /** true/false si el proveedor respondió a la sonda; null si todavía no hay URL. */
   reachable: boolean | null
   reason?: string | null
   base?: string
   latency_ms?: number
-  models: OllamaModel[]
-  /** Modelos residentes en VRAM (solo Ollama; vacío en proveedor cloud). */
-  loaded: OllamaModel[]
+  models: RemoteModel[]
 }
 
 export interface AiConfigResponse {
   config: AiConfig
   status: AiStatus
-  /** ¿El modelo configurado está instalado? null si no se pudo inspeccionar. */
+  /** ¿El modelo configurado figura en el catálogo? null si no se pudo inspeccionar. */
   model_installed: boolean | null
 }
 

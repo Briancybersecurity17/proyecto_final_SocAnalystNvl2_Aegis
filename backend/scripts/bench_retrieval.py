@@ -1,6 +1,6 @@
 """Perfil de la fase previa a la primera letra (recuperación + rerank + KB).
 
-Descompone el tiempo que la app gasta ANTES de mandar el prompt a Ollama, que
+Descompone el tiempo que la app gasta ANTES de mandar el prompt al LLM, que
 es la parte que no depende del modelo:
 
     recuperación híbrida (RAG + léxica)  →  reordenación cross-encoder

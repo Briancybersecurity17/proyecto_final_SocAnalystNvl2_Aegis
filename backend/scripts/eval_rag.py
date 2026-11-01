@@ -8,7 +8,7 @@ Uso (desde la raíz del proyecto):
     backend\\.venv\\Scripts\\python.exe backend\\scripts\\eval_rag.py --motor ambos --guardar
     backend\\.venv\\Scripts\\python.exe backend\\scripts\\eval_rag.py --motor llm --contra backend\\eval\\runs\\baseline.json
 
---motor determinista es la línea base barata (no toca Ollama); «ambos» hace
+--motor determinista es la línea base barata (no toca el proveedor); «ambos» hace
 dos pasadas y muestra el delta entre motores; --contra compara contra una
 corrida guardada (advertencia si la muestra difiere).
 """

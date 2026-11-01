@@ -22,7 +22,7 @@ def _informe(scores):
         resultados=[{"categoria": c, "ok": ok} for c, ok in scores],
         grounding={"rechazo_pct": 0.0, "inventados": 0},
         fewshot={"cobertura_pct": 50.0}, motor="llm",
-        hash_muestra="abc", modelo="qwen2.5:3b", num_ctx=4096, temperatura=0.2,
+        hash_muestra="abc", modelo="qwen2.5:3b", temperatura=0.2,
     )
 
 
@@ -169,7 +169,7 @@ def test_build_report_calcula_latencia_y_cobertura_por_categoria():
                        grounding={"rechazo_pct": 0.0, "inventados": 0},
                        fewshot={"cobertura_pct": 33.3}, motor="llm",
                        hash_muestra="abc", modelo="qwen2.5:3b",
-                       num_ctx=4096, temperatura=0.2)
+                       temperatura=0.2)
     assert rep["latencia"]["por_categoria"] == {"filter_set": 200, "aggregate": 50,
                                                 "retrieval": 10}
     assert rep["latencia"]["media_ms"] == 115          # (100+300+50+10)/4
@@ -239,7 +239,7 @@ def test_print_report_imprime_el_conteo_por_engine(capsys):
                        grounding={"rechazo_pct": 0.0, "inventados": 0},
                        fewshot={"cobertura_pct": 0.0}, motor="llm",
                        hash_muestra="abc", modelo="qwen2.5:3b",
-                       num_ctx=4096, temperatura=0.2)
+                       temperatura=0.2)
     runner.print_report(rep)
     out = capsys.readouterr().out
     assert "1 llm" in out and "1 determinista" in out and "1 retrieval" in out, \
@@ -262,7 +262,7 @@ def test_run_aborta_cuando_en_llm_no_se_uso(monkeypatch, tmp_path):
     # 30%) → SystemExit ruidoso, no un informe silencioso.
     pasada_llm_falla = [{"categoria": "filter_set", "ok": True,
                          "engine": "deterministic", "mode": "evidence"}] * 10
-    monkeypatch.setattr(runner, "_probe_ollama", lambda: None)
+    monkeypatch.setattr(runner, "_probe_llm", lambda: None)
     monkeypatch.setattr(runner, "_run_pasada", lambda ids: _pasada(pasada_llm_falla))
     with pytest.raises(SystemExit, match="GUARD"):
         runner.run(motor="llm", tmp=tmp_path)
@@ -287,7 +287,7 @@ def test_run_pasa_con_los_guards_en_verde(monkeypatch, tmp_path):
     # en verde) y la pasada llm deja ≤30% de evidencia en el determinista
     # (motor_guard en verde) → devuelve el informe sin abortar. El fake
     # distingue las pasadas por ORDEN (los tests no dependen de la config
-    # real de la máquina ni de Ollama).
+    # real de la máquina ni del proveedor).
     det = [{"categoria": "evidence_qa", "ok": True, "engine": "deterministic",
             "mode": "evidence"}] * 10
     llm = [{"categoria": "evidence_qa", "ok": True, "engine": "llm",
@@ -300,7 +300,7 @@ def test_run_pasa_con_los_guards_en_verde(monkeypatch, tmp_path):
         orden["n"] += 1
         return _pasada(det if orden["n"] == 1 else llm)
 
-    monkeypatch.setattr(runner, "_probe_ollama", lambda: None)
+    monkeypatch.setattr(runner, "_probe_llm", lambda: None)
     monkeypatch.setattr(runner, "_run_pasada", _fake)
     informe = runner.run(motor="ambos", tmp=tmp_path)
     assert isinstance(informe, list) and len(informe) == 2
@@ -508,7 +508,7 @@ def test_un_caso_que_revienta_se_cuenta_y_no_contamina_el_score():
                     {"categoria": "refusal", "ok": None, "error": " KeyError: 'x'"}],
         grounding={"rechazo_pct": 0.0, "inventados": 0},
         fewshot={"cobertura_pct": 100.0}, motor="llm",
-        hash_muestra="abc", modelo="qwen2.5:3b", num_ctx=4096, temperatura=0.2,
+        hash_muestra="abc", modelo="qwen2.5:3b", temperatura=0.2,
     )
     assert rep["errores"] == 1                   # se muestra, no se esconde
     assert rep["por_categoria"]["refusal"] == {"casos": 1, "aciertos": 1, "pct": 100.0}
@@ -518,7 +518,7 @@ def test_un_caso_que_revienta_se_cuenta_y_no_contamina_el_score():
 # `_run_pasada` genera el informe UNA vez por pasada (POST /report con el
 # índice listo) y puntúa los 7 REPORT_CASES contra el df real del análisis.
 # Los tests de pasada ejercitan el `_run_pasada` REAL (subida del fixture
-# incluida) parcheando SOLO lo que requeriría Ollama/ChromaDB: LLM_OFF o un
+# incluida) parcheando SOLO lo que requeriría red/ChromaDB: LLM_OFF o un
 # `ai_config.chat` falso para el informe, y `_asegurar_indice` sin-op (el
 # POST /report no usa el índice RAG).
 
@@ -607,13 +607,13 @@ def _chat_informe(bug: bool = False):
 
 
 def _activar_informe(monkeypatch, bug: bool = False):
-    """LLM «encendido» para /report con el chat falsificado, sin Ollama."""
+    """LLM «encendido» para /report con el chat falsificado, sin red."""
     import ai_service
 
     original = ai_service.ai_config.get
     monkeypatch.setattr(ai_service.ai_config, "get",
                         lambda: {**original(), "enabled": True,
-                                 "api_url": "http://ollama-falso"})
+                                 "api_url": "https://proveedor-falso"})
     monkeypatch.setattr(ai_service.ai_config, "chat", _chat_informe(bug))
 
 
@@ -684,7 +684,7 @@ def test_build_report_cuenta_la_seccion_report_y_llama_informe_meta():
     rep = build_report(
         resultados=resultados, grounding={"rechazo_pct": 0.0, "inventados": 0},
         fewshot={"cobertura_pct": 50.0}, motor="llm", hash_muestra="abc",
-        modelo="qwen2.5:3b", num_ctx=4096, temperatura=0.2,
+        modelo="qwen2.5:3b", temperatura=0.2,
         informe_meta={"ms": 1500, "source": "llm", "model": "qwen2.5:3b"},
     )
     assert rep["por_categoria"]["report"] == {"casos": 7, "aciertos": 7,
@@ -702,7 +702,7 @@ def test_build_report_informe_meta_opcional_sin_cambio_para_llamadas_viejas():
         resultados=[{"categoria": "report", "ok": True}],
         grounding={"rechazo_pct": 0.0, "inventados": 0},
         fewshot={"cobertura_pct": 0.0}, motor="llm", hash_muestra="abc",
-        modelo="qwen2.5:3b", num_ctx=4096, temperatura=0.2,
+        modelo="qwen2.5:3b", temperatura=0.2,
         informe_meta={"ms": 1234, "source": "llm"},
     )["informe"] == {"ms": 1234, "source": "llm"}
 
@@ -717,7 +717,7 @@ def test_latencia_global_no_pesa_el_post_del_informe_siete_veces():
     rep = build_report(
         resultados=resultados, grounding={"rechazo_pct": 0.0, "inventados": 0},
         fewshot={"cobertura_pct": 0.0}, motor="llm", hash_muestra="abc",
-        modelo="qwen2.5:3b", num_ctx=4096, temperatura=0.2,
+        modelo="qwen2.5:3b", temperatura=0.2,
         informe_meta={"ms": 1500, "source": "llm"},
     )
     assert rep["latencia"]["por_categoria"] == {"filter_set": 100, "report": 1500}
@@ -733,7 +733,7 @@ def test_print_report_imprime_la_meta_del_informe(capsys):
     rep = build_report(
         resultados=resultados, grounding={"rechazo_pct": 0.0, "inventados": 0},
         fewshot={"cobertura_pct": 0.0}, motor="llm", hash_muestra="abc",
-        modelo="qwen2.5:3b", num_ctx=4096, temperatura=0.2,
+        modelo="qwen2.5:3b", temperatura=0.2,
         informe_meta={"ms": 1500, "source": "llm", "model": "qwen2.5:3b"},
     )
     runner.print_report(rep)

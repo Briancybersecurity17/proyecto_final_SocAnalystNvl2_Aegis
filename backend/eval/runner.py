@@ -11,7 +11,7 @@ informe comparable entre corridas. Cuatro garantías (spec §4 y §9):
 2. **Índice listo**: espera activa a `rag_store.has_index()`; sin índice la
    recuperación sería solo léxica y la corrida engañosa → RuntimeError.
 3. **Motor verificado**: `--motor determinista` apaga el LLM parcheando
-   `ai_config.get` (nunca la config real); con LLM se sondea Ollama antes de
+   `ai_config.get` (nunca la config real); con LLM se sondea el proveedor antes de
    puntuar nada y el guard `motor_guard` aborta si el modelo no se usó.
 4. **Errores visibles**: un caso que revienta se registra con `ok: None` y
    `error`, se cuenta aparte y no contamina el cómputo de aciertos.
@@ -275,7 +275,7 @@ def _asegurar_indice(analysis_id: str) -> None:
 # ---------------------------------------------------------------------------
 def build_report(resultados: List[Dict[str, Any]], grounding: Dict[str, Any],
                  fewshot: Dict[str, Any], motor: str, hash_muestra: str,
-                 modelo: str, num_ctx: int, temperatura: float,
+                 modelo: str, temperatura: float,
                  rutados_a_agregacion: Optional[List[str]] = None,
                  informe_meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Informe a partir de los resultados por caso (media macro por categoría).
@@ -310,7 +310,6 @@ def build_report(resultados: List[Dict[str, Any]], grounding: Dict[str, Any],
         "motor": motor,
         "hash_muestra": hash_muestra,
         "modelo": modelo,
-        "num_ctx": num_ctx,
         "temperatura": temperatura,
         "casos": resultados,
     }
@@ -467,7 +466,7 @@ def load_report(path: Path) -> dict:
 
 def print_report(report: dict) -> None:
     print(f"\n=== Eval RAG+LLM · motor={report['motor']} · modelo={report['modelo']} ===")
-    print(f"muestra: hash {report['hash_muestra']} · num_ctx {report['num_ctx']} · "
+    print(f"muestra: hash {report['hash_muestra']} · "
           f"temperatura {report['temperatura']}")
     print("| categoría    | casos | aciertos |    % |")
     print("|--------------|------:|---------:|-----:|")
@@ -740,15 +739,16 @@ def _run_pasada(dataset_ids: set) -> Dict[str, Any]:
             "informe_meta": informe_meta}
 
 
-def _probe_ollama() -> None:
-    """Con motor llm/ambos: Ollama debe responder ANTES de puntuar nada."""
+def _probe_llm() -> None:
+    """Con motor llm/ambos: el proveedor debe responder ANTES de puntuar nada."""
     import ai_config
 
     info = asyncio.run(ai_config.probe())
-    if info.get("reachable") is False:
+    if info.get("reachable") is not True:
         raise SystemExit(
-            f"Ollama no responde en {ai_config.get()['api_url']} "
-            f"({info.get('reason')}): arrántalo o usa --motor determinista"
+            f"El proveedor no responde en {ai_config.get()['api_url'] or '(sin URL)'} "
+            f"({info.get('reason')}): revisá la config en el panel o usa "
+            f"--motor determinista"
         )
 
 
@@ -765,7 +765,7 @@ def run(motor: str = "llm", forzar: bool = False, tmp: Optional[Path] = None) ->
 
     pasadas = ["determinista", "llm"] if motor == "ambos" else [motor]
     if "llm" in pasadas:
-        _probe_ollama()
+        _probe_llm()
 
     dataset_ids = set(load_fixture()["Log_ID"].astype(str))
     hash_muestra = _hash_fixture()
@@ -789,12 +789,12 @@ def run(motor: str = "llm", forzar: bool = False, tmp: Optional[Path] = None) ->
                 f"GUARD: con motor=llm no se pudo verificar que el modelo se "
                 f"usó — más del {MOTOR_GUARD_PCT:.0f}% de los casos de evidencia "
                 "quedó en el determinista, o NINGUNO puntuó (corrida sin "
-                "elegibles). Revisa Ollama y los errores (--forzar para ignorar)."
+                "elegibles). Revisa el proveedor y los errores (--forzar para ignorar)."
             )
         return build_report(
             resultados=parcial["resultados"], grounding=parcial["grounding"],
             fewshot=parcial["fewshot"], motor=p, hash_muestra=hash_muestra,
-            modelo=cfg["model"], num_ctx=cfg["num_ctx"],
+            modelo=cfg["model"],
             temperatura=cfg["temperature"],
             rutados_a_agregacion=parcial["rutados_a_agregacion"],
             informe_meta=parcial.get("informe_meta"),

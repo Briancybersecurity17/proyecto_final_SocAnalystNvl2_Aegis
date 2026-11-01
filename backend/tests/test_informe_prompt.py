@@ -1,8 +1,8 @@
-"""Tarea 4: prompt endurecido del informe (4 campos) + num_predict 1600.
+"""Tarea 4: prompt endurecido del informe (4 campos de prosa).
 
 Estilo `test_chat_stream.py`: `ai_config.chat` se falsifica con
 `monkeypatch.setattr` para capturar el prompt y las opciones que envía
-`_remote_narrative`, devolviendo una respuesta fija — sin tocar Ollama.
+`_remote_narrative`, devolviendo una respuesta fija — sin tocar red.
 
 El `ctx` es sintético e incluye `event_id_counts` y `severity_mapping` (desde
 la tarea 5 los propaga `build_context`; aquí se fija el contrato del PROMPT,
@@ -52,7 +52,8 @@ _CTX = {
 def ai(tmp_path, monkeypatch):
     """Configuración aislada en tmp, LLM encendido para que el informe llame."""
     monkeypatch.setattr(ai_service.ai_config, "CONFIG_PATH", tmp_path / "ai_config.json")
-    ai_service.ai_config.update({"enabled": True, "num_predict": 512})
+    ai_service.ai_config.update({"enabled": True,
+                                 "api_url": "https://api.test/openai/v1/chat/completions"})
     return ai_service.ai_config
 
 
@@ -60,17 +61,15 @@ def ai(tmp_path, monkeypatch):
 def informe(ai, monkeypatch):
     """Falsifica `ai_config.chat` y devuelve un ejecutable de `_remote_narrative`.
 
-    `correr(**config)` actualiza la config ANTES de la llamada (para probar
-    el suelo de num_predict con valores distintos del default) y devuelve la
-    captura: messages, cfg, num_predict y el resultado parseado.
+    `correr(**config)` actualiza la config ANTES de la llamada y devuelve la
+    captura: messages, temperature, cfg y el resultado parseado.
     """
     captura: dict = {}
 
-    async def chat_falso(messages, temperature=None, cfg=None, num_predict=None):
+    async def chat_falso(messages, temperature=None, cfg=None):
         captura["messages"] = messages
         captura["temperature"] = temperature
         captura["cfg"] = cfg
-        captura["num_predict"] = num_predict
         return _RESPUESTA
 
     monkeypatch.setattr(ai, "chat", chat_falso)
@@ -209,20 +208,21 @@ def test_payload_incluye_event_id_counts(informe):
     assert '"4625": 102' in datos
 
 
-def test_informe_usa_num_predict_1600(informe):
+def test_informe_parsea_la_respuesta(informe):
     captura = informe()
-    assert captura["num_predict"] == 1600
     # La respuesta falsa se parsea: el pipeline completo funciona.
     assert captura["resultado"]["executive_summary"] == "Resumen ejecutivo."
 
 
-def test_num_predict_1600_es_un_suelo_no_un_techo(informe):
-    """Un tope configurado MAYOR se respeta; -1 (sin límite) también."""
-    assert informe(num_predict=2048)["num_predict"] == 2048
-    assert informe(num_predict=-1)["num_predict"] == -1
+def test_informe_no_manda_topes_locales_al_proveedor(informe, ai):
+    """La llamada del informe va SIN `num_predict`/`num_ctx`/`keep_alive`.
 
-
-def test_informe_conserva_num_ctx_8192(informe):
-    """El suelo de ventana de la llamada del informe no cambia."""
+    Eran parámetros de Ollama local. Con cloud un tope nuestro (`max_tokens`)
+    recortaba el JSON a mitad de string — los modelos con reasoning gastan
+    tokens redactando — y el validador descartaba la narrativa entera; la
+    ventana y la salida los acota el proveedor.
+    """
     captura = informe()
-    assert captura["cfg"]["num_ctx"] >= 8192
+    assert not {"num_predict", "num_ctx", "keep_alive"} & set(captura["cfg"])
+    assert captura["cfg"] == ai.get()
+    assert captura["temperature"] == 0.2   # la del informe, no la del panel

@@ -1,9 +1,9 @@
-"""Configuración persistente de la IA y conexión con el LLM local (Ollama).
+"""Configuración persistente de la IA y conexión con el proveedor cloud.
 
 Panel «Opciones IA»: el modelo, la URL y los parámetros de generación viven en
 un JSON en disco (``backend/data/ai_config.json``) y se cambian en caliente,
-sin reiniciar el backend: Ollama recibe las opciones en cada request, así que
-el próximo pedido ya usa los valores nuevos.
+sin reiniciar el backend: el proveedor recibe las opciones en cada request, así
+que el próximo pedido ya usa los valores nuevos.
 
 Diseño:
     * ``get()`` es la única fuente de verdad en tiempo de ejecución; cada
@@ -20,20 +20,16 @@ Diseño:
       ``test_connection``) para no duplicar el armado de payloads ni crear
       imports circulares con ``ai_service``.
 
-Dos dialectos de API, detectados por la URL:
-    * Ollama nativo (``/api/chat``, por defecto ``localhost:11434``): admite
-      ``options`` (num_ctx, num_predict, temperature), ``keep_alive`` y
-      ``stream`` por request → es el que usa el panel.
-    * Compatible con OpenAI (``/v1/chat/completions``): payload clásico, para
-      un proveedor remoto si algún día se configura.
+Un único dialecto: compatible con OpenAI (``/v1/chat/completions``), que es lo
+que hablan Groq y el resto de los proveedores cloud. El proyecto ya no soporta
+Ollama local, así que no existen ``keep_alive`` / ``num_ctx`` / ``num_predict``:
+la ventana de contexto y el tope de generación los aplica el proveedor.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
-import re
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -45,45 +41,20 @@ import httpx
 # redirigen esta ruta con monkeypatch para no tocar la configuración real.
 CONFIG_PATH = Path(__file__).resolve().parent / "data" / "ai_config.json"
 
-OLLAMA_DEFAULT_URL = "http://localhost:11434/api/chat"
-
-# keep_alive: «-1» (eterno), duración con unidad (30m, 10s…) o segundos puros.
-_KEEP_ALIVE_RE = re.compile(r"^-1$|^[0-9]+(ns|us|µs|ms|s|m|h)?$")
-
 DEFAULTS: Dict[str, Any] = {
-    # El LLM local viene encendido: el proyecto está pensado para Ollama en la
-    # máquina del analista. Si no responde, todo vuelve al motor determinista.
+    # El LLM viene encendido: si no responde, todo vuelve al motor determinista.
     "enabled": os.getenv("AI_ENABLED", "1").strip().lower() not in ("0", "false", "no"),
-    "api_url": os.getenv("AI_API_URL", "").strip() or OLLAMA_DEFAULT_URL,
+    # Vacío = «sin configurar»: la app sigue operativa con el motor
+    # determinista y el panel pide la URL del proveedor compatible con OpenAI.
+    "api_url": os.getenv("AI_API_URL", "").strip(),
     "api_key": os.getenv("AI_API_KEY", "").strip(),
-    # qwen2.5:3b Q4_K_M ≈ 1.9 GB: entra cómodo en la GTX 1060 de 6 GB y rinde
-    # de sobra para respuestas de SOC con 8 evidencias de contexto.
-    "model": os.getenv("AI_MODEL", "").strip() or "qwen2.5:3b",
-    # num_ctx=4096. Medido con el prompt REAL (build_qa_context + _qa_messages,
-    # el código de verdad, no una réplica) contra Ollama:
-    #   • 1 consulta suelta: 1669 tok
-    #   • 4 turnos de memoria: 2253 tok  → con 2048 SE PERDÍAN 292 tok
-    #   • 4 turnos + 2 ejemplos few-shot: 2545 tok
-    # Ollama recorta los mensajes MÁS VIEJOS al pasar de num_ctx, y los más
-    # viejos son el system prompt (reglas de no inventar Log_ID): el modelo
-    # dejaba de seguir las instrucciones justo en las conversaciones largas.
-    # El rango 2048–4096 lo descarta este proyecto por diseño (prompt de
-    # evidencia + 4 turnos), así que 4096 es el mínimo holgado, no un capricho.
-    #
-    # El prefill SÍ corre en GPU a este tamaño (medido: ~30 ms con prompts de
-    # 1–2k tok incluso a num_ctx=16384); lo que cuesta ~10 s es CAMBIAR de
-    # num_ctx, porque Ollama reasigna el KV cache al vuelo, una sola vez.
-    "num_ctx": 4096,
+    # openai/gpt-oss-120b en Groq: 131072 tokens de ventana, gratuito y rápido
+    # (medido: 2,1 s por turno de chat y 7,6 s de generación larga).
+    "model": os.getenv("AI_MODEL", "").strip() or "openai/gpt-oss-120b",
+    # En SOC, evidencia y no ficción ⇒ 0–0.2 lo habitual.
     "temperature": 0.15,
-    "keep_alive": "30m",
-    # Tope de generación. Medido con done_reason de Ollama (la prueba
-    # definitiva de si una respuesta se corta): 240 → done=length (cortada a
-    # destallo, ~106 palabras), 384 → length, 512 → done=stop (termina sola,
-    # ~178 palabras). El prompt pide ~150 palabras + citas de Log_ID, así que
-    # 240 quedaba corto. Con 512 el modelo completa la respuesta y, contra lo
-    # esperado, es MÁS rápido que 384 (para en stop en vez de rellenar):
-    # ~9 s vs ~11 s de generación a 35 tok/s.
-    "num_predict": 512,
+    # Medido contra Groq: chat 2,1 s y generación larga 7,6 s ⇒ 60 s es un
+    # margen holgado. Si se supera, chat() devuelve None y cae el fallback.
     "timeout": float(os.getenv("AI_TIMEOUT", "60")),
 }
 
@@ -111,8 +82,10 @@ def validate(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
     out["enabled"] = bool(cfg.get("enabled", DEFAULTS["enabled"]))
 
+    # Vacío permitido: significa «todavía sin proveedor» y la app degrada al
+    # motor determinista. Si hay URL, debe ser http(s) como cualquier cliente.
     url = str(cfg.get("api_url", "") or "").strip()
-    if not url.startswith(("http://", "https://")):
+    if url and not url.startswith(("http://", "https://")):
         raise ValueError("api_url debe comenzar con http:// o https://")
     out["api_url"] = url
 
@@ -123,28 +96,10 @@ def validate(cfg: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("El modelo no puede estar vacío")
     out["model"] = model
 
-    num_ctx = _as_int(cfg.get("num_ctx", DEFAULTS["num_ctx"]), "num_ctx")
-    if not 512 <= num_ctx <= 65536:
-        raise ValueError("num_ctx debe estar entre 512 y 65536")
-    out["num_ctx"] = num_ctx
-
     temperature = _as_float(cfg.get("temperature", DEFAULTS["temperature"]), "temperature")
     if not 0.0 <= temperature <= 2.0:
         raise ValueError("temperature debe estar entre 0 y 2")
     out["temperature"] = temperature
-
-    keep_alive = cfg.get("keep_alive", DEFAULTS["keep_alive"])
-    if isinstance(keep_alive, (int, float)) and not isinstance(keep_alive, bool):
-        keep_alive = str(int(keep_alive))
-    keep_alive = str(keep_alive).strip()
-    if not _KEEP_ALIVE_RE.match(keep_alive):
-        raise ValueError("keep_alive debe ser «-1», segundos o una duración como «30m»")
-    out["keep_alive"] = keep_alive
-
-    num_predict = _as_int(cfg.get("num_predict", DEFAULTS["num_predict"]), "num_predict")
-    if not -1 <= num_predict <= 8192:
-        raise ValueError("num_predict debe estar entre -1 (sin límite) y 8192")
-    out["num_predict"] = num_predict
 
     timeout = _as_float(cfg.get("timeout", DEFAULTS["timeout"]), "timeout")
     if not 5.0 <= timeout <= 600.0:
@@ -167,6 +122,8 @@ def get() -> Dict[str, Any]:
 
     # Si el archivo guardado ya no valida (p. ej. se editó a mano), se cae a
     # los defaults en lugar de tirar 500 en cada consulta.
+    # Claves de versiones anteriores (num_ctx/keep_alive/num_predict, herencia
+    # de Ollama local) no entran en DEFAULTS: validate() las descarta sola.
     try:
         return validate({**DEFAULTS, **saved})
     except ValueError:
@@ -185,29 +142,10 @@ def update(patch: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Dialecto de API y sonda de estado
+# Sonda de estado y conexión
 # ---------------------------------------------------------------------------
-def is_ollama(api_url: str) -> bool:
-    """¿La URL apunta a un Ollama local (puerto 11434 o ruta /api/chat)?"""
-    parts = urlsplit((api_url or "").strip())
-    if parts.port == 11434:
-        return True
-    return parts.path.rstrip("/").endswith("/api/chat")
-
-
-def ollama_base(api_url: str) -> Optional[str]:
-    """Base del servidor Ollama (scheme://host:puerto) o None si no lo es."""
-    if not is_ollama(api_url):
-        return None
-    parts = urlsplit(api_url.strip())
-    if not parts.scheme or not parts.hostname:
-        return None
-    port = f":{parts.port}" if parts.port else ""
-    return f"{parts.scheme}://{parts.hostname}{port}"
-
-
 def openai_base(api_url: str) -> Optional[str]:
-    """Base de un endpoint compatible con OpenAI, sin el sufijo de chat.
+    """Base del endpoint compatible con OpenAI, sin el sufijo de chat.
 
     ``https://api.groq.com/openai/v1/chat/completions`` →
     ``https://api.groq.com/openai/v1`` (de donde cuelga ``/models``).
@@ -225,25 +163,13 @@ def openai_base(api_url: str) -> Optional[str]:
 
 
 def _payload(cfg: Dict[str, Any], messages: List[Dict[str, str]], temperature: float) -> Dict[str, Any]:
-    """Payload según el dialecto de la URL configurada."""
-    if is_ollama(cfg["api_url"]):
-        # Ollama nativo: las opciones viajan por request (por eso el panel no
-        # necesita reiniciar nada para aplicar cambios).
-        return {
-            "model": cfg["model"],
-            "messages": messages,
-            "stream": False,
-            "keep_alive": cfg["keep_alive"],
-            "options": {
-                "temperature": temperature,
-                "num_ctx": cfg["num_ctx"],
-                "num_predict": cfg["num_predict"],
-            },
-        }
-    # Compatible con OpenAI (proveedor remoto). Sin max_tokens: num_predict
-    # es un tope de Ollama local (VRAM + ~35 tok/s); acá lo acota el
-    # proveedor, y mandarlo recortaba las salidas de los modelos con
-    # reasoning a mitad de redacción (JSON del informe truncado).
+    """Payload compatible con OpenAI: modelo, temperatura y mensajes.
+
+    Sin tope de generación (``max_tokens``): los modelos con reasoning interno
+    (p. ej. gpt-oss) consumen tokens ANTES de redactar, así que cualquier tope
+    recortaba el JSON del informe a mitad de string. La salida la acota el
+    proveedor.
+    """
     return {
         "model": cfg["model"],
         "temperature": temperature,
@@ -252,37 +178,25 @@ def _payload(cfg: Dict[str, Any], messages: List[Dict[str, str]], temperature: f
 
 
 def _content(body: Any) -> str:
-    """Extrae el texto de la respuesta en cualquiera de los dos dialectos."""
+    """Extrae el texto de la respuesta (formato OpenAI: choices[0].message)."""
     if not isinstance(body, dict):
         return ""
-    try:  # OpenAI: choices[0].message.content
+    try:
         return str(body["choices"][0]["message"]["content"] or "")
     except (KeyError, IndexError, TypeError):
-        pass
-    message = body.get("message")  # Ollama nativo: message.content
-    if isinstance(message, dict):
-        return str(message.get("content") or "")
-    return str(body.get("content") or "")
+        return ""
 
 
 async def chat(
     messages: List[Dict[str, str]],
     temperature: Optional[float] = None,
     cfg: Optional[Dict[str, Any]] = None,
-    num_predict: Optional[int] = None,
 ) -> Optional[str]:
-    """Un turno de chat contra el LLM. None si está apagado o falla (fallback).
-
-    ``num_predict`` permite acotar/levantar el tope de generación SOLO para
-    esta llamada (p. ej. el informe es largo y no cabe en el tope del chat)
-    sin mutar la configuración guardada.
-    """
+    """Un turno de chat contra el LLM. None si está apagado o falla (fallback)."""
     cfg = cfg or get()
     url = cfg["api_url"].strip()
     if not cfg["enabled"] or not url:
         return None
-    if num_predict is not None:
-        cfg = {**cfg, "num_predict": int(num_predict)}
 
     temp = cfg["temperature"] if temperature is None else float(temperature)
     payload = _payload(cfg, messages, temp)
@@ -304,13 +218,11 @@ async def chat_stream(
     messages: List[Dict[str, str]],
     temperature: Optional[float] = None,
     cfg: Optional[Dict[str, Any]] = None,
-    num_predict: Optional[int] = None,
 ):
     """Versión en streaming del chat: va cediendo el texto generado por tokens.
 
-    Ollama nativo responde NDJSON (un objeto JSON por línea, `message.content`
-    por trozo y `done: true` al final); un endpoint compatible con OpenAI
-    responde SSE (`data: {...}` con `choices[0].delta.content`). El llamador
+    Un endpoint compatible con OpenAI responde SSE (``data: {...}`` con
+    ``choices[0].delta.content`` y ``data: [DONE]`` al terminar). El llamador
     recibe cada trozo y, si la conexión cae a mitad, la excepción se propaga
     (él decide si muestra lo acumulado o cae al motor determinista).
     """
@@ -318,8 +230,6 @@ async def chat_stream(
     url = cfg["api_url"].strip()
     if not cfg["enabled"] or not url:
         return
-    if num_predict is not None:
-        cfg = {**cfg, "num_predict": int(num_predict)}
 
     temp = cfg["temperature"] if temperature is None else float(temperature)
     payload = {**_payload(cfg, messages, temp), "stream": True}
@@ -327,103 +237,46 @@ async def chat_stream(
     if cfg["api_key"]:
         headers["Authorization"] = f"Bearer {cfg['api_key']}"
 
-    native = is_ollama(url)
     async with httpx.AsyncClient(timeout=cfg["timeout"]) as client:
         async with client.stream("POST", url, json=payload, headers=headers) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():
                 line = (line or "").strip()
-                if not line:
+                if not line or not line.startswith("data:"):
                     continue
-                if native:
-                    try:
-                        data = json.loads(line)
-                    except ValueError:
-                        continue
-                    if data.get("error"):
-                        raise RuntimeError(str(data["error"]))
-                    piece = (data.get("message") or {}).get("content")
-                    if piece:
-                        yield piece
-                    if data.get("done"):
-                        break
-                else:  # SSE de OpenAI: «data: {...}» / «data: [DONE]»
-                    if not line.startswith("data:"):
-                        continue
-                    raw = line[5:].strip()
-                    if raw == "[DONE]":
-                        break
-                    try:
-                        data = json.loads(raw)
-                    except ValueError:
-                        continue
-                    try:
-                        piece = data["choices"][0]["delta"].get("content")
-                    except (KeyError, IndexError, TypeError):
-                        piece = None
-                    if piece:
-                        yield piece
+                raw = line[5:].strip()
+                if raw == "[DONE]":
+                    break
+                try:
+                    data = json.loads(raw)
+                except ValueError:
+                    continue
+                try:
+                    piece = data["choices"][0]["delta"].get("content")
+                except (KeyError, IndexError, TypeError):
+                    piece = None
+                if piece:
+                    yield piece
 
 
 async def probe(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Sonda rápida del motor: modelos disponibles y latencia.
+    """Sonda rápida del proveedor: modelos disponibles y latencia.
 
-    Ollama local: inspecciona ``/api/tags`` y ``/api/ps`` (modelos instalados
-    y residentes en VRAM). Endpoint compatible con OpenAI (Groq, etc.):
-    consulta ``GET {base}/models`` con Bearer — la API key inválida o la cuota
+    Consulta ``GET {base}/models`` con Bearer — la API key inválida o la cuota
     agotada aparecen como ``reachable: false`` con el motivo, en vez de fingir
-    «sin inspección local».
+    «sin inspección».
 
-    Responde siempre 200: si nada responde, devuelve ``reachable: false`` con
-    el motivo y la app sigue operativa.
+    Responde siempre 200: si no hay URL configurada devuelve
+    ``kind: "none"``, y si nada responde, ``reachable: false`` con el motivo.
+    En cualquier caso la app sigue operativa.
     """
     cfg = cfg or get()
-    base = ollama_base(cfg["api_url"])
-    if not base:
-        return await _probe_openai(cfg)
-
-    start = time.perf_counter()
-    try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            tags = await client.get(f"{base}/api/tags")
-            tags.raise_for_status()
-            models = tags.json().get("models", []) or []
-            try:
-                ps = await client.get(f"{base}/api/ps")
-                loaded = ps.json().get("models", []) or [] if ps.is_success else []
-            except Exception:  # noqa: BLE001 – ps es informativo, no bloquea
-                loaded = []
-    except Exception as exc:  # noqa: BLE001
-        return {
-            "kind": "ollama",
-            "reachable": False,
-            "reason": str(exc) or "sin respuesta",
-            "base": base,
-            "models": [],
-            "loaded": [],
-        }
-
-    return {
-        "kind": "ollama",
-        "reachable": True,
-        "reason": None,
-        "base": base,
-        "latency_ms": int((time.perf_counter() - start) * 1000),
-        "models": models,
-        "loaded": loaded,
-    }
-
-
-async def _probe_openai(cfg: Dict[str, Any]) -> Dict[str, Any]:
-    """Sonda de un endpoint compatible con OpenAI: ``GET {base}/models``."""
     url = (cfg.get("api_url") or "").strip()
     if not url:
-        return {"kind": "none", "reachable": None, "reason": None,
-                "models": [], "loaded": []}
+        return {"kind": "none", "reachable": None, "reason": None, "models": []}
     base = openai_base(url)
     if not base:
-        return {"kind": "remote", "reachable": None, "reason": None,
-                "models": [], "loaded": []}
+        return {"kind": "remote", "reachable": None, "reason": None, "models": []}
 
     headers = {"Accept": "application/json"}
     if cfg.get("api_key"):
@@ -442,11 +295,10 @@ async def _probe_openai(cfg: Dict[str, Any]) -> Dict[str, Any]:
             "reason": str(exc) or "sin respuesta",
             "base": base,
             "models": [],
-            "loaded": [],
         }
 
     # Formato OpenAI: {"data": [{"id": "..."}]}. Se normaliza a {name} para
-    # que el panel use el mismo datalist que con Ollama.
+    # que el panel pueda comprobar si el modelo configurado está disponible.
     raw = data.get("data") if isinstance(data, dict) else None
     models = [
         {"name": str(m.get("id", ""))}
@@ -460,7 +312,6 @@ async def _probe_openai(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "base": base,
         "latency_ms": int((time.perf_counter() - start) * 1000),
         "models": models,
-        "loaded": [],
     }
 
 
@@ -468,10 +319,9 @@ async def test_connection(override: Optional[Dict[str, Any]] = None) -> Dict[str
     """Prueba real: sonda de estado + un «ping» al modelo midiendo latencia.
 
     Acepta un parche de configuración para probar los valores del panel ANTES
-    de guardarlos. El ping ignora ``enabled`` (probar es explícito) y recorta
-    ``num_predict`` para que la respuesta sea instantánea. Aplica a cualquier
-    dialecto (Ollama local o compatible OpenAI): la sonda lista los modelos y
-    el ping mide latencia real contra el mismo endpoint que usaría la app.
+    de guardarlos. El ping ignora ``enabled`` (probar es explícito): la sonda
+    lista los modelos y el ping mide latencia real contra el mismo endpoint
+    que usaría la app.
     """
     allowed = {k: v for k, v in (override or {}).items() if k in DEFAULTS}
     try:
@@ -483,22 +333,21 @@ async def test_connection(override: Optional[Dict[str, Any]] = None) -> Dict[str
     if status.get("reachable") is False:
         return {
             "ok": False,
-            "error": f"El motor no responde en {status.get('base')}: {status.get('reason')}",
+            "error": f"El proveedor no responde en {status.get('base')}: {status.get('reason')}",
             "status": status,
         }
     if status.get("reachable") is None:
         return {
             "ok": False,
-            "error": "No se pudo interpretar la URL configurada: usá una URL "
-                     "de Ollama (localhost:11434) o de un proveedor compatible "
-                     "con OpenAI (…/v1/chat/completions).",
+            "error": "Falta la URL del proveedor: cargá una URL compatible con "
+                     "OpenAI (…/v1/chat/completions) en el panel.",
             "status": status,
         }
 
-    # Ping con tope mínimo: en Ollama local 16 tokens bastan para «OK»; en un
-    # proveedor remoto num_predict no viaja al payload (lo acota el proveedor),
-    # así que la misma línea sirve para ambos dialectos.
-    ping_cfg = {**cfg, "enabled": True, "num_predict": min(cfg["num_predict"], 16)}
+    # Ping corto: una sola palabra basta para medir latencia real. Sin tope
+    # de generación: la salida la acota el proveedor (los modelos con
+    # reasoning devolverían content vacío si lo acotáramos nosotros).
+    ping_cfg = {**cfg, "enabled": True}
     start = time.perf_counter()
     reply = await chat(
         [{"role": "user", "content": "Responde únicamente con la palabra: OK"}],
@@ -507,13 +356,10 @@ async def test_connection(override: Optional[Dict[str, Any]] = None) -> Dict[str
     )
     latency_ms = int((time.perf_counter() - start) * 1000)
     if reply is None:
-        if status.get("kind") == "ollama":
-            hint = f" El modelo no respondió. ¿Está instalado? (lista: ollama list)"
-        else:
-            hint = " El proveedor rechazó la llamada: revisá la API key y el nombre del modelo."
         return {
             "ok": False,
-            "error": f"El modelo «{cfg['model']}» no respondió.{hint}",
+            "error": f"El modelo «{cfg['model']}» no respondió. El proveedor "
+                     f"rechazó la llamada: revisá la API key y el nombre del modelo.",
             "latency_ms": latency_ms,
             "status": status,
         }
@@ -525,35 +371,3 @@ async def test_connection(override: Optional[Dict[str, Any]] = None) -> Dict[str
         "model": cfg["model"],
         "status": status,
     }
-
-
-async def warmup(timeout: float = 90.0) -> bool:
-    """Precarga el modelo del LLM en Ollama (arranque en segundo plano).
-
-    El arranque de llama-server y la carga del GGUF en la GPU cuestan ~4 s:
-    se pagan aquí, mientras el usuario ve el Dashboard, y no en la primera
-    pregunta del asistente. Es una llamada «OK» de8 tokens: solo fuerza a
-    Ollama a dejar el modelo residente (keep_alive lo mantiene).
-
-    Silencioso por contrato: si el LLM está apagado, Ollama no responde o el
-    modelo no está instalado, devuelve False y la app sigue operativa con el
-    motor determinista (mismo criterio que el resto de los accesos a la IA).
-    """
-    cfg = get()
-    if not cfg["enabled"]:
-        return False
-    if (await probe(cfg)).get("reachable") is not True:
-        return False
-    try:
-        reply = await asyncio.wait_for(
-            chat(
-                [{"role": "user", "content": "OK"}],
-                temperature=0.0,
-                cfg=cfg,
-                num_predict=8,
-            ),
-            timeout=timeout,
-        )
-    except Exception:  # noqa: BLE001 – cualquier fallo no rompe el arranque
-        return False
-    return reply is not None

@@ -11,8 +11,6 @@ import {
   type FeedbackStats,
 } from '../api/client'
 
-const CTX_OPTIONS = [2048, 4096, 8192, 16384, 32768]
-
 /** Mensaje legible de un error axios (detail del backend si existe). */
 const detailOf = (err: unknown): string => {
   const d = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
@@ -335,33 +333,6 @@ const AiOptions: React.FC = () => {
             />
             <p className="mt-1 text-xs text-[var(--text-dim)]">
               SOC = evidencia, no ficción: 0.10–0.20 lo recomendado.
-            </p>
-          </div>
-
-          {/* Num ctx */}
-          <div>
-            <label className="hud-label" htmlFor="ai-ctx">
-              Presupuesto del prompt (num_ctx)
-            </label>
-            <select
-              id="ai-ctx"
-              className="hud-input mt-2 w-full"
-              value={cfg.num_ctx}
-              onChange={(e) => patch({ num_ctx: Number(e.target.value) })}
-            >
-              {!CTX_OPTIONS.includes(cfg.num_ctx) && (
-                <option value={cfg.num_ctx}>{cfg.num_ctx} (valor guardado)</option>
-              )}
-              {CTX_OPTIONS.map((v) => (
-                <option key={v} value={v}>
-                  {v} tokens
-                </option>
-              ))}
-            </select>
-            <p className="mt-2 text-xs text-[var(--text-dim)]">
-              De cuántos tokens dispone la consulta: historial + evidencias + ejemplos few-shot.
-              4096 alcanza para la pregunta + 8 evidencias; si el historial crece demasiado, se
-              recortan los ejemplos antes que las instrucciones.
             </p>
           </div>
 

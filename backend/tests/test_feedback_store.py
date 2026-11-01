@@ -245,25 +245,11 @@ def test_warmup_sin_excepciones():
 
 
 # ---------------------------------------------------------------------------
-# Presupuesto del few-shot contra num_ctx (nunca desbordar la ventana)
+# Presupuesto del few-shot contra la ventana del modelo (MODEL_CONTEXT_WINDOW)
 # ---------------------------------------------------------------------------
-def _stub_num_ctx(monkeypatch, value: int) -> None:
-    """Fija num_ctx sin tocar el ai_config.json real de la app.
-
-    Se parchea el módulo que ai_service USA realmente (`ai_service.ai_config`),
-    no un import propio: así funciona igual se importe como `ai_config` o como
-    `backend.ai_config`.
-    """
-    import ai_service
-
-    cfg = ai_service.ai_config
-    monkeypatch.setattr(cfg, "get", lambda: {**cfg.DEFAULTS, "num_ctx": value})
-
-
-def test_fewshot_cabe_en_la_ventana_por_defecto(monkeypatch):
+def test_fewshot_cabe_en_la_ventana_por_defecto():
     from ai_service import _feedback_note
 
-    _stub_num_ctx(monkeypatch, 4096)
     for i in range(3):
         feedback_store.add_correction(f"¿Qué hosts concentran inicios fallidos en SRV-DC0{i}?",
                                       f"SRV-DC0{i} concentra 12 intentos fallidos.")
@@ -275,12 +261,11 @@ def test_fewshot_cabe_en_la_ventana_por_defecto(monkeypatch):
     assert n >= 1
 
 
-def test_feedback_note_cuenta_los_ejemplos_inyectados(monkeypatch):
+def test_feedback_note_cuenta_los_ejemplos_inyectados():
     """rag_examples_used depende de este conteo (Task 4): con ventana holgada
     y corrección previa, el bloque existe y cuenta los ejemplos que trae."""
     from ai_service import _feedback_note
 
-    _stub_num_ctx(monkeypatch, 4096)
     feedback_store.add_correction("¿Qué hosts concentran inicios fallidos?",
                                   "Cita los hosts con más fallos y sus IPs.")
 
@@ -291,36 +276,40 @@ def test_feedback_note_cuenta_los_ejemplos_inyectados(monkeypatch):
     assert n == block.count("- Consulta «")   # el conteo es la verdad del bloque
 
 
-def test_feedback_note_con_ventana_llena_da_cero_ejemplos(monkeypatch):
-    """Si turnos + evidencia ya ocupan num_ctx, inyectar ejemplos haría que
-    Ollama recortara el system prompt (reglas de no inventar Log_ID): la
-    rama de presupuesto insuficiente devuelve (bloque vacío, 0)."""
-    from ai_service import _feedback_note
+def test_feedback_note_con_prompt_que_desborda_da_cero_ejemplos():
+    """Si el prompt ya desborda la ventana, inyectar ejemplos empujaría al
+    proveedor a recortar los mensajes MÁS VIEJOS —el system prompt con las
+    reglas de no inventar Log_ID—: la rama de presupuesto insuficiente
+    devuelve (bloque vacío, 0).
 
-    _stub_num_ctx(monkeypatch, 2048)   # ventana vieja: no alcanza para history+fewshot
+    El techo es `MODEL_CONTEXT_WINDOW` (131072, la ventana de gpt-oss-120b),
+    no un `num_ctx` configurable: se simula con un prompt astronómico para no
+    depender del modelo concreto.
+    """
+    from ai_service import MODEL_CONTEXT_WINDOW, _feedback_note
+
     for i in range(3):
         feedback_store.add_correction(f"¿Qué hosts concentran inicios fallidos en SRV-DC0{i}?",
                                       f"SRV-DC0{i} concentra 12 intentos fallidos.")
 
-    # 4 turnos + evidencia: prompt real medido a 2253 tok con num_ctx=2048.
-    block, n = _feedback_note("¿Qué hosts concentran inicios fallidos?", 3900, 1400)
+    # 4× la ventana en caracteres: ni con holgura cabe un ejemplo.
+    block, n = _feedback_note("¿Qué hosts concentran inicios fallidos?",
+                              MODEL_CONTEXT_WINDOW * 4, 0)
 
     assert (block, n) == ("", 0)
 
 
-def test_fewshot_sin_ejemplos_es_vacio(monkeypatch):
+def test_fewshot_sin_ejemplos_es_vacio():
     from ai_service import _feedback_note
-
-    _stub_num_ctx(monkeypatch, 4096)
 
     assert _feedback_note("¿Qué hosts concentran inicios fallidos?", 3900, 1400) == ("", 0)
 
 
-def test_qa_messages_metel_el_bloque_y_no_le_pasa_de_num_ctx(monkeypatch):
-    """Integración: el prompt completo construido por _qa_messages debe caber."""
-    from ai_service import _qa_messages, build_qa_context
+def test_qa_messages_metel_el_bloque_y_el_prompt_cabe_en_la_ventana():
+    """Integración: el prompt completo construido por _qa_messages debe caber
+    en la ventana del modelo (131072 tok) sobrado."""
+    from ai_service import MODEL_CONTEXT_WINDOW, _qa_messages, build_qa_context
 
-    _stub_num_ctx(monkeypatch, 4096)
     feedback_store.add_correction(
         "¿Qué hosts concentran inicios de sesión fallidos?",
         "SRV-DC01 concentra 12 intentos fallidos, todos desde 10.10.2.15.",
@@ -351,7 +340,7 @@ def test_qa_messages_metel_el_bloque_y_no_le_pasa_de_num_ctx(monkeypatch):
     messages, used = _qa_messages(ctx, history)
     prompt_chars = sum(len(m["content"]) for m in messages)
 
-    # ~2,5 chars/tok medido: el prompt no debe superar num_ctx por mucho margen.
-    assert prompt_chars / 2.5 <= 4096
+    # ~2,5 chars/tok medido: el prompt no debe superar la ventana del modelo.
+    assert prompt_chars / 2.5 <= MODEL_CONTEXT_WINDOW
     assert "CRITERIO DEL ANALISTA" in messages[-1]["content"]
     assert used >= 1

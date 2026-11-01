@@ -38,19 +38,10 @@ async def lifespan(_: FastAPI):
     # Cross-encoder del rerank: solo ordena la evidencia, pero cuesta ~1 s en
     # cargarse, así que se precarga en un hilo y no en la primera consulta.
     asyncio.create_task(asyncio.to_thread(rerank.warmup))
-    # LLM: el arranque de llama-server + carga del GGUF en la GPU cuesta ~4 s.
-    # Se paga aquí en segundo plano (el usuario sigue en el Dashboard) para que
-    # la primera pregunta del asistente ya salga con el modelo residente.
-    # Si Ollama está apagado, warmup() no hace nada y el chat cae al motor
-    # determinista como siempre.
-    async def _warm_llm() -> None:
-        start = time.perf_counter()
-        if await ai_config.warmup():
-            logger.info(
-                "LLM calentado en %.1fs (modelo residente en GPU)",
-                time.perf_counter() - start,
-            )
-    asyncio.create_task(_warm_llm())
+    # El LLM vive en cloud: no hay nada que calentar en el arranque (la
+    # primera llamada tarda lo mismo que la segunda). Si el proveedor está
+    # caído o sin configurar, chat() devuelve None y el asistente cae al
+    # motor determinista como siempre.
     # Memoria de criterio del analista (few-shot): lee el JSON y sincroniza el
     # índice semántico en segundo plano, igual que el resto de precargas.
     asyncio.create_task(asyncio.to_thread(feedback_store.warmup))
@@ -1510,7 +1501,8 @@ async def rag_status(analysis_id: str = Query("", description="Análisis concret
 
 
 # ---------------------------------------------------------------------------
-# Panel «Opciones IA»: configuración del LLM (Ollama local por defecto)
+# Panel «Opciones IA»: configuración del LLM (proveedor cloud compatible con
+# OpenAI; sin parámetros locales de Ollama)
 # ---------------------------------------------------------------------------
 class AiConfigPatch(BaseModel):
     """Parche parcial de la configuración de la IA (todos los campos opcionales)."""
@@ -1519,29 +1511,31 @@ class AiConfigPatch(BaseModel):
     api_url: str | None = None
     api_key: str | None = None
     model: str | None = None
-    num_ctx: int | None = None
     temperature: float | None = None
-    keep_alive: str | None = None
-    num_predict: int | None = None
     timeout: float | None = None
 
 
 def _ai_envelope(cfg: Dict[str, Any], status: Dict[str, Any]) -> Dict[str, Any]:
-    """Configuración + sonda de estado para el panel (respuesta de GET y PUT)."""
+    """Configuración + sonda de estado para el panel (respuesta de GET y PUT).
+
+    `model_installed`: True/False si el proveedor lista modelos y el
+    configurado está (o no) entre ellos; None si aún no hay URL o la sonda no
+    pudo leer el listado.
+    """
     installed: bool | None = None
-    if status.get("kind") == "ollama":
+    names = [str(m.get("name", "")) for m in status.get("models") or []]
+    if names:
         want = cfg["model"]
-        names = [str(m.get("name", "")) for m in status.get("models", [])]
         installed = any(n == want or n.startswith(want + ":") for n in names)
     return {"config": cfg, "status": status, "model_installed": installed}
 
 
 @app.get("/api/ai/config")
 async def get_ai_config():
-    """Configuración vigente del LLM + estado real de Ollama (modelos y VRAM).
+    """Configuración vigente del LLM + estado real del proveedor (modelos).
 
-    Responde siempre 200: si Ollama está caído, `status.reachable: false` con
-    el motivo, y la app sigue operativa con el motor determinista.
+    Responde siempre 200: si el proveedor está caído, `status.reachable: false`
+    con el motivo, y la app sigue operativa con el motor determinista.
     """
     cfg = ai_config.get()
     status = await ai_config.probe(cfg)
@@ -1552,8 +1546,8 @@ async def get_ai_config():
 async def put_ai_config(patch: AiConfigPatch):
     """Guarda la configuración del LLM (persistida en disco, aplica al instante).
 
-    Ollama recibe las opciones por request, así que no hace falta reiniciar
-    nada: el próximo informe o chat ya usa los valores nuevos.
+    El proveedor recibe las opciones por request, así que no hace falta
+    reiniciar nada: el próximo informe o chat ya usa los valores nuevos.
     """
     try:
         cfg = ai_config.update(patch.model_dump(exclude_none=True))

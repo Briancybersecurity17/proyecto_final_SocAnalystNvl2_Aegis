@@ -2,7 +2,7 @@
 
 Estilo `test_informe_prompt`: `ai_config.chat` se falsifica (config aislada en
 tmp) para recorrer el pipeline COMPLETO de `generate_report_narrative`
-(fallback → remoto → validación A–D → merge) sin tocar Ollama.
+(fallback → remoto → validación A–D → merge) sin tocar red.
 
 El summary es sintético y coherente: los conteos cuadran entre `level_counts`,
 `risk_levels`, `suspicious_*` y `event_id_counts`, de modo que la «respuesta
@@ -128,7 +128,8 @@ def _fallback():
 def ai(tmp_path, monkeypatch):
     """Config aislada en tmp con el LLM encendido: el informe intentará llamar."""
     monkeypatch.setattr(ai_service.ai_config, "CONFIG_PATH", tmp_path / "ai_config.json")
-    ai_service.ai_config.update({"enabled": True})
+    ai_service.ai_config.update({"enabled": True,
+                                 "api_url": "https://api.test/openai/v1/chat/completions"})
     return ai_service.ai_config
 
 
@@ -136,7 +137,7 @@ def _activar_chat(monkeypatch, respuesta=None, fallo=None, captura=None):
     """Falsifica `ai_config.chat`: devuelve `respuesta`, lanza `fallo` o captura
     los messages enviados (para verificar el prompt que viaja al modelo)."""
 
-    async def chat_falso(messages, temperature=None, cfg=None, num_predict=None):
+    async def chat_falso(messages, temperature=None, cfg=None):
         if captura is not None:
             captura.append(messages)
         if fallo is not None:
@@ -281,7 +282,7 @@ def test_orquestacion_chat_que_lanza_devuelve_el_fallback_completo(
 ):
     """Excepción en el chat → narrativa idéntica al fallback y source local."""
     with caplog.at_level(logging.WARNING, logger="soc.ai"):
-        narrativa = _generar(monkeypatch, fallo=RuntimeError("ollama caído"))
+        narrativa = _generar(monkeypatch, fallo=RuntimeError("el proveedor se cayó"))
     fallback = _fallback()
     for campo in CAMPOS:
         assert narrativa[campo] == fallback[campo]

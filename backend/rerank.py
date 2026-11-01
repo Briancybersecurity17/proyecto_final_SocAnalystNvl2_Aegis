@@ -15,8 +15,9 @@ Decisiones de diseño:
   determinista. El logit del cross-encoder (escala arbitraria: negativa para
   lo irrelevante, positiva para lo relevante) se guarda aparte en
   `rerank_score`, solo para auditar por qué subió un registro.
-- **CPU siempre.** El GTX 1060 ya reparte sus 6 GB con Ollama y con el
-  escritorio: cargarle otro modelo solo empujaría a Ollama a 0 capas GPU.
+- **CPU siempre.** El GTX 1060 es de 6 GB y comparte la GPU con el resto del
+  trabajo del escritorio: cargarle otro modelo solo empujaría al sistema a
+  quedarse sin VRAM (el cross-encoder vive en CPU, cuesta ~1 s y se precarga).
 - **Carga perezosa**, nunca en el import: el modelo (~90 MB) no interesa si
   nadie pregunta. `warmup()` existe para precargarlo en un hilo al arrancar.
 - **Degradación elegante.** Sin `sentence_transformers`, sin el modelo en

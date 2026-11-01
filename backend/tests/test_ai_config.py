@@ -1,4 +1,8 @@
-"""Panel «Opciones IA»: GET/PUT de la configuración del LLM y sonda de Ollama.
+"""Panel «Opciones IA»: GET/PUT de la configuración del LLM y sonda del proveedor.
+
+El proyecto es 100% cloud: un único dialecto compatible con OpenAI (Groq por
+defecto). No hay soporte de Ollama local, así que tampoco `keep_alive`,
+`num_ctx`, `num_predict` ni `warmup`.
 
 Los tests redirigen `ai_config.CONFIG_PATH` a un tmp para no tocar (ni leer)
 el `data/ai_config.json` real del analista. Se importa el módulo desde `main`
@@ -24,36 +28,41 @@ def test_get_devuelve_config_completa_y_sonda(client, ai):
 
     cfg = data["config"]
     # Todas las claves del panel, con los defaults vigentes (archivo inexistente
-    # en el tmp ⇒ defaults del módulo, incluido el modelo local qwen2.5:3b).
+    # en el tmp ⇒ defaults del módulo: proveedor sin configurar todavía).
     assert set(cfg) == set(ai.DEFAULTS)
     assert cfg["model"] == ai.DEFAULTS["model"]
     assert cfg["enabled"] is True
+    # Sin parámetros locales heredados de Ollama.
+    assert not {"num_ctx", "keep_alive", "num_predict"} & set(cfg)
 
     status = data["status"]
-    assert status["kind"] in ("ollama", "remote", "none")
+    assert status["kind"] in ("remote", "none")
     assert isinstance(status["models"], list)
-    assert isinstance(status["loaded"], list)
-    # bool cuando es Ollama inspeccionable; None cuando la URL es remota.
+    # bool cuando el proveedor lista modelos; None si aún no hay URL.
     assert data["model_installed"] in (True, False, None)
 
 
+def test_get_sin_url_no_toca_la_red(client, ai):
+    """Sin proveedor configurado la sonda es `none`: nada de llamadas externas."""
+    status = client.get("/api/ai/config").json()["status"]
+    assert status["kind"] == "none"
+    assert status["reachable"] is None
+    assert status["models"] == []
+
+
 def test_put_persiste_y_get_lo_refleja(client, ai):
-    res = client.put(
-        "/api/ai/config",
-        json={"temperature": 0.2, "num_ctx": 2048, "keep_alive": "-1"},
-    )
+    res = client.put("/api/ai/config", json={"temperature": 0.2, "timeout": 30.0})
     assert res.status_code == 200
     cfg = res.json()["config"]
     assert cfg["temperature"] == 0.2
-    assert cfg["num_ctx"] == 2048
-    assert cfg["keep_alive"] == "-1"
+    assert cfg["timeout"] == 30.0
     # El resto de los campos se conserva (merger con lo vigente).
     assert cfg["model"] == ai.DEFAULTS["model"]
 
     assert ai.CONFIG_PATH.exists(), "PUT debe persistir en disco"
     again = client.get("/api/ai/config").json()["config"]
     assert again["temperature"] == 0.2
-    assert again["num_ctx"] == 2048
+    assert again["timeout"] == 30.0
 
 
 def test_put_enabled_false_no_se_pierde(client, ai):
@@ -64,15 +73,24 @@ def test_put_enabled_false_no_se_pierde(client, ai):
     assert client.get("/api/ai/config").json()["config"]["enabled"] is False
 
 
+def test_put_ignora_campos_solo_ollama(client, ai):
+    """Claves de la época de Ollama local: se descartan, nunca se guardan."""
+    res = client.put(
+        "/api/ai/config",
+        json={"num_ctx": 8192, "keep_alive": "-1", "num_predict": 4096},
+    )
+    assert res.status_code == 200
+    cfg = res.json()["config"]
+    assert not {"num_ctx", "keep_alive", "num_predict"} & set(cfg)
+    assert cfg == ai.DEFAULTS
+
+
 @pytest.mark.parametrize(
     "patch",
     [
         {"temperature": 3.0},      # fuera de rango
-        {"num_ctx": 64},           # por debajo del mínimo
         {"model": "   "},          # vacío
         {"api_url": "ftp://x"},    # no http(s)
-        {"keep_alive": "para siempre"},  # formato ilegible
-        {"num_predict": 99999},    # fuera de rango
         {"timeout": 1},            # demasiado corto
     ],
 )
@@ -93,10 +111,30 @@ def test_config_invalida_en_disco_cae_a_defaults(client, ai):
     assert res.json()["config"]["model"] == ai.DEFAULTS["model"]
 
 
+def test_config_guardada_con_claves_ollama_se_ignoran(client, ai):
+    """Un ai_config.json heredado (num_ctx/keep_alive/num_predict) no rompe nada.
+
+    Es el caso real del analista: su archivo de la época de Ollama sigue en
+    disco. Las claves ajenas a DEFAULTS se descartan al leer y no vuelven a
+    guardarse.
+    """
+    ai.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ai.CONFIG_PATH.write_text(
+        '{"enabled": true, "api_url": "https://api.groq.com/openai/v1/chat/completions",'
+        ' "api_key": "gsk_test", "model": "openai/gpt-oss-120b", "num_ctx": 4096,'
+        ' "keep_alive": "30m", "num_predict": 512, "temperature": 0.15,'
+        ' "timeout": 60.0}',
+        encoding="utf-8",
+    )
+    cfg = client.get("/api/ai/config").json()["config"]
+    assert cfg["model"] == "openai/gpt-oss-120b"
+    assert cfg["temperature"] == 0.15
+    assert not {"num_ctx", "keep_alive", "num_predict"} & set(cfg)
+
+
 def test_test_endpoint_responde_estructura(client, ai):
-    """POST /api/ai/test: siempre 200 con ok/status; el ping usa keep_alive=0
-    para no dejar el modelo residente en VRAM tras el test."""
-    res = client.post("/api/ai/test", json={"keep_alive": "0"})
+    """POST /api/ai/test: siempre 200 con ok/status (nunca un 500)."""
+    res = client.post("/api/ai/test")
     assert res.status_code == 200
     data = res.json()
     assert isinstance(data["ok"], bool)
@@ -105,19 +143,9 @@ def test_test_endpoint_responde_estructura(client, ai):
         assert data["reply"]
         assert data["model"]
     else:
-        # Ollama caído o modelo ausente: hay motivo legible, nunca un 500.
+        # Sin URL cargada o proveedor caído: hay motivo legible.
         assert data["error"]
-    assert data["status"]["kind"] == "ollama"
-
-
-def test_sonda_detecta_modelos_instalados(client, ai):
-    """Si Ollama responde, la sonda lista los modelos con nombre y tamaño."""
-    status = client.get("/api/ai/config").json()["status"]
-    if status.get("reachable"):
-        assert status["models"], "Ollama arriba debe listar al menos un modelo"
-        assert all("name" in m for m in status["models"])
-    else:
-        assert status.get("reason"), "si no responde, debe venir el motivo"
+    assert data["status"]["kind"] in ("remote", "none")
 
 
 def test_endpoints_existen_en_openapi(client):
@@ -134,8 +162,15 @@ def test_app_es_importable():  # guarda contra imports rotos en main/ai_service
     assert callable(ai_config.get) and callable(ai_config.probe)
 
 
+def test_dialecto_ollama_fuera_del_codigo():
+    """La purga cloud debe ser completa: ni funciones ni constants locales."""
+    for name in ("is_ollama", "ollama_base", "warmup", "OLLAMA_DEFAULT_URL"):
+        assert not hasattr(ai_config, name), f"{name} sigue en ai_config"
+    assert "OLLAMA" not in open(ai_config.__file__, encoding="utf-8").read()
+
+
 # ---------------------------------------------------------------------------
-# Proveedor remoto compatible con OpenAI (p. ej. Groq)
+# Proveedor compatible con OpenAI (p. ej. Groq)
 # ---------------------------------------------------------------------------
 class _FakeResponse:
     """Respuesta httpx falsa con la interfaz mínima que consume ai_config."""
@@ -198,10 +233,10 @@ def _cfg_remota():
 
 
 def test_probe_remoto_lista_modelos_con_bearer(client, ai, monkeypatch):
-    """URL compatible OpenAI: la sonda hace GET {base}/models con Authorization.
+    """La sonda hace GET {base}/models con Authorization.
 
-    Sin esto el panel remoto vive en `reachable: null` («sin inspección») y no
-    puede ofrecer el datalist de modelos ni saber si la API key es válida.
+    Sin esto el panel vive en `reachable: null` («sin inspección») y no puede
+    ofrecer la lista de modelos ni saber si la API key es válida.
     """
     ai.update(_cfg_remota())
     http, calls = _fake_http(models={"data": [
@@ -210,12 +245,15 @@ def test_probe_remoto_lista_modelos_con_bearer(client, ai, monkeypatch):
     ]})
     monkeypatch.setattr(ai, "httpx", http)
 
-    status = client.get("/api/ai/config").json()["status"]
+    data = client.get("/api/ai/config").json()
+    status = data["status"]
 
     assert status["kind"] == "remote"
     assert status["reachable"] is True
     names = [m.get("name") for m in status["models"]]
     assert "openai/gpt-oss-120b" in names
+    # El modelo configurado está en la lista ⇒ el panel puede marcarlo.
+    assert data["model_installed"] is True
 
     gets = [c for c in calls if c[0] == "GET"]
     assert gets, "la sonda debe consultar el listado de modelos"
@@ -223,13 +261,19 @@ def test_probe_remoto_lista_modelos_con_bearer(client, ai, monkeypatch):
     assert gets[0][2]["Authorization"] == "Bearer gsk_test_key"
 
 
-def test_test_connection_remoto_hace_ping(client, ai, monkeypatch):
-    """POST /api/ai/test con URL remota debe probar el chat, no rechazarla.
+def test_probe_remoto_con_key_mala_marca_model_ausente(client, ai, monkeypatch):
+    """El proveedor responde pero no ofrece el modelo configurado."""
+    ai.update(_cfg_remota())
+    http, _ = _fake_http(models={"data": [{"id": "otro/modelo"}]})
+    monkeypatch.setattr(ai, "httpx", http)
 
-    Hoy devuelve «la sonda solo aplica a localhost:11434»: imposible validar
-    un proveedor remoto desde el panel aunque la API key y el modelo sean
-    correctos.
-    """
+    data = client.get("/api/ai/config").json()
+    assert data["status"]["reachable"] is True
+    assert data["model_installed"] is False
+
+
+def test_test_connection_remoto_hace_ping(client, ai, monkeypatch):
+    """POST /api/ai/test con URL remota debe probar el chat, no rechazarla."""
     ai.update(_cfg_remota())
     http, calls = _fake_http(models={"data": [{"id": "openai/gpt-oss-120b"}]},
                              chat_reply="OK")
@@ -245,32 +289,33 @@ def test_test_connection_remoto_hace_ping(client, ai, monkeypatch):
     assert posts[0][2]["Authorization"] == "Bearer gsk_test_key"
 
 
-def test_payload_openai_no_acota_por_num_predict(ai):
-    """El tope `num_predict` NO viaja al dialecto OpenAI/compatible.
+def test_payload_openai_no_lleva_topes_ni_opciones_locales(ai):
+    """El payload va pelado (modelo, temperatura, mensajes).
 
-    Es un límite pensado para Ollama local (VRAM y generación a ~35 tok/s).
-    En un proveedor remoto acortaba las salidas: los modelos con reasoning
-    interno consumen tokens ANTES de redactar, así que el JSON del informe
-    llegaba truncado a mitad de string y se descartaba entero.
+    Sin `max_tokens`: los modelos con reasoning interno (p. ej. gpt-oss)
+    consumen tokens ANTES de redactar, así que cualquier tope recortaba el
+    JSON del informe a mitad de string y se descartaba entero. Sin
+    `options`/`keep_alive`/`num_ctx`: eran del dialecto Ollama local.
     """
-    cfg = {**ai.DEFAULTS, **_cfg_remota(), "num_predict": 1600}
+    cfg = {**ai.DEFAULTS, **_cfg_remota()}
     mensajes = [{"role": "user", "content": "hola"}]
 
-    for tope in (1600, 512, -1):
-        payload = ai._payload({**cfg, "num_predict": tope}, mensajes, 0.2)
-        assert "max_tokens" not in payload, (
-            f"num_predict={tope} no debe acotar la salida de un proveedor remoto"
-        )
+    payload = ai._payload(cfg, mensajes, 0.2)
+    assert set(payload) == {"model", "temperature", "messages"}
+    assert payload["model"] == "openai/gpt-oss-120b"
+
+    # Con restos de la config vieja en la entrada, tampoco se cuelan.
+    legacy = {**cfg, "num_ctx": 8192, "keep_alive": "-1", "num_predict": 1600}
+    assert set(ai._payload(legacy, mensajes, 0.2)) == {"model", "temperature", "messages"}
 
 
 def test_ping_remoto_no_acota_la_salida(client, ai, monkeypatch):
-    """El ping a un proveedor remoto no debe llevar tope de generación.
+    """El ping al proveedor no lleva tope de generación.
 
     Modelos con reasoning interno (p. ej. gpt-oss) consumen tokens en
-    razonamiento ANTES de redactar: cualquier `max_tokens` recortado —el de
-    16 del ping de Ollama— devolvía `content` vacío y el panel informaba
-    «no respondió» con la API key correcta. En dialecto remoto la salida la
-    acota el proveedor, no el panel.
+    razonamiento ANTES de redactar: cualquier `max_tokens` recortado
+    devolvía `content` vacío y el panel informaba «no respondió» con la API
+    key correcta. La salida la acota el proveedor, no el panel.
     """
     ai.update(_cfg_remota())
     http, calls = _fake_http(models={"data": [{"id": "openai/gpt-oss-120b"}]},
@@ -283,5 +328,5 @@ def test_ping_remoto_no_acota_la_salida(client, ai, monkeypatch):
     posts = [c for c in calls if c[0] == "POST"]
     payload = posts[0][3]
     assert "max_tokens" not in payload, (
-        "el ping remoto no debe acotar la salida: el proveedor aplica su tope"
+        "el ping no debe acotar la salida: el proveedor aplica su tope"
     )
