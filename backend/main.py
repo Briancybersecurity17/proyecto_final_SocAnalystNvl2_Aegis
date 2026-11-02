@@ -60,6 +60,7 @@ try:
         stream_question,
     )
     from backend import rag_store, kb_store, ai_config, rerank, feedback_store
+    from backend.behavior_correlations import compute_behavior_patterns
 except ImportError:  # pragma: no cover
     from ai_service import (
         CHAT_HISTORY_TURNS,
@@ -75,6 +76,7 @@ except ImportError:  # pragma: no cover
     import ai_config
     import rerank
     import feedback_store
+    from behavior_correlations import compute_behavior_patterns
 
 # El motor de filtros con el mismo patrón dual paquete/suelto: así todos los
 # endpoints que muestran filas (/rows, /summary, /facets) comparten las
@@ -698,6 +700,12 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
             "examples": examples,
         }
 
+    # --- correlaciones conductuales (behavior_correlations.py) -------------
+    # Motor ÚNICO que comparten el informe (el prompt y la regla C de
+    # «correlation» los citan) y el panel de correlaciones ATT&CK. Se calcula
+    # aquí para que /summary y el informe vean exactamente los mismos patrones.
+    behavior_patterns = compute_behavior_patterns(df)
+
     return {
         "rows": total,
         "columns": columns,
@@ -724,6 +732,7 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
         "suspicious_by_ip": suspicious_by_ip,
         "suspicious_hosts_total": suspicious_hosts_total,
         "suspicious_ips_total": suspicious_ips_total,
+        "behavior_patterns": behavior_patterns,
     }
 
 
@@ -1453,6 +1462,12 @@ async def attack_correlations(analysis_id: str) -> Dict[str, Any]:
     Event_ID que no tienen entrada en el glosario (`unmapped`) en lugar de
     inventarles una correlación. Ni modelo ni similitud de por medio: es una
     referencia del marco anclada a tus datos, con los recuentos reales.
+
+    Añade `behavior_patterns`: los cruces conductuales del MISMO motor que
+    alimenta el campo «correlation» del informe (IP en varios tipos de
+    evento, combinaciones IP + host + evento repetidas, IPs y usuarios
+    multi-host y candidatos a fuerza bruta). El JOIN MITRE sigue siendo
+    referencia del marco; los patrones son hallazgo sobre tus datos.
     """
     if analysis_id not in analysis_store:
         raise HTTPException(status_code=404, detail="Analysis not found")
@@ -1463,6 +1478,7 @@ async def attack_correlations(analysis_id: str) -> Dict[str, Any]:
     df = entry.get("dataframe")
     observed = await asyncio.to_thread(_observed_event_stats, df)
     correlation = await asyncio.to_thread(kb_store.correlate, observed)
+    patterns = await asyncio.to_thread(compute_behavior_patterns, df)
 
     return {
         "analysis_id": analysis_id,
@@ -1470,6 +1486,7 @@ async def attack_correlations(analysis_id: str) -> Dict[str, Any]:
         "observed_events": len(observed),
         "observed_rows": sum(int(item.get("count") or 0) for item in observed),
         **correlation,
+        "behavior_patterns": patterns,
     }
 
 

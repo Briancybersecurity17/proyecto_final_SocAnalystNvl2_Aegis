@@ -569,6 +569,43 @@ export interface CorrelationTactic {
   ids: string[]
 }
 
+/**
+ * Correlaciones conductuales: los cruces IP ↔ Event_ID ↔ Hostname ↔ User ↔
+ * Result que calcula `backend/behavior_correlations.py` (determinista, sin
+ * modelo). Es el MISMO bloque que alimenta el campo «correlation» del
+ * informe técnico: mismas cifras en ambos consumidores.
+ */
+export interface BehaviorPatterns {
+  /** IPs presentes en ≥2 tipos de evento (una sola rutina, varios: actor). */
+  multi_event_ips: { ip: string; event_types: number; events: number; hosts?: number }[]
+  /** Misma IP + host + evento repetido ≥5 veces (el patrón conductual). */
+  repeated_actions: { ip: string; host: string; event_id: string; count: number }[]
+  /** IPs presentes en ≥4 hosts distintos (barrido / movimiento lateral). */
+  multi_host_ips: { ip: string; hosts: number; events: number }[]
+  /** Usuarios autenticados en ≥2 hosts distintos. */
+  multi_host_users: { user: string; hosts: number; events: number }[]
+  /** IPs con ≥3 fallos y al menos un éxito: candidato a fuerza bruta. */
+  brute_force: {
+    ip: string
+    failures: number
+    successes: number
+    /** ausente si el archivo no trae la columna Hostname. */
+    hosts?: number
+    events: number
+  }[]
+  /**
+   * Nº de entradas que CUMPLEN el umbral, antes del corte a las 8 que se
+   * listan: «10 IPs en ≥4 hosts» puede venir truncado a 8 en la lista.
+   */
+  totals: {
+    multi_event_ips: number
+    repeated_actions: number
+    multi_host_ips: number
+    multi_host_users: number
+    brute_force: number
+  }
+}
+
 /** GET /api/analysis/{id}/attack/correlations — JOIN determinista con la KB. */
 export interface AttackCorrelations {
   analysis_id: string
@@ -581,6 +618,7 @@ export interface AttackCorrelations {
   unmapped: ObservedEventStats[]
   techniques: CorrelationTechnique[]
   tactics: CorrelationTactic[]
+  behavior_patterns: BehaviorPatterns
 }
 
 /**

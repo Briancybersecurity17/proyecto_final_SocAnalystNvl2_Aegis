@@ -539,6 +539,9 @@ def _prosa_informe(ctx: dict, bug: bool = False) -> dict:
        registros».
     3. correlation NO junto la cifra de la IP con «sospechosos»: la regla B
        la atribuiría al total global de eventos sospechosos, no a la IP.
+    4. correlation CITA un patrón conductual completo (sujeto + SU cifra en
+       la misma frase) cuando el ctx trae behavior_patterns: la regla C
+       rechaza el campo entero sin esa frase y la fuente caería a «local».
 
     Con `bug=True` añade la atribución errónea histórica «N … Event IDs X»:
     N es la cifra REAL de OTRO id (ancla A). Desde la revisión final la
@@ -558,6 +561,31 @@ def _prosa_informe(ctx: dict, bug: bool = False) -> dict:
             if isinstance(e, dict) and e.get("raw")]
     ejemplo = f", por ejemplo «{raws[0]}»" if raws else ""
     top = (ctx.get("suspicious_by_ip") or [{}])[0]
+    correlacion = (
+        f"La IP de origen {top.get('ip')} concentra "
+        f"{int(top.get('events') or 0)} eventos en "
+        f"{int(top.get('hosts') or 0)} hosts: debe validarse contra los "
+        "registros de autenticación de esos activos."
+    )
+    # 4. Regla C de «correlation»: con behavior_patterns en el ctx el campo
+    # debe citar al menos un patrón COMPLETO (sujeto + SU cifra en la frase),
+    # igual que pide el prompt. Sin esta frase el validador rechaza el campo
+    # y la fuente caería a «local» (rompiendo el assert de «llm» de abajo).
+    for clave, frase in (
+        ("multi_event_ips", "aparece en {event_types} tipos de evento con "
+                            "{events} registros"),
+        ("multi_host_ips", "está presente en {hosts} hosts con {events} registros"),
+        ("repeated_actions", "repite el evento {event_id} en {host} {count} veces"),
+        ("brute_force", "acumula {failures} fallos junto a {successes} éxitos"),
+    ):
+        entradas = (ctx.get("behavior_patterns") or {}).get(clave) or []
+        patron = next(
+            (e for e in entradas if isinstance(e, dict) and e.get("ip")), None
+        )
+        if patron:
+            detalle = frase.format(**{k: patron[k] for k in patron if k != "ip"})
+            correlacion += f" Además, la IP {patron['ip']} {detalle}."
+            break
     conclusions = (
         f"El riesgo global asignado es {label}. Distribución: {dist}. "
         f"Sobre {ctx['rows']} registros del archivo importado, toda cifra "
@@ -580,12 +608,7 @@ def _prosa_informe(ctx: dict, bug: bool = False) -> dict:
             "del marco de la organización. Aplicación de reglas de sospecha "
             "sobre los campos de cada registro."
         ),
-        "correlation": (
-            f"La IP de origen {top.get('ip')} concentra "
-            f"{int(top.get('events') or 0)} eventos en "
-            f"{int(top.get('hosts') or 0)} hosts: debe validarse contra los "
-            "registros de autenticación de esos activos."
-        ),
+        "correlation": correlacion,
         "conclusions": conclusions,
     }
 

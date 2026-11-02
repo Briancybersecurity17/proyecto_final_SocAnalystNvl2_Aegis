@@ -155,6 +155,13 @@ def build_context(summary: Dict[str, Any]) -> Dict[str, Any]:
         "non_numeric_event_ids": summary.get("non_numeric_event_ids") or [],
         "suspicious_events": int(summary.get("suspicious_events", 0)),
         "suspicious_by_ip": summary.get("suspicious_by_ip") or [],
+        # Correlaciones conductuales (behavior_correlations.py): IPs en varios
+        # tipos de evento, combinaciones IP+host+evento repetidas, IPs y
+        # usuarios multi-host y candidatos a fuerza bruta. El MISMO bloque
+        # alimenta el informe (regla C + redacción) y el panel ATT&CK.
+        # `_anchors` barre el ctx recursivamente, así que sus cifras quedan
+        # ancladas sin registrar nada a mano.
+        "behavior_patterns": summary.get("behavior_patterns") or {},
         "suspicious_evidence": [
             _evidence(e) for e in (summary.get("suspicious_details") or [])[:6]
         ],
@@ -202,6 +209,55 @@ def _http_code_meaning(code: str) -> str:
     if known:
         return known
     return "error del lado del cliente (4xx)" if code.startswith("4") else "error del lado del servidor (5xx)"
+
+
+def _behavior_pattern_lines(patterns: Any) -> List[str]:
+    """Frases deterministas con los patrones conductuales del ctx.
+
+    Mismo contrato de verificabilidad que exige la regla C al modelo
+    (sujeto + patrón + SU cifra exacta) pero resuelto con plantillas: es lo
+    que pinta el fallback local cuando el LLM no aporta prosa válida.
+    """
+    if not isinstance(patterns, dict):
+        return []
+
+    def first(key: str) -> Dict[str, Any]:
+        entries = patterns.get(key)
+        return entries[0] if isinstance(entries, list) and entries else {}
+
+    lines: List[str] = []
+    entry = first("multi_event_ips")
+    if entry:
+        lines.append(
+            f"la IP {entry.get('ip')} aparece en {entry.get('event_types')} tipos "
+            f"de evento ({entry.get('events')} registros en "
+            f"{entry.get('hosts')} hosts)"
+        )
+    entry = first("repeated_actions")
+    if entry:
+        lines.append(
+            f"{entry.get('ip')} repite el evento {entry.get('event_id')} en "
+            f"{entry.get('host')} {entry.get('count')} veces"
+        )
+    entry = first("multi_host_ips")
+    if entry:
+        lines.append(
+            f"la IP {entry.get('ip')} está presente en {entry.get('hosts')} hosts "
+            f"distintos ({entry.get('events')} registros)"
+        )
+    entry = first("multi_host_users")
+    if entry:
+        lines.append(
+            f"el usuario {entry.get('user')} se usa en {entry.get('hosts')} hosts "
+            f"distintos ({entry.get('events')} registros)"
+        )
+    entry = first("brute_force")
+    if entry:
+        lines.append(
+            f"{entry.get('ip')} acumula {entry.get('failures')} fallos junto a "
+            f"{entry.get('successes')} éxitos (candidato a fuerza bruta)"
+        )
+    return lines
 
 
 def _fallback_narrative(ctx: Dict[str, Any]) -> Dict[str, Any]:
@@ -380,6 +436,15 @@ def _fallback_narrative(ctx: Dict[str, Any]) -> Dict[str, Any]:
             "No se detectaron correlaciones entre IP de origen y múltiples hosts en los "
             "registros analizados."
         )
+    # Los patrones conductuales se cuentan SIEMPRE que existan: son la parte
+    # del cruce (IP ↔ evento ↔ host ↔ usuario) que el top de IPs no cubre.
+    patrones = _behavior_pattern_lines(ctx.get("behavior_patterns"))
+    if patrones:
+        correlation += (
+            " Patrones conductuales repetidos en los registros: "
+            + "; ".join(patrones)
+            + "."
+        )
 
     # --- Plan de acción ----------------------------------------------------
     action_plan: List[Dict[str, Any]] = [
@@ -528,7 +593,15 @@ _REPORT_USER_PROMPT = (
     "real (\\n) y numéralo como «1. », «2. »…: el informe los pinta como "
     "párrafos aparte y sin salto de línea se leen pegados.\n"
     "  - correlation: la PRIMERA IP de suspicious_by_ip con SU conteo de eventos, "
-    "tal como figura en DATOS.\n"
+    "tal como figura en DATOS; y SIEMPRE que behavior_patterns traiga entradas, "
+    "cita al menos UN patrón conductual COMPLETO: quién (la IP o el usuario del "
+    "patrón), qué patrón es y SU cifra exacta de DATOS — p. ej. una IP presente "
+    "en N tipos de evento con sus registros y hosts, una combinación IP + host + "
+    "evento que se repite N veces, una IP o un usuario presente en N hosts, o una "
+    "IP con N fallos y N éxitos (fuerza bruta). Después REDACTA cómo se conectan "
+    "los patrones entre sí (misma IP en varios tipos de evento, mismo usuario en "
+    "varios hosts, fallos seguidos de un éxito): eso es la correlación, no una "
+    "lista de cifras sueltas. No cites patrones que no estén en DATOS.\n"
     "  - conclusions: etiqueta de riesgo, total de registros, distribución "
     "completa de niveles (cada nivel con count > 0 nombrado de forma concreta "
     "con «nivel» + su nombre; forma literal obligatoria: nivel crítico: 97, "
@@ -953,6 +1026,115 @@ def _frase_en(text: str, pos: int) -> Tuple[int, int]:
     return inicio, fin
 
 
+def _pattern_entries(ctx: dict) -> List[Tuple[List[str], List[float]]]:
+    """(sujetos, cifras) de cada patrón conductual del ctx.
+
+    Los sujetos son la IP, el usuario o el host de la entrada (cualquiera
+    puede ser la forma en que la prosa nombra el patrón); las cifras son
+    TODOS sus números de conteo (event_types, events, hosts, count,
+    failures…). `totals` no es un patrón: es el recuento de entradas.
+    """
+    patterns = ctx.get("behavior_patterns")
+    if not isinstance(patterns, dict):
+        return []
+    out: List[Tuple[List[str], List[float]]] = []
+    for key, entries in patterns.items():
+        if key == "totals" or not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            ids = [str(entry[k]) for k in ("ip", "user", "host") if entry.get(k)]
+            nums = [
+                float(v)
+                for k, v in entry.items()
+                if k not in ("ip", "user", "host", "event_id")
+                and isinstance(v, (int, float))
+                and not isinstance(v, bool)
+            ]
+            if ids and nums:
+                out.append((ids, nums))
+    return out
+
+
+def _ident_re(ident: str) -> str:
+    """Regex del sujeto con límites de token («10.10.2.1» no casa en «…15»)."""
+    return rf"(?<![\w.-]){re.escape(_norm_pos(ident))}(?![\w.-])"
+
+
+def _behavior_pattern_cited(text: str, ctx: dict) -> bool:
+    """¿El texto cita al menos UN patrón conductual completo?
+
+    «Completo» = el sujeto del patrón (IP, usuario o host) Y alguna de SUS
+    cifras EN LA MISMA FRASE: nombrar la IP a secas no basta — eso ya lo
+    pide la regla C para `suspicious_by_ip` — y una cifra suelta en otra
+    frase tampoco convierte el dato en patrón. La misma acotación por frase
+    que `_pattern_count_in_sentence`, para que «…2 hosts. Habría que revisar
+    la IP 203.0.113.74.» no pase por citar un patrón. Si el ctx no trae
+    patrones, no se exige nada: la regla C solo exige lo que los datos
+    permiten.
+    """
+    entries = _pattern_entries(ctx)
+    if not entries:
+        return True
+    norm = _norm_pos(text)
+    for ids, nums in entries:
+        for ident in ids:
+            for m in re.finditer(_ident_re(ident), norm):
+                inicio, fin = _frase_en(text, m.start())
+                frase = text[inicio:fin]
+                encontradas = {
+                    num for _pos, _raw, num in _number_spans(frase)
+                }
+                if any(n in encontradas for n in nums):
+                    return True
+    return False
+
+
+def _pattern_count_in_sentence(text: str, value: float, ctx: dict) -> bool:
+    """¿`value` es la cifra REAL de un patrón del sujeto citado en la frase?
+
+    Mismo criterio y misma acotación que `_sospechosos_de_ip_mencionada`
+    (tarea 8): la cifra se respalda solo si el sujeto MÁS CERCANO dentro de
+    la MISMA frase es el que tiene esa cifra en sus patrones. Evita rechazar
+    «203.0.113.74 registró 33 autenticaciones fallidas (Event ID 4625)»: el
+    33 es el conteo de ESA IP, no el total global del Event ID 4625.
+    """
+    entries = _pattern_entries(ctx)
+    if not entries:
+        return False
+    cifras = [
+        (pos, pos + len(raw))
+        for pos, raw, num in _number_spans(text)
+        if num == value
+    ]
+    if not cifras:
+        return False
+    ocurrencias: List[Tuple[int, int, List[float]]] = []
+    for ids, nums in entries:
+        for ident in ids:
+            for m in re.finditer(_ident_re(ident), text):
+                ocurrencias.append((m.start(), m.end(), nums))
+    if not ocurrencias:
+        return False
+    for inicio, fin in cifras:
+        frase_inicio, frase_fin = _frase_en(text, inicio)
+        cercanas = [
+            (max(istart - fin, inicio - iend, 0), nums)
+            for istart, iend, nums in ocurrencias
+            if frase_inicio <= istart and iend <= frase_fin
+        ]
+        if cercanas:
+            # El sujeto MÁS CERCANO manda; si el MISMO sujeto aparece en
+            # varios patrones (la misma IP en multi_event_ips y en
+            # brute_force), basta con que ALGUNO de ellos tenga la cifra:
+            # decidir por el primero de la lista sería un empate arbitrario.
+            distancia = min(par[0] for par in cercanas)
+            if any(value in nums for d, nums in cercanas if d == distancia):
+                return True
+    return False
+
+
 def _sospechosos_de_ip_mencionada(text: str, value: float, ctx: dict) -> bool:
     """¿`value` es el conteo REAL de la IP a la que la frase lo atribuye?
 
@@ -1053,6 +1235,14 @@ def _rule_attribution(text: str, ctx: dict) -> List[str]:
             if value != truth and _sospechosos_de_ip_mencionada(text, value, ctx):
                 continue
         if value != truth:
+            # La cifra de un patrón conductual del sujeto citado en la MISMA
+            # frase no es la del recuento GLOBAL del Event ID o del código:
+            # «203.0.113.74 registró 33 autenticaciones fallidas (Event ID
+            # 4625)» es correcta aunque el 4625 tenga 37 en total.
+            if kind in ("event_id", "codigo") and _pattern_count_in_sentence(
+                text, value, ctx
+            ):
+                continue
             reasons.append(f"«{_num(value)} … {label}» ≠ {_num(truth)}")
     return reasons
 
@@ -1091,7 +1281,8 @@ def _rule_required(field: str, text: str, ctx: dict) -> List[str]:
     """Regla C: contenido obligatorio por campo, derivado SOLO del ctx.
 
     Solo se exige lo que los datos permiten: niveles con count>0, una IP de
-    `suspicious_by_ip` con SU conteo, claves de `severity_mapping` solo si el
+    `suspicious_by_ip` con SU conteo, un patrón conductual completo cuando
+    `behavior_patterns` trae entradas, claves de `severity_mapping` solo si el
     mapping no está vacío. Campos sin regla (findings, action_plan) pasan.
     """
     norm = _norm_pos(text)
@@ -1149,6 +1340,16 @@ def _rule_required(field: str, text: str, ctx: dict) -> List[str]:
             reasons.append(
                 "falta IP con su conteo de eventos "
                 f"(p. ej. «{entries[0]['ip']}» con {_num(entries[0].get('events') or 0)})"
+            )
+        # Patrones conductuales (behavior_correlations.py): si el ctx los
+        # trae, el campo debe citar al menos uno COMPLETO (sujeto + cifra).
+        # Es el espejo exacto de lo que pide el prompt en «- correlation».
+        if not _behavior_pattern_cited(text, ctx):
+            reasons.append(
+                "falta citar un patrón conductual con su cifra "
+                "(p. ej. una IP presente en varios tipos de evento, una "
+                "combinación IP + host + evento repetida o un usuario "
+                "presente en varios hosts)"
             )
     elif field == "methodology":
         matched = sum(1 for pattern in _METHOD_MARKERS if re.search(pattern, norm))

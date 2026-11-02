@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { useAnalysisStore } from '../store'
-import { getAttackCorrelations, AttackCorrelations } from '../api/client'
+import { getAttackCorrelations, AttackCorrelations, BehaviorPatterns } from '../api/client'
 import { DashboardSection } from './DashboardSection'
 import { EmptyState } from './EmptyState'
 import { stagger, cardIn } from '../motion'
@@ -9,6 +9,13 @@ import { stagger, cardIn } from '../motion'
 /**
  * «Correlaciones ATT&CK»: el cruce determinista entre los Event_ID que existen
  * en el dataset y las técnicas del marco (glosario + KB).
+ *
+ * Además del JOIN al marco, el panel pinta los PATRONES CONDUCTUALES del
+ * mismo motor que redacta la sección de correlación del informe
+ * (`behavior_correlations.py`): IPs en varios tipos de eventos, acciones
+ * repetidas IP + host + evento, IPs y usuarios multi-host y candidatos a
+ * fuerza bruta. El JOIN es referencia del marco; los patrones son hallazgo
+ * sobre tus datos.
  *
  * Cada técnica mostrada llega porque un Event_ID **observado** la referencia en
  * el glosario, anotada con sus recuentos reales; los Event_ID sin entrada se
@@ -87,6 +94,83 @@ const AttackCorrelationsPanel: React.FC = () => {
   // y superaría el total, así que no sirve como KPI.
   const coveredRows = eventEntries.reduce((acc, e) => acc + e.count, 0)
 
+  // --- Correlaciones conductuales (behavior_correlations.py) ---------------
+  // Mismo motor que el campo «correlation» del informe: IP ↔ Event_ID ↔
+  // Hostname ↔ User ↔ Result, sin modelo. `totals` viene ANTES del corte a
+  // las 8 entradas que lista cada bloque, así que el «+N más» es honesto.
+  const patrones: BehaviorPatterns | undefined = data.behavior_patterns
+  const bloques = patrones
+    ? [
+        {
+          key: 'multi_event_ips',
+          titulo: 'IPs presentes en más de un tipo de evento',
+          umbral: '≥2 tipos de evento',
+          total: patrones.totals.multi_event_ips,
+          filas: patrones.multi_event_ips.map(e => ({
+            id: e.ip,
+            principal: e.ip,
+            detalle: `${e.event_types} tipos de evento`,
+            cifras: [
+              `${e.events} registros`,
+              ...(e.hosts === undefined ? [] : [`${e.hosts} hosts`]),
+            ],
+          })),
+        },
+        {
+          key: 'repeated_actions',
+          titulo: 'Acciones repetidas (misma IP + host + evento)',
+          umbral: '≥5 repeticiones',
+          total: patrones.totals.repeated_actions,
+          filas: patrones.repeated_actions.map(e => ({
+            id: `${e.ip}|${e.host}|${e.event_id}`,
+            principal: e.ip,
+            detalle: `evento ${e.event_id} en ${e.host}`,
+            cifras: [`×${e.count}`],
+          })),
+        },
+        {
+          key: 'multi_host_ips',
+          titulo: 'IPs con alcance en muchos hosts',
+          umbral: '≥4 hosts distintos',
+          total: patrones.totals.multi_host_ips,
+          filas: patrones.multi_host_ips.map(e => ({
+            id: e.ip,
+            principal: e.ip,
+            detalle: `${e.hosts} hosts distintos`,
+            cifras: [`${e.events} registros`],
+          })),
+        },
+        {
+          key: 'multi_host_users',
+          titulo: 'Usuarios usados en varios hosts',
+          umbral: '≥2 hosts distintos',
+          total: patrones.totals.multi_host_users,
+          filas: patrones.multi_host_users.map(e => ({
+            id: e.user,
+            principal: e.user,
+            detalle: `${e.hosts} hosts distintos`,
+            cifras: [`${e.events} registros`],
+          })),
+        },
+        {
+          key: 'brute_force',
+          titulo: 'Candidatos a fuerza bruta',
+          umbral: '≥3 fallos y al menos 1 éxito',
+          total: patrones.totals.brute_force,
+          filas: patrones.brute_force.map(e => ({
+            id: e.ip,
+            principal: e.ip,
+            detalle: `${e.failures} fallos · ${e.successes} éxitos`,
+            cifras: [
+              `${e.events} eventos`,
+              ...(e.hosts === undefined ? [] : [`${e.hosts} hosts`]),
+            ],
+          })),
+        },
+      ]
+    : []
+  const hayPatrones = bloques.some(bloque => bloque.total > 0)
+
   return (
     <section className="space-y-6">
       {/* KPIs: qué tan cubierto está el dataset por el marco */}
@@ -113,6 +197,74 @@ const AttackCorrelationsPanel: React.FC = () => {
           </motion.div>
         ))}
       </motion.div>
+
+      {/* Correlaciones conductuales: los cruces que el JOIN Event_ID → MITRE
+          no hace (IP ↔ host ↔ usuario ↔ resultado), con cifras exactas. */}
+      {hayPatrones && (
+        <DashboardSection title="Patrones conductuales repetidos">
+          <div className="px-4 pt-1">
+            <p className="font-mono text-[11px] text-[var(--text-dim)]">
+              Cruce determinista sobre tus registros (IP ↔ evento ↔ host ↔ usuario ↔
+              resultado): mismas cifras que las del informe técnico.
+            </p>
+          </div>
+          <motion.div
+            variants={stagger()}
+            initial="hidden"
+            animate="show"
+            className="grid grid-cols-1 gap-3 p-4 md:grid-cols-2 xl:grid-cols-3"
+          >
+            {bloques.map(bloque => (
+              <motion.div
+                key={bloque.key}
+                variants={cardIn}
+                className="border border-[#d946ef]/35 bg-[var(--bg-void)] p-3"
+              >
+                <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
+                  <span className="text-[12.5px] font-semibold text-[var(--text-bright)]">
+                    {bloque.titulo}
+                  </span>
+                  <span className="font-mono text-[10px] text-[#f0abfc]">
+                    {bloque.umbral}
+                  </span>
+                </div>
+
+                {bloque.filas.length === 0 ? (
+                  <p className="mt-2 font-mono text-[11.5px] text-[var(--text-dim)]">
+                    Ningún registro de tus datos cumple este umbral.
+                  </p>
+                ) : (
+                  <ul className="mt-2 space-y-1.5">
+                    {bloque.filas.map(fila => (
+                      <li
+                        key={fila.id}
+                        className="border-t border-hud-soft pt-1.5 first:border-t-0 first:pt-0"
+                      >
+                        <span className="font-mono text-[11.5px] font-bold text-hud-line">
+                          {fila.principal}
+                        </span>
+                        <span className="ml-2 text-[11.5px] text-[var(--text)]">
+                          {fila.detalle}
+                        </span>
+                        <span className="ml-2 font-mono text-[10.5px] text-[var(--text-dim)]">
+                          {fila.cifras.join(' · ')}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {bloque.total > bloque.filas.length && (
+                  <p className="mt-1.5 font-mono text-[10px] text-[var(--text-dim)]">
+                    +{bloque.total - bloque.filas.length} más: se listan las{' '}
+                    {bloque.filas.length} principales de {bloque.total}.
+                  </p>
+                )}
+              </motion.div>
+            ))}
+          </motion.div>
+        </DashboardSection>
+      )}
 
       {/* Tácticos cubiertos: cabecera de lectura rápida */}
       {tactics.length > 0 && (
