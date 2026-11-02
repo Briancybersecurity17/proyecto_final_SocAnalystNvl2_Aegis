@@ -1260,11 +1260,12 @@ async def ask_question(analysis_id: str, payload: AskRequest):
         level=prep["level"], suspicious=prep["suspicious"],
     )
 
-    # Base de conocimiento: significado de los Event IDs observados y técnicas
-    # MITRE ATT&CK asociadas (referencia del marco, no un hallazgo sobre datos).
-    reference = await asyncio.to_thread(kb_store.build_reference, question, hits)
+    # El asistente responde SOLO con la evidencia del dataset cargado: ni
+    # glosario de Event IDs ni técnicas ATT&CK (conocimiento ajeno al archivo).
+    # Antes aquí se construía `kb_store.build_reference` y el prompt del chat
+    # lo inyectaba como «Referencia técnica»; el análisis ya no lo pide.
     answer = await answer_question(
-        question, hits, entry["summary"], reference=reference,
+        question, hits, entry["summary"], reference=None,
         index_note=prep["index_note"], history=_chat_history(entry),
     )
     _remember_turn(entry, question, str(answer.get("answer") or ""))
@@ -1276,7 +1277,7 @@ async def ask_question(analysis_id: str, payload: AskRequest):
 async def ask_question_stream(analysis_id: str, payload: AskRequest):
     """Versión en streaming de /ask (SSE con eventos con nombre).
 
-    Emite, en este orden: `meta` (evidencias y referencia ya disponibles,
+    Emite, en este orden: `meta` (evidencias ya disponibles,
     mientras el modelo empieza a escribir), 0..n eventos `token` y un cierre
     `final` (respuesta del LLM validada contra los Log_ID recuperados) o
     `fallback` (la respuesta determinista sustituye a la del modelo si éste se
@@ -1312,13 +1313,11 @@ async def ask_question_stream(analysis_id: str, payload: AskRequest):
             level=prep["level"], suspicious=prep["suspicious"],
         )
         t2 = time.perf_counter()
-        # Misma base de conocimiento que /ask (referencia del marco aparte).
-        reference = await asyncio.to_thread(kb_store.build_reference, question, hits)
-        t3 = time.perf_counter()
+        # Solo evidencia del dataset: sin referencia del marco (KB), igual que /ask.
         timed = False
 
         async for event in stream_question(
-            question, hits, entry["summary"], reference=reference,
+            question, hits, entry["summary"], reference=None,
             index_note=prep["index_note"], history=_chat_history(entry),
         ):
             kind = str(event.get("type") or "")
@@ -1327,12 +1326,12 @@ async def ask_question_stream(analysis_id: str, payload: AskRequest):
                 if not timed:
                     # Desglose de la fase «invisible» (hasta que aparecen las
                     # evidencias): prep = validación+índice, recuperación =
-                    # RAG+léxica+rerank, referencia = consulta a la KB.
+                    # RAG+léxica+rerank.
                     timed = True
                     logger.info(
                         "timing /ask/stream: prep=%.2fs recuperación=%.2fs "
-                        "referencia=%.2fs → meta=%.2fs",
-                        t_prep, t2 - t1, t3 - t2, time.perf_counter() - t0,
+                        "→ meta=%.2fs",
+                        t_prep, t2 - t1, time.perf_counter() - t0,
                     )
                 yield _sse("meta", {**common, "retrieved": len(hits), "engine": "streaming", **body})
             elif kind == "token":

@@ -6,11 +6,9 @@ import {
   askQuestionStream,
   clearChatHistory,
   getRagStatus,
-  getKbStatus,
   sendFeedback,
   AskResponse,
   RagStatusResponse,
-  KbStatus,
 } from '../api/client'
 import { DashboardSection } from './DashboardSection'
 import { EmptyState } from './EmptyState'
@@ -29,13 +27,25 @@ const LEVEL_LABEL: Record<string, string> = {
   bajo: 'Bajo',
 }
 
-const SUGGESTIONS = [
+/**
+ * Preguntas agnósticas: valen con CUALQUIER archivo cargado (no nombran
+ * hosts, Event IDs ni cifras de un dataset concreto).
+ */
+const GENERIC_SUGGESTIONS = [
   '¿Qué hosts concentran los eventos críticos?',
   '¿Hubo intentos de fuerza bruta?',
-  '¿Qué significa el Event ID 1102?',
-  '¿Qué pasó en el controlador de dominio?',
   'Muéstrame los eventos sospechosos de nivel alto',
 ]
+
+/** Clave con mayor valor de un conteo {clave: nº} — el dato dominante del archivo. */
+const topCountKey = (counts?: Record<string, number>): string | null => {
+  if (!counts) return null
+  let best: string | null = null
+  for (const [key, value] of Object.entries(counts)) {
+    if (value > 0 && (best === null || value > (counts[best] ?? 0))) best = key
+  }
+  return best
+}
 
 /** Motivos por los que se sustituye la respuesta del LLM por la determinista. */
 const WARNING_LABEL: Record<string, string> = {
@@ -128,11 +138,6 @@ const AnswerBody: React.FC<{ text: string }> = ({ text }) => {
   )
 }
 
-/**
- * Bloque «Referencia técnica»: lo que significan los Event IDs observados y a
- * qué técnicas MITRE ATT&CK se asocian. Es MATERIAL DEL MARCO, separado de la
- * evidencia, y así se etiqueta explícitamente (nunca es un hallazgo del archivo).
- */
 /**
  * Botón «Corregir» de una respuesta del asistente.
  *
@@ -234,106 +239,6 @@ const FeedbackControl: React.FC<{
 }
 
 
-const ReferenceBlock: React.FC<{ reference?: AskResponse['reference'] }> = ({ reference }) => {
-  if (!reference?.available) return null
-  const { event_ids: events, techniques } = reference
-  if (!events.length && !techniques.length) return null
-
-  return (
-    <div className="mt-3 border border-[#d946ef]/45 bg-[#d946ef]/10 p-3">
-      <div className="mb-2 flex items-center gap-2">
-        <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#e879f9]">
-          Referencia de marco
-        </span>
-        <span className="font-mono text-[10px] text-[#f0abfc]">
-          MITRE ATT&amp;CK · Event IDs Windows
-        </span>
-      </div>
-
-      {events.length > 0 && (
-        <div className="mb-2.5 space-y-1.5">
-          {events.map(item => (
-            <div key={item.id} className="text-[12px] leading-snug text-[var(--text)]">
-              <span className="font-mono font-semibold text-[#f0abfc]">Event ID {item.id}</span>
-              <span
-                className={`ml-1.5 px-1.5 py-0.5 text-[10px] ${
-                  item.match === 'evidencia'
-                    ? 'border border-[#10b981]/60 bg-[#10b981]/15 text-[#10b981]'
-                    : 'border border-hud-soft bg-[var(--bg-void)] text-[var(--text-dim)]'
-                }`}
-              >
-                {item.match === 'evidencia' ? 'en tus registros' : 'citado en tu consulta'}
-              </span>
-              <div className="text-[var(--text-dim)]">{item.titulo}</div>
-              <div className="text-[var(--text-dim)]">{item.por_que_importa}</div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {techniques.length > 0 && (
-        <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-          {techniques.map(tech => (
-            <div key={tech.id} className="border border-[#d946ef]/35 bg-[var(--bg-void)] p-2.5">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <span className="font-mono text-xs font-bold text-[#f0abfc]">{tech.id}</span>
-                  <span className="ml-1.5 text-[12px] font-semibold text-[var(--text-bright)]">
-                    {tech.name}
-                  </span>
-                </div>
-                <span className="whitespace-nowrap border border-[#d946ef]/50 bg-[#d946ef]/15 px-1.5 py-0.5 text-[10px] text-[#f0abfc]">
-                  {tech.tactic_es}
-                </span>
-              </div>
-              {tech.aliases.length > 0 && (
-                <div className="mt-0.5 text-[10px] text-[var(--text-dim)]">
-                  antes: {tech.aliases.join(', ')}
-                </div>
-              )}
-              {/* Las técnicas no curadas llegan de la fuente oficial sin
-                  traducción: se muestra el texto original antes que dejar la
-                  tarjeta en blanco. */}
-              <p className="mt-1 text-[11.5px] text-[var(--text-dim)]">
-                {tech.descripcion_es || tech.description_en}
-              </p>
-              {tech.se_detecta && (
-                <p className="mt-1 text-[11px] text-[var(--text-dim)]">
-                  <span className="font-semibold text-[var(--text)]">Detección:</span> {tech.se_detecta}
-                </p>
-              )}
-              <div className="mt-1.5 flex items-center justify-between">
-                <div className="flex flex-wrap gap-1">
-                  {tech.eventos.slice(0, 4).map(ev => (
-                    <span
-                      key={ev}
-                      className="border border-hud-soft bg-[var(--bg-panel)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-dim)]"
-                    >
-                      {ev}
-                    </span>
-                  ))}
-                </div>
-                <a
-                  href={tech.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="ml-2 shrink-0 text-[10.5px] text-hud-line hover:underline"
-                >
-                  attack.mitre.org ↗
-                </a>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <p className="mt-2 border-t border-[#d946ef]/30 pt-1.5 text-[10.5px] text-[#f0abfc]/85">
-        {reference.note}
-      </p>
-    </div>
-  )
-}
-
 export const AssistantChat: React.FC = () => {
   const analysisId = useAnalysisStore(state => state.analysisId)
   const summary = useAnalysisStore(state => state.summary)
@@ -345,7 +250,6 @@ export const AssistantChat: React.FC = () => {
   const [level, setLevel] = useState('')
   const [suspicious, setSuspicious] = useState(false)
   const [rag, setRag] = useState<RagStatus | null>(null)
-  const [kb, setKb] = useState<KbStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const listRef = useRef<HTMLDivElement>(null)
@@ -354,13 +258,23 @@ export const AssistantChat: React.FC = () => {
   const msgSeq = useRef(0)
   const ready = status === 'done' && !!analysisId
 
-  // Sugerencias: la de Result solo aparece si el archivo tiene ese campo.
+  // Host dominante del archivo cargado: ancla también el placeholder del input.
+  const topHost = topCountKey(summary?.top_hosts)
+
+  // Sugerencias ancladas AL DATASET CARGADO: su Event ID más frecuente y su
+  // host dominante salen del summary, nunca de una lista escrita a mano (así
+  // sirven con cualquier archivo, no solo con el del analista de turno). La
+  // de Result solo aparece si el archivo tiene ese campo.
   const suggestions = useMemo(() => {
-    const base = [...SUGGESTIONS]
+    const base: string[] = []
+    const eventId = topCountKey(summary?.event_id_counts)
+    if (eventId) base.push(`¿Qué significa el Event ID ${eventId}?`)
+    if (topHost) base.push(`¿Qué pasó en ${topHost}?`)
+    base.push(...GENERIC_SUGGESTIONS)
     if (summary?.result_counts && Object.keys(summary.result_counts).length > 0) {
       base.push('¿Cuántos registros fallaron o devolvieron error HTTP?')
     }
-    return base
+    return base.slice(0, 5)
   }, [summary])
 
   // Estado del índice semántico (se actualiza mientras termina la indexación).
@@ -394,22 +308,6 @@ export const AssistantChat: React.FC = () => {
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' })
   }, [messages, loading])
-
-  // Estado de la base de conocimiento (se consulta una vez al estar listo)
-  useEffect(() => {
-    if (!ready) return
-    let cancelled = false
-    getKbStatus()
-      .then(data => {
-        if (!cancelled) setKb(data)
-      })
-      .catch(() => {
-        if (!cancelled) setKb(null)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [ready])
 
   const send = useCallback(
     async (question: string) => {
@@ -560,14 +458,11 @@ export const AssistantChat: React.FC = () => {
         tone: '#1fc8ff',
         text: 'Indexando los registros en el índice semántico… la primera consulta puede tardar unos segundos.',
       }
-    const kbPart = kb
-      ? ` · base de conocimiento: ${kb.techniques} técnicas ATT&CK + ${kb.event_ids} Event IDs`
-      : ''
     return {
       tone: '#10b981',
-      text: `Recuperación híbrida activa · ${rag.events} eventos indexados · ${rag.model}${kbPart}`,
+      text: `Recuperación híbrida activa · ${rag.events} eventos indexados · ${rag.model}`,
     }
-  }, [rag, kb])
+  }, [rag])
 
   if (!ready) {
     return (
@@ -725,8 +620,6 @@ export const AssistantChat: React.FC = () => {
                         </div>
                       )}
 
-                      <ReferenceBlock reference={message.response.reference} />
-
                       {/* Vía explícita de aprendizaje: solo con la respuesta ya
                           cerrada (no durante el streaming) y si hay pregunta. */}
                       {!message.streaming &&
@@ -828,7 +721,11 @@ export const AssistantChat: React.FC = () => {
             <input
               value={input}
               onChange={e => setInput(e.target.value)}
-              placeholder="Pregunta sobre los registros… p. ej. ¿qué pasó en DC-01?"
+              placeholder={
+                topHost
+                  ? `Pregunta sobre los registros… p. ej. ¿qué pasó en ${topHost}?`
+                  : 'Pregunta sobre los registros… p. ej. ¿qué hosts concentran los eventos críticos?'
+              }
               maxLength={300}
               className="hud-input flex-1"
             />

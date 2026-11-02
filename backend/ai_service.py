@@ -1389,6 +1389,10 @@ QA_SYSTEM_PROMPT = (
     "afirmación con el Log_ID del evento que la respalda. Nunca inventes hosts, "
     "IPs, usuarios, fechas, cifras ni eventos. Si la evidencia no alcanza para "
     "responder, dilo explícitamente. "
+    "NO expliques qué significa un Event ID, ni cites glosarios, marcos ni "
+    "técnicas MITRE ATT&CK: tu única fuente son los registros de ESTE archivo; "
+    "si preguntan por algo ausente de los datos, responde que no aparece en los "
+    "registros y ya. "
     "Estructura la respuesta: 1) respuesta directa en la primera frase; "
     "2) justificación con los Log_ID citados; 3) solo si aporta, un cierre con "
     "riesgo o siguiente paso. Sé breve: máximo ~150 palabras salvo que se pida "
@@ -2331,7 +2335,7 @@ async def stream_question(
 
     Emite, en orden, eventos (``type``) pensados para la UI del chat:
 
-    1. ``meta``  – evidencias, bloque MITRE, contadores y confianza: todo lo
+    1. ``meta``  – evidencias, contadores y confianza: todo lo
        rápido se calcula ANTES de arrancar el modelo, así el analista ve las
        tarjetas mientras la respuesta se escribe.
     2. ``token`` – trozos de texto del LLM (0..n).

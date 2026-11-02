@@ -94,6 +94,8 @@ export interface AnalysisSummary {
   /** Traducción auditable de cada valor original de Severity a nuestro nivel. */
   severity_mapping?: SeverityMappingEntry[]
   level_counts: Record<string, number>
+  /** Event ID → nº de registros (los que trae EL ARCHIVO cargado). */
+  event_id_counts?: Record<string, number>
   risk_levels: Record<string, RiskLevelBlock>
   unique_hosts: number | null
   events_per_day: Record<string, number>
