@@ -9,6 +9,9 @@ el `data/ai_config.json` real del analista. Se importa el módulo desde `main`
 para garantizar que es EXACTAMENTE el que usan los endpoints.
 """
 
+import asyncio
+
+import httpx
 import pytest
 
 from main import app, ai_config
@@ -330,3 +333,122 @@ def test_ping_remoto_no_acota_la_salida(client, ai, monkeypatch):
     assert "max_tokens" not in payload, (
         "el ping no debe acotar la salida: el proveedor aplica su tope"
     )
+
+
+# ---------------------------------------------------------------------------
+# Reintentos ante un 429 (rate limit del proveedor cloud)
+# ---------------------------------------------------------------------------
+def _fake_http_retry(secuencias, headers=None):
+    """Transporte httpx falso que aplica una secuencia de respuestas HTTP.
+
+    Cada `post` consume la posición siguiente de `secuencias` (códigos 429/200)
+    y devuelve un `httpx.Response` REAL, de modo que `raise_for_status()` lanza
+    el `httpx.HTTPStatusError` auténtico — no un doble — y los reintentos de
+    `chat()` se ejercitan de verdad. Devuelve (namespace, llamadas).
+    """
+    from types import SimpleNamespace
+
+    calls: list = []
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, **kwargs):
+            status = secuencias[min(len(calls), len(secuencias) - 1)]
+            calls.append(("POST", url, kwargs.get("headers"), status))
+            return httpx.Response(
+                status,
+                request=httpx.Request("POST", url),
+                headers=headers or {},
+                json={"choices": [{"message": {"content": "OK"}}]}
+                if status == 200 else {},
+            )
+
+    return SimpleNamespace(AsyncClient=_FakeAsyncClient), calls
+
+
+def _sin_dormir(monkeypatch):
+    """Los reintentos NO esperan de verdad en el test: solo se registran."""
+    esperas: list = []
+
+    async def _sleep(delay):
+        esperas.append(delay)
+
+    monkeypatch.setattr(ai_config.asyncio, "sleep", _sleep)
+    return esperas
+
+
+def test_chat_reintenta_tras_429_y_recupera(ai, monkeypatch):
+    """Un 429 del proveedor no debe arrastrar el informe al motor local.
+
+    Antes del reintento, `chat()` devolvía None al primer tope de cuota y las
+    cuatro secciones de prosa caían al texto determinista (medido: 1 de 6
+    informes llegaba con LLM). Con reintento, el segundo intento devuelve 200
+    y el texto llega entero.
+    """
+    http, calls = _fake_http_retry([429, 200])
+    monkeypatch.setattr(ai, "httpx", http)
+    esperas = _sin_dormir(monkeypatch)
+    cfg = {**ai.DEFAULTS, **_cfg_remota()}
+
+    texto = asyncio.run(ai.chat([{"role": "user", "content": "hola"}], cfg=cfg))
+
+    assert texto == "OK", "tras un 429 seguido de un 200 el texto debe llegar"
+    assert len(calls) == 2, "debe reintentar una sola vez y aceptar el 200"
+    assert esperas, "debe esperar (backoff) antes del reintento"
+
+
+def test_chat_429_persistente_cae_al_local_sin_bucle(ai, monkeypatch):
+    """Si el proveedor sigue devolviendo 429, se agota el tope y vuelve el local."""
+    http, calls = _fake_http_retry([429])
+    monkeypatch.setattr(ai, "httpx", http)
+    esperas = _sin_dormir(monkeypatch)
+    cfg = {**ai.DEFAULTS, **_cfg_remota()}
+
+    texto = asyncio.run(ai.chat([{"role": "user", "content": "hola"}], cfg=cfg))
+
+    assert texto is None, "sin 200, chat() sigue devolviendo None (fallback local)"
+    assert len(calls) == ai._MAX_RETRIES, "el tope de reintentos es finito, sin bucle"
+    assert len(esperas) == ai._MAX_RETRIES - 1, "espera entre intentos, nunca tras el último"
+
+
+def test_chat_otro_error_no_reintenta(ai, monkeypatch):
+    """Solo el 429 merece reintento: un 500 o un 404 vuelven al local ya."""
+    http, calls = _fake_http_retry([500])
+    monkeypatch.setattr(ai, "httpx", http)
+    esperas = _sin_dormir(monkeypatch)
+    cfg = {**ai.DEFAULTS, **_cfg_remota()}
+
+    texto = asyncio.run(ai.chat([{"role": "user", "content": "hola"}], cfg=cfg))
+
+    assert texto is None
+    assert len(calls) == 1, "los errores que no son 429 no se reintentan"
+    assert esperas == []
+
+
+def test_retry_delay_respeta_retry_after_y_lo_tapa(ai):
+    """El backoff manda en `Retry-After` si el proveedor lo envía, con tope."""
+    respuesta = httpx.Response(
+        429, request=httpx.Request("POST", "https://x"), headers={"retry-after": "7"}
+    )
+    assert ai._retry_delay(1, respuesta) == 7.0
+
+    # Un `Retry-After` desmesurado no congela la petición del analista.
+    gigante = httpx.Response(
+        429, request=httpx.Request("POST", "https://x"), headers={"retry-after": "9999"}
+    )
+    assert ai._retry_delay(1, gigante) == ai._RETRY_AFTER_MAX
+
+    # Sin cabecera (o ilegible) cae al backoff exponencial.
+    assert ai._retry_delay(1, httpx.Response(429, request=httpx.Request("POST", "https://x"))) \
+        == ai._BACKOFF_BASE
+    assert ai._retry_delay(2, httpx.Response(429, request=httpx.Request("POST", "https://x"))) \
+        == ai._BACKOFF_BASE * 2
+    assert ai._retry_delay(1, None) == ai._BACKOFF_BASE

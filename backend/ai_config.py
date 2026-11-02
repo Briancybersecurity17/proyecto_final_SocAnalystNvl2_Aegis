@@ -28,6 +28,7 @@ la ventana de contexto y el tope de generación los aplica el proveedor.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -40,6 +41,39 @@ import httpx
 # Se lee como atributo del módulo en cada llamada a propósito: los tests
 # redirigen esta ruta con monkeypatch para no tocar la configuración real.
 CONFIG_PATH = Path(__file__).resolve().parent / "data" / "ai_config.json"
+
+# Reintentos de chat() ante un 429 (rate limit del proveedor). Sin esta espera
+# un solo tope puntual arrastraba el informe entero al motor local: el LLM
+# devolvía None y las cuatro secciones caían al texto determinista. Medido con
+# Groq: los 429 llegan en ráfaga (hasta 4 seguidos), así que hacen falta
+# varios intentos, no uno solo.
+_MAX_RETRIES = 4
+# Tapa de la espera pedida por el proveedor (segundos), por si envía un
+# Retry-After desmesurado; con tope realista el informe no tarda minutos.
+_RETRY_AFTER_MAX = 30.0
+_BACKOFF_BASE = 1.5  # backoff exponencial: 1.5s, 3s, 6s entre los 4 intentos
+
+# La clase se ata aquí (y no en el `except`): los tests sustituyen `ai.httpx`
+# por un doble mínimo que solo expone `AsyncClient`, y evaluar
+# `httpx.HTTPStatusError` en tiempo de captura reventaría con AttributeError.
+_HTTP_STATUS_ERROR = httpx.HTTPStatusError
+
+
+def _retry_delay(attempt: int, response: Any = None) -> float:
+    """Espera antes del intento n+1: manda ``Retry-After`` si el proveedor lo trae.
+
+    Un 429 sin cabecera (o con un valor ilegible) cae al backoff exponencial;
+    el tope evita que un ``Retry-After`` enorme congele la petición del usuario.
+    """
+    header = getattr(response, "headers", None) or {}
+    try:
+        after = float(header.get("retry-after"))
+    except (TypeError, ValueError):
+        after = 0.0
+    if after > 0:
+        return min(after, _RETRY_AFTER_MAX)
+    return _BACKOFF_BASE * (2 ** (attempt - 1))
+
 
 DEFAULTS: Dict[str, Any] = {
     # El LLM viene encendido: si no responde, todo vuelve al motor determinista.
@@ -206,8 +240,19 @@ async def chat(
 
     try:
         async with httpx.AsyncClient(timeout=cfg["timeout"]) as client:
-            resp = await client.post(url, json=payload, headers=headers)
-            resp.raise_for_status()
+            resp = None
+            for attempt in range(1, _MAX_RETRIES + 1):
+                try:
+                    resp = await client.post(url, json=payload, headers=headers)
+                    resp.raise_for_status()
+                except _HTTP_STATUS_ERROR as exc:
+                    # Solo el 429 (rate limit) merece esperar: los demás 4xx/5xx
+                    # son error del pedido o del proveedor y vuelven al local.
+                    if exc.response.status_code != 429 or attempt >= _MAX_RETRIES:
+                        raise
+                    await asyncio.sleep(_retry_delay(attempt, exc.response))
+                    continue
+                break  # 2xx: sale del bucle de reintentos
             text = _content(resp.json()).strip()
     except Exception:  # noqa: BLE001 – cualquier fallo cae al modo local
         return None
@@ -238,8 +283,24 @@ async def chat_stream(
         headers["Authorization"] = f"Bearer {cfg['api_key']}"
 
     async with httpx.AsyncClient(timeout=cfg["timeout"]) as client:
-        async with client.stream("POST", url, json=payload, headers=headers) as resp:
-            resp.raise_for_status()
+        # Reintento solo en la APERTURA (antes del primer token): una vez que
+        # el proveedor empezó a emitir, reabrir repetiría texto ya enviado.
+        resp = None
+        for attempt in range(1, _MAX_RETRIES + 1):
+            try:
+                request = client.build_request("POST", url, json=payload, headers=headers)
+                resp = await client.send(request, stream=True)
+                resp.raise_for_status()
+            except _HTTP_STATUS_ERROR as exc:
+                if resp is not None:
+                    await resp.aclose()
+                    resp = None
+                if exc.response.status_code != 429 or attempt >= _MAX_RETRIES:
+                    raise
+                await asyncio.sleep(_retry_delay(attempt, exc.response))
+                continue
+            break
+        try:
             async for line in resp.aiter_lines():
                 line = (line or "").strip()
                 if not line or not line.startswith("data:"):
@@ -257,6 +318,8 @@ async def chat_stream(
                     piece = None
                 if piece:
                     yield piece
+        finally:
+            await resp.aclose()
 
 
 async def probe(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
