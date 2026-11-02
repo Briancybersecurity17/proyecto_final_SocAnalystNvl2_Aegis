@@ -633,6 +633,44 @@ _REPORT_USER_PROMPT = (
 )
 
 
+def _prompt_ctx(ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """Copia del ctx reducida a lo que el prompt pide citar.
+
+    Los bloques de evidencia verbatim (`risk_levels[].evidence`,
+    `suspicious_evidence`, `result_errors.examples`) solo pesan en el
+    payload: el ctx completo del informe medía ≈21,8 KB ≈ 8,8k tokens y
+    el tope TPM del proveedor por defecto (8000 tokens/min en
+    `openai/gpt-oss-120b`) lo rechazaba con 413 Payload Too Large —
+    `chat()` solo reintenta ante 429, así que el informe caía SIEMPRE al
+    motor local. Recortado baja a ≈4,1k tokens.
+
+    El validador A–D, el filtro de observaciones y el fallback local
+    siguen recibiendo el ctx COMPLETO (lo pasan `generate_report_narrative`
+    y `generate_data_insights` aparte), de modo que las anclas, las cifras
+    obligatorias de la regla C y las evidencias del informe no cambian.
+    El copy es nuevo: el ctx del caller no se muta.
+    """
+    copia = dict(ctx)
+
+    if isinstance(ctx.get("risk_levels"), dict):
+        niveles: Dict[str, Any] = {}
+        for lvl, bloque in ctx["risk_levels"].items():
+            if isinstance(bloque, dict):
+                bloque = dict(bloque)
+                bloque.pop("evidence", None)
+            niveles[lvl] = bloque
+        copia["risk_levels"] = niveles
+
+    copia.pop("suspicious_evidence", None)
+
+    errores = copia.get("result_errors")
+    if isinstance(errores, dict):
+        errores = dict(errores)
+        errores.pop("examples", None)
+        copia["result_errors"] = errores
+    return copia
+
+
 async def _remote_narrative(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """LLM para el informe. Devuelve None si está apagado o falla."""
     cfg = ai_config.get()
@@ -644,7 +682,7 @@ async def _remote_narrative(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         {
             "role": "user",
             "content": _REPORT_USER_PROMPT
-            + json.dumps(ctx, ensure_ascii=False, default=str),
+            + json.dumps(_prompt_ctx(ctx), ensure_ascii=False, default=str),
         },
     ]
 
@@ -1615,7 +1653,7 @@ async def _remote_insights(ctx: Dict[str, Any]) -> List[str]:
         {
             "role": "user",
             "content": _INSIGHTS_USER_PROMPT
-            + json.dumps(ctx, ensure_ascii=False, default=str),
+            + json.dumps(_prompt_ctx(ctx), ensure_ascii=False, default=str),
         },
     ]
     text = await ai_config.chat(messages, temperature=0.3, cfg=cfg)

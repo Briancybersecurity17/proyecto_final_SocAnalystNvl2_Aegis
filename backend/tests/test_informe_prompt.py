@@ -208,6 +208,68 @@ def test_payload_incluye_event_id_counts(informe):
     assert '"4625": 102' in datos
 
 
+def test_payload_recorta_la_evidencia_verbatim(ai, monkeypatch):
+    """El payload al proveedor va SIN bloques de evidencia (tope TPM).
+
+    El ctx completo del dataset real medía ≈8,8k tokens y el tope TPM del
+    proveedor por defecto (8000 tokens/min) lo rechazaba con 413 Payload
+    Too Large; `chat()` solo reintenta ante 429, así que el informe caía
+    SIEMPRE al motor local. Solo se recortan listas de registros de
+    ejemplo que el prompt no pide citar: las claves ancla
+    (event_id_counts, behavior_patterns, level_counts…) siguen viajando
+    y el ctx del caller no se muta (validador y fallback lo necesitan
+    completo).
+    """
+    ctx_con_evidencia = dict(
+        _CTX,
+        behavior_patterns={
+            "multi_event_ips": [
+                {"ip": "203.0.113.74", "event_types": 3, "events": 40,
+                 "hosts": 1},
+            ],
+            "totals": {"multi_event_ips": 1},
+        },
+        risk_levels={
+            "critico": {
+                "label": "Crítico",
+                "count": 59,
+                "percentage": 33.9,
+                "justification": "muchos fallos de autenticación",
+                "evidence": [{"event_id": "4625", "source_ip": "10.10.2.15"}],
+            },
+        },
+        suspicious_evidence=[{"event_id": "4625", "source_ip": "10.10.2.15"}],
+        result_errors={
+            "codes": {"404": 30},
+            "total": 41,
+            "examples": [{"event_id": "404", "source_ip": "10.10.2.15"}],
+        },
+    )
+    captura: dict = {}
+
+    async def chat_falso(messages, temperature=None, cfg=None):
+        captura["messages"] = messages
+        return _RESPUESTA
+
+    monkeypatch.setattr(ai, "chat", chat_falso)
+    asyncio.run(ai_service._remote_narrative(ctx_con_evidencia))
+
+    datos = _user_prompt(captura).split("DATOS:", 1)[1]
+    # Recortado: evidencia verbatim que el prompt no pide citar.
+    assert '"suspicious_evidence"' not in datos
+    assert '"evidence"' not in datos
+    assert '"examples"' not in datos
+    # Conservado: claves ancla del contrato prompt ↔ validador.
+    for clave in ("event_id_counts", "level_counts", "severity_mapping",
+                  "suspicious_by_ip", "risk_levels", "result_errors",
+                  "behavior_patterns"):
+        assert f'"{clave}"' in datos, f"falta {clave} en el payload"
+    # El ctx del caller NO se muta: validador y fallback lo usan completo.
+    assert ctx_con_evidencia["suspicious_evidence"]
+    assert ctx_con_evidencia["risk_levels"]["critico"]["evidence"]
+    assert ctx_con_evidencia["result_errors"]["examples"]
+
+
 def test_informe_parsea_la_respuesta(informe):
     captura = informe()
     # La respuesta falsa se parsea: el pipeline completo funciona.
