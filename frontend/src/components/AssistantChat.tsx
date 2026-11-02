@@ -264,18 +264,22 @@ export const AssistantChat: React.FC = () => {
   // Sugerencias ancladas AL DATASET CARGADO: su Event ID más frecuente y su
   // host dominante salen del summary, nunca de una lista escrita a mano (así
   // sirven con cualquier archivo, no solo con el del analista de turno). La
-  // de Result solo aparece si el archivo tiene ese campo.
+  // de Result solo aparece si el archivo tiene ese campo; al ir antes que las
+  // genéricas no se pierde nunca del corte a 5.
   const suggestions = useMemo(() => {
     const base: string[] = []
     const eventId = topCountKey(summary?.event_id_counts)
     if (eventId) base.push(`¿Qué significa el Event ID ${eventId}?`)
     if (topHost) base.push(`¿Qué pasó en ${topHost}?`)
-    base.push(...GENERIC_SUGGESTIONS)
     if (summary?.result_counts && Object.keys(summary.result_counts).length > 0) {
       base.push('¿Cuántos registros fallaron o devolvieron error HTTP?')
     }
+    for (const generica of GENERIC_SUGGESTIONS) {
+      if (base.length >= 5) break
+      base.push(generica)
+    }
     return base.slice(0, 5)
-  }, [summary])
+  }, [summary, topHost])
 
   // Estado del índice semántico (se actualiza mientras termina la indexación).
   // El sondeo se detiene en cuanto el índice queda listo: mantenerlo cada 3 s
