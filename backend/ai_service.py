@@ -1564,13 +1564,129 @@ def _local_insights(ctx: Dict[str, Any]) -> List[str]:
     return insights
 
 
-def generate_data_insights(summary: Dict[str, Any]) -> List[str]:
-    """Observaciones de la IA sobre los datos (para el dashboard).
+# --- Observaciones del análisis con IA (grounded) -------------------------
+# Mismo patrón que el informe: el modelo REDACTA, el sistema VALIDA. Cada
+# observación se contrasta contra el ctx (anclas + atribución) y la que trae
+# una cifra sin ancla se descarta ENTERA — así «observaciones de la IA» no
+# puede convertirse en un sitio donde se cuelen números inventados.
+MAX_INSIGHTS = 6
+_MIN_INSIGHT_CHARS = 20
 
-    Igual que el informe: solo se generan a partir de cifras calculadas a
-    partir de los registros importados (grounding estricto).
+_INSIGHTS_SYSTEM_PROMPT = (
+    "Eres un analista SOC de nivel 2 redactando observaciones sobre un archivo "
+    "de registros de seguridad ya analizado. Trabajas SOLO con los datos que se "
+    "te entregan: si un dato no está en el contexto, no lo menciones ni lo "
+    "infieras. Nunca inventes hosts, IPs, fechas, cifras ni eventos. Redacción "
+    "formal, concisa y verificable. Respondes ÚNICAMENTE con un objeto JSON "
+    "válido, sin markdown ni texto adicional."
+)
+
+_INSIGHTS_USER_PROMPT = (
+    "Redacta las observaciones del análisis sobre estos datos calculados.\n"
+    "Responde SOLO con JSON válido de esta forma exacta:\n"
+    '  {"insights": ["observación 1.", "observación 2.", …]}\n'
+    "Con 4 a 6 observaciones, cada una UNA frase de máximo 30 palabras que "
+    "termine en punto.\n"
+    "Cada observación debe aportar LECTURA de los datos, no repetir el título "
+    "de una gráfica: concentraciones (qué host o IP domina), patrones "
+    "repetidos (autenticaciones fallidas, procesos nuevos, accesos a "
+    "recursos compartidos), ventanas temporales (días, picos) y calidad del "
+    "dato (columnas que faltan o identificadores no numéricos).\n"
+    "REGLAS DURAS:\n"
+    "  - Todo número sale de DATOS tal cual: prohibido recalcular, aproximar "
+    "o inventar una cifra. Si un dato no está en DATOS, no lo menciones.\n"
+    "  - Sin frases repetidas entre observaciones y sin consejos genéricos "
+    "que pudieran servir para cualquier archivo.\n"
+    "  - Español formal; nada de explicar qué significa un Event ID ni citar "
+    "glosarios, marcos ni técnicas.\n"
+    "\n"
+    "DATOS:\n"
+)
+
+
+async def _remote_insights(ctx: Dict[str, Any]) -> List[str]:
+    """Observaciones del LLM. Lista vacía si está apagado o falla."""
+    cfg = ai_config.get()
+    if not cfg["enabled"] or not cfg["api_url"]:
+        return []
+
+    messages = [
+        {"role": "system", "content": _INSIGHTS_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": _INSIGHTS_USER_PROMPT
+            + json.dumps(ctx, ensure_ascii=False, default=str),
+        },
+    ]
+    text = await ai_config.chat(messages, temperature=0.3, cfg=cfg)
+    if not text:
+        return []
+    parsed = _clean_json(text)
+    items = parsed.get("insights") if isinstance(parsed, dict) else None
+    if not isinstance(items, list):
+        logger.warning(
+            "insights: el LLM no devolvió JSON con «insights» (%.200s)", text
+        )
+        return []
+    return [item for item in items if isinstance(item, str)]
+
+
+def _filter_insights(items: List[str], ctx: Dict[str, Any]) -> List[str]:
+    """Se queda SOLO con las observaciones verificables contra el ctx.
+
+    - una observación corta demuestra que el modelo no aportó nada;
+    - una cifra sin ancla (regla A) o mal atribuida (regla B) tira la frase
+      entera, igual que en el informe;
+    - frases repetidas entre observaciones (regla D) no se apilan.
+    """
+    validas: List[str] = []
+    for item in items:
+        text = " ".join(str(item).split())
+        if len(text) < _MIN_INSIGHT_CHARS:
+            continue
+        if _rule_anchor(text, ctx) or _rule_attribution(text, ctx):
+            continue
+        if any(v.casefold() == text.casefold() for v in validas):
+            continue
+        if validas and _rule_redundancy(" ".join(validas) + " " + text):
+            continue
+        validas.append(text)
+        if len(validas) >= MAX_INSIGHTS:
+            break
+    return validas
+
+
+def generate_local_insights(summary: Dict[str, Any]) -> List[str]:
+    """Observaciones deterministas, sin red (vistas filtradas del /summary).
+
+    Con filtros activos las cifras del resumen cambian y una llamada al
+    modelo por cada movimiento de filtro sería lenta y podría describir
+    datos distintos de los que la UI está mostrando.
     """
     return _local_insights(build_context(summary))
+
+
+async def generate_data_insights(summary: Dict[str, Any]) -> List[str]:
+    """Observaciones de la IA sobre los datos (para el dashboard).
+
+    Grounding estricto, igual que el informe: primero se intenta el modelo
+    remoto y SOLO sobreviven las observaciones cuyas cifras están ancladas
+    al ctx. Si el LLM está apagado, no responde, devuelve algo inválido o
+    ninguna observación pasa las reglas, se usan las locales deterministas:
+    el dashboard nunca se queda sin observaciones.
+    """
+    ctx = build_context(summary)
+    if not ctx["rows"]:
+        return _local_insights(ctx)
+    try:
+        candidatas = await _remote_insights(ctx)
+    except Exception as exc:  # noqa: BLE001 – nunca romper el análisis
+        logger.warning(
+            "insights: fallo del modelo remoto (%s: %s); se usan las locales",
+            type(exc).__name__, exc,
+        )
+        candidatas = []
+    return _filter_insights(candidatas, ctx) or _local_insights(ctx)
 
 
 # ---------------------------------------------------------------------------

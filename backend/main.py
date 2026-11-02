@@ -55,6 +55,7 @@ try:
         QA_HISTORY_ANSWER_CHARS,
         generate_report_narrative,
         generate_data_insights,
+        generate_local_insights,
         answer_question,
         is_aggregate_question,
         stream_question,
@@ -67,6 +68,7 @@ except ImportError:  # pragma: no cover
         QA_HISTORY_ANSWER_CHARS,
         generate_report_narrative,
         generate_data_insights,
+        generate_local_insights,
         answer_question,
         is_aggregate_question,
         stream_question,
@@ -777,8 +779,12 @@ async def process_analysis(analysis_id: str, file_bytes: bytes, file_name: str =
         summary["missing_columns"] = missing
         summary["file_name"] = file_name
         summary["generated_at"] = datetime.now().isoformat(timespec="seconds")
-        # Observaciones automáticas de la IA sobre los datos (grounded)
-        summary["ai_insights"] = generate_data_insights(summary)
+        # Observaciones automáticas de la IA sobre los datos: el modelo
+        # redacta y el sistema valida cada cifra; si falla o está apagado,
+        # cae a las locales. Se generan ANTES de marcar «done» para que el
+        # /summary pinte directamente las de IA (una sola llamada por
+        # análisis, cacheadas en el store).
+        summary["ai_insights"] = await generate_data_insights(summary)
 
         # Keep the classified dataframe so the UI can visualise every record
         analysis_store[analysis_id]["dataframe"] = df
@@ -1001,13 +1007,22 @@ async def get_scoped_summary(analysis_id: str, request: Request):
     for clave in ("sheet_names", "missing_columns", "file_name", "generated_at"):
         resumen[clave] = global_summary[clave]
 
-    # ai_insights en cambio se recalcula SOBRE el resumen acotado, con la
-    # misma llamada y en el mismo orden que process_analysis: las
-    # observaciones tienen que describir las cifras que la UI está mostrando.
-    # build_context es solo .get() y _local_insights devuelve su lista de
-    # «sin registros» con rows=0, así que nunca lanza (R14 exige 200 aunque
-    # no haya coincidencias).
-    resumen["ai_insights"] = generate_data_insights(resumen)
+    # ai_insights: las de IA se generan UNA vez al terminar el análisis y
+    # viven cacheadas en el store. Si los filtros no han cambiado las filas
+    # (misma selección que el archivo) se sirve esa caché — así /summary no
+    # espera al modelo en cada movimiento del usuario—; con filtros activos
+    # las cifras mostradas cambian y se recalculan en LOCAL sobre la
+    # selección, para que las observaciones describan exactamente lo que la
+    # UI está pintando. build_context es solo .get() y _local_insights
+    # devuelve su lista de «sin registros» con rows=0, así que nunca lanza
+    # (R14 exige 200 aunque no haya coincidencias).
+    if int(resumen["rows"]) == int(resumen["total"]):
+        resumen["ai_insights"] = (
+            list(global_summary.get("ai_insights") or [])
+            or generate_local_insights(resumen)
+        )
+    else:
+        resumen["ai_insights"] = generate_local_insights(resumen)
     return resumen
 
 

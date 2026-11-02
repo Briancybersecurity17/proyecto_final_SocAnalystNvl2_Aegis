@@ -164,7 +164,33 @@ def rag_aislado(tmp_path_factory):
 
 
 @pytest.fixture(scope="session")
-def client(rag_aislado) -> TestClient:
+def ai_config_aislado(tmp_path_factory):
+    """Config de IA de la suite: archivo temporal con el LLM apagado.
+
+    `process_analysis` genera las observaciones del análisis con el modelo
+    ANTES de marcar «done», así que sin este aislamiento cada subida de los
+    fixtures de sesión dispararía una llamada REAL al proveedor (red, cuota
+    y ~7 s por subida dentro del timeout de 60 s del sondeo). Además, los
+    tests que hacen `ai_config.update(…)` sin aislar por su cuenta escribirían
+    en `backend/data/ai_config.json`, la config real del analista: aquí el
+    path queda redirigido a un tmp que pytest borra y se restaura al cerrar.
+    Los tests que necesitan el LLM aíslan su propio CONFIG_PATH y lo
+    encienden (patrón del fixture `ai`), así que no los toca.
+    """
+    import ai_config
+
+    original = ai_config.CONFIG_PATH
+    tmp = tmp_path_factory.mktemp("ai_config") / "ai_config.json"
+    ai_config.CONFIG_PATH = tmp
+    ai_config.update({"enabled": False})
+    try:
+        yield tmp
+    finally:
+        ai_config.CONFIG_PATH = original
+
+
+@pytest.fixture(scope="session")
+def client(rag_aislado, ai_config_aislado) -> TestClient:
     return TestClient(app)
 
 
