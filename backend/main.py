@@ -45,6 +45,12 @@ async def lifespan(_: FastAPI):
     # Memoria de criterio del analista (few-shot): lee el JSON y sincroniza el
     # índice semántico en segundo plano, igual que el resto de precargas.
     asyncio.create_task(asyncio.to_thread(feedback_store.warmup))
+    # Spec A: los análisis viven en disco, así que un reinicio ya no los
+    # pierde. Primero se restaura el store desde backend/data/analyses y
+    # después se aplica la retención (Opciones IA) para no resucitar nada
+    # que acaba de caducar. Ambas operaciones son de disco: a hilos.
+    await asyncio.to_thread(rehidratar_desde_disco)
+    await asyncio.to_thread(aplicar_retencion_config)
     yield
 
 # El servicio de IA se importa como paquete (uvicorn backend.main:app) o como
@@ -61,6 +67,7 @@ try:
         stream_question,
     )
     from backend import rag_store, kb_store, ai_config, rerank, feedback_store
+    from backend import analysis_persist
     from backend.behavior_correlations import compute_behavior_patterns
 except ImportError:  # pragma: no cover
     from ai_service import (
@@ -78,6 +85,7 @@ except ImportError:  # pragma: no cover
     import ai_config
     import rerank
     import feedback_store
+    import analysis_persist
     from behavior_correlations import compute_behavior_patterns
 
 # El motor de filtros con el mismo patrón dual paquete/suelto: así todos los
@@ -122,6 +130,112 @@ EXPECTED_COLUMNS = [
     "Log_ID", "Timestamp", "Hostname", "Event_ID", "User", "Source_IP",
     "Destination", "Log_Source", "Event_Description", "Result", "Severity",
 ]
+
+
+def _enrichir_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Columnas derivadas de ingesta: Timestamp tipado, _level, _reason, _suspicious.
+
+    Se calculan UNA sola vez por dataframe — al ingerir y al rehidratar desde
+    disco — para que /rows, el informe y el índice RAG consuman siempre las
+    mismas columnas sin recalcular nada por petición.
+    """
+    if "Timestamp" in df.columns:
+        df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
+    if "Severity" in df.columns:
+        df["_level"] = df["Severity"].map(normalize_level)
+    else:
+        # Un Excel sin Severity no aporta evidencia de riesgo: todo «bajo»
+        # (mismo criterio que aplica /rows).
+        df["_level"] = "bajo"
+    if len(df):
+        df["_reason"] = df.apply(row_reason, axis=1)
+        df["_suspicious"] = df.apply(_is_suspicious, axis=1)
+    else:
+        # apply sobre 0 filas devolvería un DataFrame, no una Serie: se
+        # crean Series vacías tipadas (mismo criterio que /rows).
+        df["_reason"] = pd.Series([], dtype=str)
+        df["_suspicious"] = pd.Series([], dtype=bool)
+    return df
+
+
+def rehidratar_desde_disco() -> int:
+    """Restaura en el store los análisis persistidos en backend/data/analyses.
+
+    Spec A: el backend ya no pierde los análisis al reiniciar. Por cada
+    carpeta se relé el Excel original (fuente de verdad) para reconstruir el
+    dataframe con sus columnas derivadas, y se recargan lo calculado
+    (summary.json: estado, error, resumen, chat) y el informe cacheado
+    (report.json). Un Excel ilegible marca ESE análisis como error sin
+    tumbar el resto. Devuelve cuántos análisis se restauraron.
+    """
+    if not analysis_persist.ANALYSES_DIR.is_dir():
+        return 0
+    restaurados = 0
+    for analysis_id in analysis_persist.listar_ids():
+        if analysis_id in analysis_store:
+            continue  # ya en memoria (p. ej. subido en esta misma vida)
+        estado = analysis_persist.cargar_estado(analysis_id)
+        entry: Dict[str, Any] = {
+            # El id dentro de la entrada: _remember_turn lo usa para etiquetar
+            # los ejemplos few-shot, igual que en una subida nueva.
+            "analysis_id": analysis_id,
+            "status": "error" if estado is None else (estado.get("status") or "error"),
+            "error": None if estado is None else estado.get("error"),
+            "summary": None if estado is None else estado.get("summary"),
+            "chat_history": [] if estado is None else (estado.get("chat_history") or []),
+            "rag": None if estado is None else estado.get("rag"),
+            "report": analysis_persist.cargar_informe(analysis_id),
+        }
+        if estado is None:
+            entry["error"] = "summary.json ausente o ilegible al arrancar"
+        content = analysis_persist.leer_excel(analysis_id)
+        try:
+            if content is None:
+                raise ValueError("El Excel original del análisis no está en disco")
+            sheets: Dict[str, pd.DataFrame] = pd.read_excel(
+                BytesIO(content), sheet_name=None, engine="openpyxl"
+            )
+            if not sheets:
+                raise ValueError("El archivo Excel no contiene hojas.")
+            entry["dataframe"] = _enrichir_df(pd.concat(sheets.values(), ignore_index=True))
+            # Un análisis que estaba «pending/processing» al reiniciar quedó
+            # interrumpido: sin resumen no hay nada que servir, se marca error.
+            if entry["status"] in ("pending", "processing"):
+                entry["status"] = "error"
+                entry["error"] = "Análisis interrumpido por un reinicio del backend"
+        except Exception as exc:  # noqa: BLE001 – archivo corrupto: solo ese análisis
+            logger.warning("Rehidratación falló para %s: %s", analysis_id[:8], exc)
+            entry["status"] = "error"
+            entry["error"] = f"No se pudo leer el Excel persistido: {exc}"
+            entry["dataframe"] = None
+        analysis_store[analysis_id] = entry
+        restaurados += 1
+    if restaurados:
+        logger.info("Análisis restaurados desde disco: %d", restaurados)
+    return restaurados
+
+
+def aplicar_retencion_config() -> List[str]:
+    """Borra de disco los análisis que superen `retention_days` (Opciones IA).
+
+    0 = conservar para siempre. Además de la carpeta, se limpian su entrada
+    en memoria y su índice RAG para que no queden fantasmas en el historial.
+    """
+    try:
+        dias = int(ai_config.get().get("retention_days", 30))
+    except (TypeError, ValueError):
+        dias = 30
+    borrados = analysis_persist.aplicar_retencion(dias)
+    for analysis_id in borrados:
+        analysis_store.pop(analysis_id, None)
+        _INDEX_TASKS.pop(analysis_id, None)
+        try:
+            rag_store.delete_analysis(analysis_id)
+        except Exception as exc:  # noqa: BLE001 – la retención no puede fallar
+            logger.warning("Índice RAG no borrado para %s: %s", analysis_id[:8], exc)
+    if borrados:
+        logger.info("Retención: %d análisis borrados de disco", len(borrados))
+    return borrados
 
 # ---------------------------------------------------------------------------
 # Risk classification (severity from the source file -> our 4 levels)
@@ -757,22 +871,7 @@ async def process_analysis(analysis_id: str, file_bytes: bytes, file_name: str =
         # _reason, _suspicious) y el Timestamp tipado se calculan una sola vez
         # aquí y se guardan en el store. /rows, el informe y el índice RAG las
         # consumen a partir de ahí sin recalcular nada por petición.
-        if "Timestamp" in df.columns:
-            df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
-        if "Severity" in df.columns:
-            df["_level"] = df["Severity"].map(normalize_level)
-        else:
-            # Un Excel sin Severity no aporta evidencia de riesgo: todo «bajo»
-            # (mismo criterio que aplica /rows).
-            df["_level"] = "bajo"
-        if len(df):
-            df["_reason"] = df.apply(row_reason, axis=1)
-            df["_suspicious"] = df.apply(_is_suspicious, axis=1)
-        else:
-            # apply sobre 0 filas devolvería un DataFrame, no una Serie: se
-            # crean Series vacías tipadas (mismo criterio que /rows).
-            df["_reason"] = pd.Series([], dtype=str)
-            df["_suspicious"] = pd.Series([], dtype=bool)
+        _enrichir_df(df)
         missing = [c for c in EXPECTED_COLUMNS if c not in df.columns]
         summary = call_ai_service(df)
         summary["sheet_names"] = list(sheets.keys())
@@ -793,7 +892,14 @@ async def process_analysis(analysis_id: str, file_bytes: bytes, file_name: str =
     except Exception as exc:  # noqa: BLE001 – surface any failure to the UI
         analysis_store[analysis_id]["status"] = "error"
         analysis_store[analysis_id]["error"] = str(exc)
+        # Spec A: el error también se persiste, para que un reinicio no
+        # convierta un análisis fallido en «ya no existe».
+        analysis_persist.guardar_estado(analysis_id, analysis_store[analysis_id])
         return
+
+    # Spec A: estado y resumen a disco (summary.json) — el dataframe no
+    # entra: se reconstruye del Excel al arrancar.
+    analysis_persist.guardar_estado(analysis_id, analysis_store[analysis_id])
 
     # ------------------------------------------------------------------
     # Índice semántico (RAG) — en un hilo para no bloquear el event loop.
@@ -829,6 +935,10 @@ async def process_analysis(analysis_id: str, file_bytes: bytes, file_name: str =
     finally:
         _INDEX_TASKS.pop(analysis_id, None)
 
+    # Se vuelve a persistir para que el estado del índice RAG (available,
+    # indexed, total, reason) sobreviva también a un reinicio.
+    analysis_persist.guardar_estado(analysis_id, analysis_store[analysis_id])
+
 
 # ---------------------------------------------------------------------------
 # API
@@ -848,6 +958,9 @@ async def upload_excel(file: UploadFile = File(...), background_tasks: Backgroun
         raise HTTPException(status_code=400, detail="Solo se aceptan archivos .xlsx")
     content = await file.read()
     analysis_id = str(uuid.uuid4())
+    # Spec A: el Excel original es la fuente de verdad en disco; sin él el
+    # análisis no podría reconstruirse al reiniciar el backend.
+    await asyncio.to_thread(analysis_persist.guardar_excel, analysis_id, content)
     analysis_store[analysis_id] = {
         # Se guarda el propio id: _remember_turn lo usa para etiquetar los
         # ejemplos few-shot que salen de la conversación (auditoría en el JSON).
@@ -856,6 +969,12 @@ async def upload_excel(file: UploadFile = File(...), background_tasks: Backgroun
         "summary": None,
         "error": None,
     }
+    # La retención se aplica también en cada subida: así un backend con poca
+    # actividad no acumula análisis caducados hasta el próximo arranque.
+    try:
+        await asyncio.to_thread(aplicar_retencion_config)
+    except Exception as exc:  # noqa: BLE001 – limpiar nunca invalida la subida
+        logger.warning("Retención no aplicada al subir: %s", exc)
     background_tasks.add_task(process_analysis, analysis_id, content, file.filename or "")
     return AnalysisResult(analysis_id=analysis_id, status="pending")
 
@@ -1065,21 +1184,49 @@ async def get_facets(analysis_id: str, request: Request):
     }
 
 
+@app.get("/api/analysis/{analysis_id}/report")
+async def get_report(analysis_id: str):
+    """Sirve el informe ya generado (spec A: se genera UNA sola vez).
+
+    404 si el análisis todavía no tiene informe: el frontend lo pinta como
+    «todavía no hay informe» en lugar de regenerarlo en cada visita.
+    """
+    if analysis_id not in analysis_store:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    narrative = analysis_store[analysis_id].get("report")
+    if narrative is None:
+        narrative = analysis_persist.cargar_informe(analysis_id)
+    if narrative is None:
+        raise HTTPException(status_code=404, detail="Report not generated")
+    analysis_store[analysis_id]["report"] = narrative
+    return narrative
+
+
 @app.post("/api/analysis/{analysis_id}/report")
-async def build_report(analysis_id: str):
+async def build_report(analysis_id: str, regenerate: bool = Query(False)):
     """Redacta el informe técnico con la IA, usando solo datos calculados.
 
     El backend envía al servicio de IA exclusivamente estadísticas y
     evidencias derivadas de los registros importados, de modo que no puede
     haber hallazgos inventados (grounding estricto).
+
+    Spec A: el informe se genera UNA vez. Sin `regenerate` se devuelve el
+    cacheado (memoria o report.json) sin tocar la IA; `?regenerate=true`
+    (botón REGENERAR del frontend) fuerza una versión nueva.
     """
     if analysis_id not in analysis_store:
         raise HTTPException(status_code=404, detail="Analysis not found")
     entry = analysis_store[analysis_id]
     if entry.get("status") != "done" or not entry.get("summary"):
         raise HTTPException(status_code=409, detail="El análisis aún no está listo")
+    if not regenerate:
+        narrative = entry.get("report") or analysis_persist.cargar_informe(analysis_id)
+        if narrative is not None:
+            entry["report"] = narrative
+            return narrative
     narrative = await generate_report_narrative(entry["summary"])
-    analysis_store[analysis_id]["report"] = narrative
+    entry["report"] = narrative
+    analysis_persist.guardar_informe(analysis_id, narrative)
     return narrative
 
 
@@ -1150,6 +1297,13 @@ async def _ensure_semantic_index(
                             "indexed": 0, "total": len(df), "reason": str(exc)}
         finally:
             _INDEX_TASKS.pop(analysis_id, None)
+            # Spec A: el estado del índice también vive en disco; sin este
+            # guardado, un arranque posterior restauraría el «indexando»
+            # previo a la reparación.
+            try:
+                analysis_persist.guardar_estado(analysis_id, entry)
+            except Exception:  # noqa: BLE001 – persistir nunca rompe la consulta
+                logger.debug("No se pudo persistir el estado del índice", exc_info=True)
 
     _INDEX_TASKS[analysis_id] = asyncio.create_task(_reindex())
     return True
@@ -1230,9 +1384,10 @@ def _remember_turn(entry: Dict[str, Any], question: str, answer: str) -> None:
 
     La memoria es deliberadamente corta: solo los últimos CHAT_HISTORY_TURNS
     turnos y cada respuesta acortada a QA_HISTORY_ANSWER_CHARS, porque la
-    ventana de contexto del modelo es finita. Vive en el propio análisis (en
-    RAM) y se borra con DELETE .../chat, al cambiar de análisis o al reiniciar
-    el backend (criterio: los datos no tocan disco).
+    ventana de contexto del modelo es finita. Vive en el propio análisis y se
+    borra con DELETE .../chat o al borrar el análisis (spec A: desde el
+    arranque los turnos también se persisten en summary.json, así que
+    sobreviven a un reinicio del backend).
     """
     if not answer or not question:
         return
@@ -1253,6 +1408,11 @@ def _remember_turn(entry: Dict[str, Any], question: str, answer: str) -> None:
             logger.debug("feedback implícito descartado", exc_info=True)
     history.append({"question": question[:400], "answer": answer[:QA_HISTORY_ANSWER_CHARS]})
     del history[:-CHAT_HISTORY_TURNS]
+    # Spec A: el turno se refleja en disco (summary.json) para que la
+    # conversación sobreviva a un reinicio del backend.
+    analysis_id = str(entry.get("analysis_id") or "")
+    if analysis_id:
+        analysis_persist.guardar_estado(analysis_id, entry)
 
 
 @app.post("/api/analysis/{analysis_id}/ask")
@@ -1418,6 +1578,28 @@ async def clear_chat_history(analysis_id: str):
     if analysis_id not in analysis_store:
         raise HTTPException(status_code=404, detail="Analysis not found")
     analysis_store[analysis_id]["chat_history"] = []
+    # Spec A: el vaciado se refleja en disco, si no el próximo arranque
+    # resucitaría la conversación borrada.
+    analysis_persist.guardar_estado(analysis_id, analysis_store[analysis_id])
+    return {"ok": True}
+
+
+@app.delete("/api/analyses/{analysis_id}")
+async def delete_analysis(analysis_id: str):
+    """Borra un análisis del historial (spec A): memoria, disco e índice RAG.
+
+    Lo usa el botón de borrado del panel de historial. Un análisis que no
+    está en el store devuelve 404 (no se pueden borrar fantasmas).
+    """
+    if analysis_id not in analysis_store:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    analysis_store.pop(analysis_id, None)
+    _INDEX_TASKS.pop(analysis_id, None)
+    await asyncio.to_thread(analysis_persist.borrar, analysis_id)
+    try:
+        await asyncio.to_thread(rag_store.delete_analysis, analysis_id)
+    except Exception as exc:  # noqa: BLE001 – el borrado del índice es best effort
+        logger.warning("Índice RAG no borrado para %s: %s", analysis_id[:8], exc)
     return {"ok": True}
 
 

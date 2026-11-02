@@ -45,3 +45,4 @@ bocetos_graficos_test/
 
 # ----- Corridas del harness de evaluación (local, regenerable) -----
 backend/eval/runs/
+backend/data/analyses/

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { getAnalysis, getRecentAnalyses } from '../api/client'
+import { deleteAnalysis, getAnalysis, getRecentAnalyses } from '../api/client'
 import type { RecentAnalysis } from '../api/client'
 import { fmtCount, LEVEL_COLORS, LEVEL_LABELS } from '../charts'
 import { useAnalysisStore, useUiStore } from '../store'
@@ -7,11 +7,12 @@ import { useFilterStore } from '../store/filters'
 import { DashboardSection } from './DashboardSection'
 
 /**
- * Historial de subidas (spec sub-3 §3.5): los últimos análisis completados
- * que siguen en memoria del backend, con opción de reabrir cualquiera en el
- * Dashboard. Se carga al montar y cada vez que termina un análisis nuevo
- * (status → 'done'); un análisis que ya no está en memoria (backend
- * reiniciado) se avisa y se quita de la lista recargándola.
+ * Historial de subidas (spec sub-3 §3.5): los últimos análisis completados,
+ * con opción de reabrir cualquiera en el Dashboard o de BORRARLO (spec A:
+ * el borrado limpia memoria, disco e índice RAG en el backend). Se carga al
+ * montar y cada vez que termina un análisis nuevo (status → 'done'); un
+ * análisis que ya no está (borrado a mano o caducado por la retención) se
+ * quita de la lista recargándola.
  */
 const UploadHistory: React.FC = () => {
   const status = useAnalysisStore(state => state.status)
@@ -24,6 +25,7 @@ const UploadHistory: React.FC = () => {
   const [items, setItems] = useState<RecentAnalysis[]>([])
   const [loading, setLoading] = useState(true)
   const [opening, setOpening] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState<string | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
 
   // Petición en vuelo: se cancela al desmontar o al lanzar otra recarga.
@@ -90,15 +92,47 @@ const UploadHistory: React.FC = () => {
     } catch (err) {
       const codigo = (err as { response?: { status?: number } })?.response?.status
       if (codigo === 404) {
-        // Backend reiniciado: el análisis ya no está en memoria; se avisa
-        // y se recarga la lista para que desaparezca.
-        setNotice('Ese análisis ya no está en memoria (¿se reinició el backend?). Se actualiza la lista.')
+        // Ya no está en el backend (borrado a mano o caducado por la
+        // retención): se avisa y se recarga la lista para que desaparezca.
+        setNotice('Ese análisis ya no está disponible (¿lo borraste o caducó?). Se actualiza la lista.')
         fetchHistory()
       } else {
         setNotice('No se pudo reabrir el análisis: revisá la conexión con el backend.')
       }
     } finally {
       setOpening(null)
+    }
+  }
+
+  /**
+   * Borra un análisis (spec A): el backend limpia store, carpeta en disco
+   * (Excel, resumen e informe) e índice RAG. Si era el análisis activo, se
+   * vuelve al estado inicial para no seguir mostrando datos borrados.
+   */
+  const borrar = async (id: string, fileName: string) => {
+    const ok = window.confirm(
+      `¿Borrar «${fileName}»? Se elimina del historial, de disco y su índice de evidencias. Esta acción no se puede deshacer.`,
+    )
+    if (!ok) return
+    setDeleting(id)
+    try {
+      await deleteAnalysis(id)
+      if (useAnalysisStore.getState().analysisId === id) {
+        useAnalysisStore.getState().reset()
+        useFilterStore.getState().reset()
+        setNotice('El análisis activo fue borrado: subí un archivo para continuar.')
+      }
+      setItems(previo => previo.filter(item => item.analysis_id !== id))
+    } catch (err) {
+      const codigo = (err as { response?: { status?: number } })?.response?.status
+      if (codigo === 404) {
+        // Ya no existe (borrado desde otra pestaña o caducado): fuera de la lista.
+        setItems(previo => previo.filter(item => item.analysis_id !== id))
+      } else {
+        setNotice('No se pudo borrar el análisis: revisá la conexión con el backend.')
+      }
+    } finally {
+      setDeleting(null)
     }
   }
 
@@ -144,10 +178,19 @@ const UploadHistory: React.FC = () => {
                 <button
                   type="button"
                   className="btn-hud whitespace-nowrap"
-                  disabled={opening !== null}
+                  disabled={opening !== null || deleting !== null}
                   onClick={() => void reopen(item.analysis_id)}
                 >
                   {opening === item.analysis_id ? 'Abriendo…' : 'Reabrir'}
+                </button>
+                <button
+                  type="button"
+                  className="btn-hud whitespace-nowrap text-[#f87171] disabled:opacity-50"
+                  disabled={opening !== null || deleting !== null}
+                  title="Borra el análisis del historial, de disco y su índice"
+                  onClick={() => void borrar(item.analysis_id, item.file_name)}
+                >
+                  {deleting === item.analysis_id ? 'Borrando…' : 'Borrar'}
                 </button>
               </span>
             </li>

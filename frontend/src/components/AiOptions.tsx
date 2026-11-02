@@ -358,6 +358,34 @@ const AiOptions: React.FC = () => {
       </div>
 
       {/* ------------------------------------------------------------- */}
+      {/* Retención de análisis en disco (spec A)                       */}
+      {/* ------------------------------------------------------------- */}
+      <div className="panel">
+        <div className="panel-head">
+          <h2 className="panel-title">Retención de datos</h2>
+        </div>
+        <div className="panel-body">
+          <label className="hud-label" htmlFor="ai-retention">
+            Días antes de borrar un análisis del historial
+          </label>
+          <input
+            id="ai-retention"
+            type="number"
+            min={0}
+            max={3650}
+            className="hud-input mt-2 w-full md:w-64"
+            value={cfg.retention_days}
+            onChange={numberChange('retention_days')}
+          />
+          <p className="mt-2 text-xs text-[var(--text-dim)]">
+            Cada subida se guarda en disco (sobrevive a los reinicios del backend) y se
+            borra a los N días sin usarse. <strong>0 = conservar para siempre</strong>.
+            También puedes borrar análisis uno a uno desde «Historial de subidas».
+          </p>
+        </div>
+      </div>
+
+      {/* ------------------------------------------------------------- */}
       {/* Prueba de conexión                                            */}
       {/* ------------------------------------------------------------- */}
       <div className="panel">

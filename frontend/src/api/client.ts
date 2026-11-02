@@ -193,16 +193,37 @@ export const getFacets = async (
 }
 
 /**
+ * Informe técnico ya generado (spec A: se genera UNA sola vez).
+ * GET devuelve el cacheado; 404 significa «todavía no se generó».
+ */
+export const getReport = async (analysisId: string): Promise<ReportNarrative> => {
+  const response = await API.get<ReportNarrative>(`/analysis/${analysisId}/report`)
+  return response.data
+}
+
+/**
  * Pide al backend que redacte el informe técnico con la IA.
  * El backend envía al modelo SOLO datos calculados de los registros
  * (grounding estricto) y siempre devuelve un informe completo, usando el
  * generador local como fallback si no hay modelo remoto configurado.
+ *
+ * Spec A: sin opciones devuelve el informe ya generado (cero llamadas a la
+ * IA); `regenerate` fuerza una versión nueva (botón «Regenerar»).
  */
-export const generateReport = async (analysisId: string) => {
+export const generateReport = async (analysisId: string, opts: { regenerate?: boolean } = {}) => {
   const response = await API.post(`/analysis/${analysisId}/report`, null, {
     timeout: 90000, // permite esperar a un modelo remoto
+    params: opts.regenerate ? { regenerate: 'true' } : undefined,
   })
   return response.data as ReportNarrative
+}
+
+/**
+ * Borra un análisis del historial (spec A): store, disco e índice RAG.
+ * 404 si ya no existe.
+ */
+export const deleteAnalysis = async (analysisId: string): Promise<void> => {
+  await API.delete(`/analyses/${analysisId}`)
 }
 
 /**
@@ -739,6 +760,8 @@ export interface AiConfig {
   temperature: number
   /** Segundos de espera máxima por llamada al LLM. */
   timeout: number
+  /** Días de retención de análisis en disco; 0 = conservar para siempre. */
+  retention_days: number
 }
 
 /** Modelo listado por el proveedor (catálogo `GET {base}/models`, normalizado a `{name}`). */

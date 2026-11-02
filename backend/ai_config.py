@@ -90,6 +90,9 @@ DEFAULTS: Dict[str, Any] = {
     # Medido contra Groq: chat 2,1 s y generación larga 7,6 s ⇒ 60 s es un
     # margen holgado. Si se supera, chat() devuelve None y cae el fallback.
     "timeout": float(os.getenv("AI_TIMEOUT", "60")),
+    # Retención de análisis en disco (spec A): días antes de borrarlos
+    # automáticamente. 0 = conservar para siempre.
+    "retention_days": 30,
 }
 
 
@@ -139,6 +142,13 @@ def validate(cfg: Dict[str, Any]) -> Dict[str, Any]:
     if not 5.0 <= timeout <= 600.0:
         raise ValueError("timeout debe estar entre 5 y 600 segundos")
     out["timeout"] = timeout
+
+    # Retención: entero de días, 0 = nunca borrar. _as_int acepta 7.0 pero
+    # rechaza "muchos"; el negativo se descarta aquí.
+    retention = _as_int(cfg.get("retention_days", DEFAULTS["retention_days"]), "retention_days")
+    if retention < 0:
+        raise ValueError("retention_days no puede ser negativo (0 = conservar para siempre)")
+    out["retention_days"] = retention
 
     return out
 

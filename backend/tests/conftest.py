@@ -28,7 +28,7 @@ import importlib as _importlib
 # que `rag_store`/`ai_config`, su dual `from backend import X` crearía la
 # instancia de paquete antes que este alias y el mundo se partiría otra vez.
 _MODULOS_DUALES = ("rag_store", "ai_config", "filters", "severity", "rerank",
-                   "kb_store", "feedback_store", "ai_service")
+                   "kb_store", "feedback_store", "ai_service", "analysis_persist")
 for _name in _MODULOS_DUALES:
     sys.modules.setdefault(f"backend.{_name}", _importlib.import_module(_name))
 try:
@@ -189,8 +189,29 @@ def ai_config_aislado(tmp_path_factory):
         ai_config.CONFIG_PATH = original
 
 
+@pytest.fixture(scope="session", autouse=True)
+def analyses_aislado(tmp_path_factory):
+    """Análisis persistidos de la suite: todo en un tmp que pytest borra.
+
+    Spec A: cada subida escribe backend/data/analyses/{id}/ (Excel, summary e
+    informe). Sin este aislamiento la suite escribiría en la carpeta REAL del
+    analista y el arranque (lifespan: rehidratar + retención) llegaría a
+    borrar análisis suyos durante un test. Es autouse porque cualquier test
+    que entre en `with TestClient(app)` dispara el lifespan: la redirección
+    tiene que estar activa aunque el test no pida ningún fixture.
+    """
+    import analysis_persist
+
+    original = analysis_persist.ANALYSES_DIR
+    analysis_persist.ANALYSES_DIR = tmp_path_factory.mktemp("analyses")
+    try:
+        yield analysis_persist.ANALYSES_DIR
+    finally:
+        analysis_persist.ANALYSES_DIR = original
+
+
 @pytest.fixture(scope="session")
-def client(rag_aislado, ai_config_aislado) -> TestClient:
+def client(rag_aislado, ai_config_aislado, analyses_aislado) -> TestClient:
     return TestClient(app)
 
 

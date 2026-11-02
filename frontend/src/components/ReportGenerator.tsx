@@ -5,7 +5,7 @@ import {
   AnalysisSummary,
   ReportNarrative,
 } from '../store'
-import { generateReport } from '../api/client'
+import { generateReport, getReport } from '../api/client'
 import { EmptyState } from './EmptyState'
 import { fmtCount, fmtPct } from '../charts'
 import {
@@ -456,24 +456,61 @@ const ReportGenerator: React.FC = () => {
 
   const [report, setReport] = useState<ReportNarrative | null>(null)
   const [loading, setLoading] = useState(false)
+  const [generating, setGenerating] = useState(false)
   const [error, setError] = useState('')
+  // true tras un GET 404: el análisis todavía no tiene informe generado.
+  const [pendiente, setPendiente] = useState(false)
 
+  /**
+   * Al montar solo SE LEE el informe cacheado (spec A): visitar la pestaña
+   * ya no vuelve a llamar a la IA ni regenera el documento. 404 no es un
+   * error, significa «todavía no se generó».
+   */
   const fetchReport = useCallback(async () => {
     if (!analysisId || status !== 'done') return
     setLoading(true)
     setError('')
+    setPendiente(false)
     try {
-      const narrative = await generateReport(analysisId)
+      const narrative = await getReport(analysisId)
       setReport(narrative)
-    } catch {
+    } catch (err) {
       // Se limpia el informe anterior: si no, quedaba visible bajo el error,
       // como si respondiera a la petición que acaba de fallar.
       setReport(null)
-      setError('No se pudo generar el informe. Reintenta.')
+      const codigo = (err as { response?: { status?: number } })?.response?.status
+      if (codigo === 404) {
+        setPendiente(true)
+      } else {
+        setError('No se pudo cargar el informe. Reintenta.')
+      }
     } finally {
       setLoading(false)
     }
   }, [analysisId, status])
+
+  /**
+   * Genera: primera versión (sin informe) o nueva versión con
+   * `?regenerate=true`. Único punto que toca la IA.
+   */
+  const generar = useCallback(
+    async (regenerate: boolean) => {
+      if (!analysisId || status !== 'done') return
+      setGenerating(true)
+      setError('')
+      try {
+        const narrative = await generateReport(analysisId, { regenerate })
+        setReport(narrative)
+        setPendiente(false)
+      } catch {
+        setReport(null)
+        setError('No se pudo generar el informe. Reintenta.')
+      } finally {
+        setGenerating(false)
+      }
+    },
+    [analysisId, status],
+  )
 
   useEffect(() => {
     fetchReport()
@@ -486,13 +523,15 @@ const ReportGenerator: React.FC = () => {
   }
 
   const aiBadge = (() => {
+    // Sin informe (aún no generado o cargando) no hay nada que etiquetar.
+    if (!report) return null
     // `source === 'llm'` significa «al menos un campo de prosa pasó el
     // validador»: sin desglosar por campo, la UI enseñaba «IA remota» y la
     // caja «Lectura del análisis» con texto LOCAL cuando solo había pasado
     // correlation (revisión funcional #2). `field_sources` da el detalle.
-    const prosa = PROSE_FIELDS.filter(campo => report?.field_sources?.[campo] === 'llm')
-    if (!report || report.source !== 'llm' || prosa.length === 0) {
-      return { text: `IA local grounded · ${report?.model ?? ''}`, color: '#1fc8ff' }
+    const prosa = PROSE_FIELDS.filter(campo => report.field_sources?.[campo] === 'llm')
+    if (report.source !== 'llm' || prosa.length === 0) {
+      return { text: `IA local grounded · ${report.model ?? ''}`, color: '#1fc8ff' }
     }
     if (prosa.length === PROSE_FIELDS.length) {
       return { text: `IA remota · ${report.model}`, color: '#10b981' }
@@ -518,19 +557,32 @@ const ReportGenerator: React.FC = () => {
             criticidad, explicación técnica y plan de acción.
           </p>
           <div className="flex flex-wrap items-center gap-2">
-            <span
-              className="chip whitespace-normal normal-case"
-              style={{ color: aiBadge.color, background: `${aiBadge.color}1a` }}
-            >
-              {loading ? 'Redactando con IA…' : aiBadge.text}
-            </span>
-            <button
-              onClick={fetchReport}
-              disabled={loading}
-              className="btn-hud whitespace-nowrap disabled:opacity-50"
-            >
-              {loading ? 'Generando…' : 'Regenerar'}
-            </button>
+            {aiBadge && (
+              <span
+                className="chip whitespace-normal normal-case"
+                style={{ color: aiBadge.color, background: `${aiBadge.color}1a` }}
+              >
+                {generating ? 'Redactando con IA…' : aiBadge.text}
+              </span>
+            )}
+            {pendiente && !report ? (
+              <button
+                onClick={() => void generar(false)}
+                disabled={generating || loading}
+                className="btn-hud btn-primary-hud whitespace-nowrap disabled:opacity-50"
+              >
+                {generating ? 'Generando…' : 'Generar informe'}
+              </button>
+            ) : (
+              <button
+                onClick={() => void generar(true)}
+                disabled={generating || loading}
+                className="btn-hud whitespace-nowrap disabled:opacity-50"
+                title="El informe ya está generado: esta opción crea una versión nueva"
+              >
+                {generating ? 'Generando…' : 'Regenerar'}
+              </button>
+            )}
             <BlobProvider document={report ? <ReportDoc summary={summary} report={report} analysisId={analysisId} /> : <Document><Page size="A4" /></Document>}>
               {({ blob, loading: pdfLoading, error: pdfError }) => {
                 if (!report) {
@@ -574,6 +626,35 @@ const ReportGenerator: React.FC = () => {
       {error && <p className="font-mono text-[13px] text-[#f87171]">{error}</p>}
 
       {loading && !report && (
+        <div className="panel">
+          <div className="panel-body p-10 text-center">
+            <div className="mb-3 animate-pulse text-4xl">📄</div>
+            <p className="font-display text-base font-bold uppercase tracking-[0.14em] text-hud-line">
+              Cargando el informe guardado…
+            </p>
+            <p className="mt-1 font-mono text-[13px] text-[var(--text-dim)]">
+              El informe se genera una sola vez y después se sirve desde el backend.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Sin informe todavía: se ofrece generarlo (única llamada a la IA). */}
+      {pendiente && !report && !loading && !generating && (
+        <div className="panel">
+          <div className="panel-body p-10 text-center">
+            <div className="mb-3 text-4xl">🤖</div>
+            <p className="font-display text-base font-bold uppercase tracking-[0.14em] text-hud-line">
+              Este análisis todavía no tiene informe
+            </p>
+            <p className="mt-1 font-mono text-[13px] text-[var(--text-dim)]">
+              Genéralo una vez y quedarás guardado para todas las visitas posteriores.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {generating && (
         <div className="panel">
           <div className="panel-body p-10 text-center">
             <div className="mb-3 animate-pulse text-4xl">🤖</div>
