@@ -42,17 +42,21 @@ const fmt = (v: unknown): string => {
 }
 
 /**
- * Parte un texto enumerado en un tramo por paso («1) …», «2) …»).
+ * Parte un texto enumerado en un tramo por paso («1. …», «1) …», «1- …»).
  *
  * Hace falta porque `methodology` llega como UNA sola línea: el texto local lo
  * construye concatenando los pasos con espacios (ver `ai_service.py`) y la IA
  * a veces hace lo mismo. Como en HTML un <p> colapsa los saltos de línea, el
- * informe se leía «1) …2) … 3) …» pegado. Separando en cada marcador numérico
+ * informe se leía «1. …2. … 3. …» pegado. Separando en cada marcador numérico
  * se renderiza un párrafo por paso, con o sin saltos de línea en origen.
+ *
+ * Acepta los tres separadores habituales (punto, paréntesis, guion): la IA
+ * tiende a escribir «1.» y el fallback local usa «1)», así que una regex con
+ * solo paréntesis dejaba el informe de la IA entero pegado.
  */
 const splitSteps = (text: string): string[] =>
   text
-    .split(/\s(?=\d{1,2}\)\s)/)
+    .split(/\s+(?=\d{1,2}[.)-]\s)/)
     .map(step => step.trim())
     .filter(Boolean)
 
