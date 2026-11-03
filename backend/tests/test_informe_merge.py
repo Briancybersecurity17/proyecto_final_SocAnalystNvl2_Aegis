@@ -313,6 +313,50 @@ def test_build_context_propaga_event_id_counts_y_severity_mapping():
     assert ctx["severity_mapping"] == _SUMMARY["severity_mapping"]
 
 
+# ---------------------------------------------------------------------------
+# 5d. Saltos de línea literales del modelo («\n» como dos caracteres)
+# ---------------------------------------------------------------------------
+
+
+def test_orquestacion_normaliza_los_saltos_literales_del_modelo(ai, monkeypatch):
+    """El modelo a veces escribe los saltos como DOS caracteres barra-n.
+
+    JSON los parsea como `\n` literal (backslash + n): en pantalla el informe
+    se veía «…registro.xlsx\n2. Clasificación…» y `splitSteps` del frontend no
+    cortaba, porque no hay whitespace real delante del número. El prompt pide
+    saltos REALES; quien los garantiza es el backend, al montar la narrativa.
+    """
+    prosa_con_saltos = {
+        campo: texto.replace(". ", "\\n")
+        for campo, texto in _PROSA_VALIDA.items()
+    }
+    narrativa = _generar(monkeypatch, respuesta=json.dumps(prosa_con_saltos, ensure_ascii=False))
+
+    for campo in PROSA:
+        assert "\\" not in narrativa[campo], f"{campo} conserva un backslash literal"
+        assert narrativa["field_sources"][campo] == "llm", (
+            f"{campo} debía seguir viniendo del LLM tras normalizar"
+        )
+    # El separador entre pasos es un salto de línea real, no el texto «\n».
+    assert "\n" in narrativa["methodology"]
+    assert "1)" in narrativa["methodology"] and "2)" in narrativa["methodology"]
+
+
+def test_normalizar_saltos_convierte_todas_las_variantes_y_es_idempotente():
+    """\\r\\n, \\n y \\r literales pasan a salto real; el texto limpio no cambia."""
+    from ai_service import _normalizar_saltos
+
+    assert _normalizar_saltos("paso 1.\\r\\npaso 2.\\npaso 3.\\rpaso 4.") == (
+        "paso 1.\npaso 2.\npaso 3.\npaso 4."
+    )
+    limpio = "Sin backslashes aquí: 12 registros, nivel crítico."
+    assert _normalizar_saltos(limpio) == limpio
+    # Idempotente: aplicarlo dos veces deja el mismo texto.
+    sucio = "a\\nb"
+    una_vez = _normalizar_saltos(sucio)
+    assert _normalizar_saltos(una_vez) == una_vez == "a\nb"
+
+
 def test_build_context_claves_nuevas_vacias_sin_datos():
     """Un summary sin las claves (p. ej. análisis viejo) trae {} por defecto."""
     ctx = build_context({})

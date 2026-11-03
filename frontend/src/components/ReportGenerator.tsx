@@ -60,6 +60,56 @@ const splitSteps = (text: string): string[] =>
     .map(step => step.trim())
     .filter(Boolean)
 
+/**
+ * Parte la prosa del resumen ejecutivo en frases.
+ *
+ * El modelo (y el fallback local) devuelven el resumen como UN bloque: en
+ * HTML un <p> colapsa los saltos de línea y el «Lectura del análisis» salía
+ * entero pegado, sin jerarquía. Separando tras cada fin de oración —y en
+ * cada salto de línea real, que el backend ya normaliza— cada frase va en su
+ * propio párrafo, con la primera como entradilla.
+ *
+ * El corte exige mayúscula (o «¿», ««», «(») tras la puntuación: no se
+ * admite cifra tras el punto porque rompería abreviaturas numéricas
+ * («aprox. 174 eventos»); las IP y los decimales («10.10.1.1», «3.5») no
+ * llevan espacio tras el punto, así que nunca se parten.
+ */
+const splitSentences = (text: string): string[] =>
+  text
+    .split(/\n+/) // los saltos de línea reales también separan frases
+    .flatMap(parrafo => {
+      const trozos = parrafo.split(/([.!?…]["»”]?)\s+(?=[A-ZÁÉÍÓÚÑ¿«"“(])/)
+      const frases: string[] = []
+      for (let i = 0; i < trozos.length; i += 2) {
+        frases.push(`${trozos[i]}${trozos[i + 1] ?? ''}`)
+      }
+      return frases
+    })
+    .map(frase => frase.trim())
+    .filter(Boolean)
+
+/**
+ * Pinta el resumen ejecutivo frase a frase: la primera como entradilla
+ * (un poco más grande) y el resto en párrafos aparte. Compartido por la caja
+ * azul «Lectura del análisis» (IA) y el párrafo normal (fallback local).
+ */
+const ExecutiveProse: React.FC<{ text: string }> = ({ text }) => (
+  <div className="space-y-1.5">
+    {splitSentences(text).map((frase, i) => (
+      <p
+        key={i}
+        className={
+          i === 0
+            ? 'text-base font-medium leading-relaxed text-gray-800 text-justify'
+            : 'text-sm leading-relaxed text-gray-700 text-justify'
+        }
+      >
+        {frase}
+      </p>
+    ))}
+  </div>
+)
+
 /* ------------------------------------------------------------------ */
 /* Estilos del PDF                                                     */
 /* ------------------------------------------------------------------ */
@@ -105,6 +155,8 @@ const pdf = StyleSheet.create({
   h2: { fontFamily: 'Helvetica-Bold', fontSize: 11.5, color: '#111827', marginTop: 14, marginBottom: 5 },
   h3: { fontFamily: 'Helvetica-Bold', fontSize: 10, color: '#374151', marginTop: 8, marginBottom: 3 },
   para: { fontSize: 9.5, lineHeight: 15, marginBottom: 6, textAlign: 'justify' },
+  /* Entradilla del resumen ejecutivo: primera frase, un punto más grande. */
+  leadPara: { fontSize: 10.5, lineHeight: 16, marginBottom: 6, textAlign: 'justify', color: '#111827' },
   small: { fontSize: 8.5, color: '#4b5563', lineHeight: 13 },
 
   /* Resumen ejecutivo: distribución por criticidad como barra apilada. */
@@ -301,14 +353,23 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
           </View>
         )}
         {/* La justificación del riesgo vive solo en §3 (junto a la tabla de
-            niveles): en §1 se repetía tras la misma distribución (revisión #3). */}
+            niveles): en §1 se repetía tras la misma distribución (revisión #3).
+            La prosa va frase a frase, con la primera como entradilla. */}
         {report.field_sources?.executive_summary === 'llm' ? (
           <View style={pdf.aiBox}>
             <Text style={pdf.aiLabel}>Lectura del análisis</Text>
-            <Text style={pdf.para}>{report.executive_summary}</Text>
+            {splitSentences(report.executive_summary).map((frase, i) => (
+              <Text key={`ej-${i}`} style={i === 0 ? pdf.leadPara : pdf.para}>
+                {frase}
+              </Text>
+            ))}
           </View>
         ) : (
-          <Text style={pdf.para}>{report.executive_summary}</Text>
+          splitSentences(report.executive_summary).map((frase, i) => (
+            <Text key={`ej-${i}`} style={i === 0 ? pdf.leadPara : pdf.para}>
+              {frase}
+            </Text>
+          ))
         )}
 
         {/* 2. Alcance y metodología */}
@@ -753,20 +814,18 @@ const ReportGenerator: React.FC = () => {
             {/* El resumen ejecutivo se pinta SIEMPRE: la caja azul «Lectura
                 del análisis» solo cuando la IA lo redactó; si es el fallback
                 local, va como párrafo normal (antes, con `source === 'llm'`
-                no se veía nada si solo pasaba correlation — revisión #2). */}
+                no se veía nada si solo pasaba correlation — revisión #2).
+                Ambos van frase a frase (primera como entradilla): el texto
+                llega como un bloque y en un <p> todo quedaba pegado. */}
             {executiveFromAi ? (
               <div className="mt-3 rounded border border-blue-100 bg-blue-50/50 p-3">
                 <p className="text-[11px] uppercase tracking-wide text-blue-800 font-semibold mb-1">
                   Lectura del análisis
                 </p>
-                <p className="text-sm leading-relaxed text-gray-700 text-justify">
-                  {report.executive_summary}
-                </p>
+                <ExecutiveProse text={report.executive_summary} />
               </div>
             ) : (
-              <p className="text-sm leading-relaxed text-gray-700 text-justify">
-                {report.executive_summary}
-              </p>
+              <ExecutiveProse text={report.executive_summary} />
             )}
           </section>
 

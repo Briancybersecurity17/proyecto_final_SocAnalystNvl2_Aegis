@@ -718,6 +718,29 @@ _CAMPOS_INFORME = (
 )
 
 
+def _normalizar_saltos(texto: str) -> str:
+    """Convierte los saltos de línea LITERALES del modelo en saltos reales.
+
+    El prompt le pide al modelo separar los pasos con «un salto de línea real
+    (\\n)» y, a veces, el modelo escribe eso como los DOS caracteres barra-n
+    dentro de su JSON: `json.loads` los deja como `\n` literal y en pantalla
+    se ve «…registro.xlsx\\n2. Clasificación…». El `splitSteps` del frontend
+    solo corta donde hay whitespace real, así que el informe salía pegado.
+
+    Se aplica aquí (al montar la narrativa) para que valga igual para el texto
+    remoto y el local, y para que el PDF y la vista HTML reciban ya texto
+    limpio. Solo toca strings con backslash: el texto normal no se recorre.
+    """
+    if not isinstance(texto, str) or "\\" not in texto:
+        return texto
+    return (
+        texto.replace("\\r\\n", "\n")
+        .replace("\\n", "\n")
+        .replace("\\r", "\n")
+        .replace("\\t", " ")
+    )
+
+
 def _merge(fallback: Dict[str, Any], aceptados: Dict[str, str]) -> Dict[str, Any]:
     """Overlay campo a campo: solo la prosa VALIDADA reemplaza al fallback.
 
@@ -1495,6 +1518,11 @@ async def generate_report_narrative(summary: Dict[str, Any]) -> Dict[str, Any]:
         )
         aceptados = {}
     narrative = _merge(fallback, aceptados)
+    # Los saltos que el modelo escribió como «\n» (dos caracteres) llegan
+    # literales: aquí se convierten en saltos reales, único punto donde se
+    # garantiza para prosa remota y local.
+    for campo in _PROSE_FIELDS:
+        narrative[campo] = _normalizar_saltos(narrative.get(campo) or "")
     # source == "llm" SOLO con ≥1 campo de prosa aceptado; si no, el informe
     # es 100% local y `model` sigue siendo el del motor determinista.
     if any(aceptados.get(campo) for campo in _PROSE_FIELDS):
