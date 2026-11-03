@@ -64,6 +64,8 @@ try:
         generate_local_insights,
         answer_question,
         is_aggregate_question,
+        quick_answer,
+        routes_aggregate,
         stream_question,
     )
     from backend import rag_store, kb_store, ai_config, rerank, feedback_store
@@ -78,6 +80,8 @@ except ImportError:  # pragma: no cover
         generate_local_insights,
         answer_question,
         is_aggregate_question,
+        quick_answer,
+        routes_aggregate,
         stream_question,
     )
     import rag_store
@@ -1384,6 +1388,9 @@ async def _ask_prep(analysis_id: str, payload: AskRequest) -> Dict[str, Any]:
     question = (payload.question or "").strip()
     if len(question) < 3:
         raise HTTPException(status_code=400, detail="Escribe una consulta de al menos 3 caracteres")
+    # Tope de longitud: la UI ya limita a 300, pero por API podría llegar una
+    # consulta enorme y rellenar el prompt entero del modelo (prompt flooding).
+    question = question[:500]
 
     n_results = max(1, min(int(payload.n_results or 8), 20))
     level = payload.level if payload.level in LEVEL_ORDER else ""
@@ -1484,8 +1491,16 @@ async def ask_question(analysis_id: str, payload: AskRequest):
     prep = await _ask_prep(analysis_id, payload)
     entry, question, common = prep["entry"], prep["question"], prep["common"]
 
+    # --- Cortes de intención: saludo o inyección, sin recuperación ni modelo
+    rapida = quick_answer(question)
+    if rapida is not None:
+        _remember_turn(entry, question, rapida["answer"])
+        return {**common, "retrieved": 0, **rapida}
+
     # --- Consulta de agregación: cifras exactas, sin recuperación -----------
-    if is_aggregate_question(question):
+    # Solo si además habla del archivo: «¿cuántos habitantes tiene España?»
+    # contiene «cuantos» pero no dice nada de los registros.
+    if routes_aggregate(question, entry["summary"]):
         answer = await answer_question(question, [], entry["summary"], reference=None)
         _remember_turn(entry, question, str(answer.get("answer") or ""))
         return {**common, "retrieved": 0, **answer}
@@ -1537,8 +1552,17 @@ async def ask_question_stream(analysis_id: str, payload: AskRequest):
                 "data": json.dumps({"kind": kind, **data}, ensure_ascii=False, default=str),
             }
 
+        # Cortes de intención (saludo / inyección): respuesta inmediata, sin
+        # recuperación ni modelo, igual que en /ask.
+        rapida = quick_answer(question)
+        if rapida is not None:
+            _remember_turn(entry, question, rapida["answer"])
+            yield _sse("final", {**common, "retrieved": 0, **rapida})
+            return
+
         # Agregaciones: una sola respuesta con cifras exactas, sin streaming.
-        if is_aggregate_question(question):
+        # Solo si la consulta además habla del archivo (mismo criterio que /ask).
+        if routes_aggregate(question, entry["summary"]):
             answer = await answer_question(question, [], entry["summary"], reference=None)
             _remember_turn(entry, question, str(answer.get("answer") or ""))
             yield _sse("final", {**common, "retrieved": 0, **answer})

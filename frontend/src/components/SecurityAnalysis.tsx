@@ -36,6 +36,19 @@ const LEVEL_BADGE: Record<string, { color: string; bg: string }> = {
   bajo: { color: '#10b981', bg: 'rgba(16,185,129,0.16)' },
 }
 
+/**
+ * «2026-10-23T07:46:08.123456» → «2026-10-23 07:46:08».
+ *
+ * El ISO con «T» es legible para máquinas pero no para un ojo humano
+ * escaneando una columna; los fraccionarios (que trae pandas al ingerir)
+ * solo añaden ruido. Lo que no tenga forma ISO se devuelve tal cual.
+ */
+const fmtTimestamp = (value: unknown): string => {
+  const raw = String(value ?? '—')
+  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})/.exec(raw)
+  return match ? `${match[1]} ${match[2]}` : raw
+}
+
 export const SecurityAnalysis: React.FC = () => {
   const summary = useAnalysisStore(state => state.summary)
   const analysisId = useAnalysisStore(state => state.analysisId)
@@ -51,13 +64,24 @@ export const SecurityAnalysis: React.FC = () => {
   // el resto se atenúa, con su desglose en la tarjeta de debajo.
   const [focusIp, setFocusIp] = useState<string | null>(null)
   const [focusSuspHost, setFocusSuspHost] = useState<string | null>(null)
+  // Filtro por nivel de ESTA tabla (la API ya acepta `level` junto a
+  // `suspicious`): los chips filtran el listado sin tocar el resto de la
+  // sección. `levelCounts` guarda cuántos sospechosos hay por nivel para
+  // que cada chip enseñe su total real en lugar de un nombre a ciegas.
+  const [levelFilter, setLevelFilter] = useState('')
+  const [levelCounts, setLevelCounts] = useState<Record<string, number>>({})
 
   const fetchSuspicious = useCallback(async () => {
     if (!analysisId || status !== 'done') return
     setLoading(true)
     try {
       setFetchError(null)
-      const res = await getRows(analysisId, { page, pageSize, suspicious: true })
+      const res = await getRows(analysisId, {
+        page,
+        pageSize,
+        suspicious: true,
+        level: levelFilter || undefined,
+      })
       setData(res)
     } catch {
       setData(null)
@@ -65,11 +89,47 @@ export const SecurityAnalysis: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }, [analysisId, status, page])
+  }, [analysisId, status, page, levelFilter])
 
   useEffect(() => {
     fetchSuspicious()
   }, [fetchSuspicious])
+
+  // Cambiar de nivel vuelve a la página 1: sin esto, si estás en la 5 de
+  // «Todos» y pulsas «Crítico» (97 filas = 10 páginas), te quedarías en una
+  // página vacía.
+  useEffect(() => {
+    setPage(1)
+  }, [levelFilter])
+
+  // Conteos por nivel de los sospechosos (no del dataset entero): cuatro
+  // peticiones de UNA fila al montar. Si alguna falla, los chips siguen
+  // funcionando sin número — el total exacto lo ofrece la tabla al filtrar.
+  useEffect(() => {
+    if (!analysisId || status !== 'done') return
+    let cancelled = false
+    const niveles = LEVEL_ORDER
+    void (async () => {
+      try {
+        const respuestas = await Promise.all(
+          niveles.map(nivel =>
+            getRows(analysisId, { page: 1, pageSize: 1, suspicious: true, level: nivel }),
+          ),
+        )
+        if (cancelled) return
+        const counts: Record<string, number> = {}
+        niveles.forEach((nivel, index) => {
+          counts[nivel] = respuestas[index].total
+        })
+        setLevelCounts(counts)
+      } catch {
+        if (!cancelled) setLevelCounts({})
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [analysisId, status])
 
   if (!summary) {
     return (
@@ -235,8 +295,8 @@ export const SecurityAnalysis: React.FC = () => {
       <DashboardSection title="Eventos sospechosos por host">
         {hostsTruncated && (
           <p className="mb-3 font-mono text-[12px] text-[#f97316]">
-            Mostrando los {hostData.length} hosts con más volumen · hay {totalSuspHosts}
-            hosts con eventos sospechosos en total (el KPI de arriba refleja el total real).
+            Mostrando los {hostData.length} hosts con más volumen · hay {totalSuspHosts} hosts
+            con eventos sospechosos en total (el KPI de arriba refleja el total real).
           </p>
         )}
         {hostData.length ? (
@@ -303,11 +363,69 @@ export const SecurityAnalysis: React.FC = () => {
             {fetchError}
           </div>
         )}
+        <div className="mb-3 flex flex-wrap items-center gap-3">
+          <span className="font-mono text-[12px] uppercase tracking-wider text-[var(--text-dim)]">
+            Nivel
+          </span>
+          {/* Mismo patrón visual que el selector de nivel de la tabla de
+              registros: borde segmentado, tono por nivel y subrayado activo.
+              El chip «Todos» limpia el filtro; cada nivel enseña su recuento
+              real de sospechosos (97/8/5/64 en el archivo de ejemplo). */}
+          <div className="flex flex-wrap overflow-hidden border border-hud-soft">
+            <button
+              onClick={() => setLevelFilter('')}
+              aria-pressed={levelFilter === ''}
+              className="border-r border-hud-soft px-3 py-2 font-mono text-[12px] tracking-wide transition-colors last:border-r-0"
+              style={{
+                color: levelFilter === '' ? '#1fc8ff' : 'var(--text-dim)',
+                background: levelFilter === '' ? 'rgba(31,200,255,0.13)' : 'transparent',
+                boxShadow: levelFilter === '' ? 'inset 0 -2px 0 0 #1fc8ff' : undefined,
+              }}
+            >
+              {/* El total de «Todos» NO sale de `data.total`: con un nivel
+                  filtrado esa cifra es la del filtro (97) y el chip mentiría.
+                  Se suma `levelCounts` (idéntico siempre: 97+8+5+64=174);
+                  sin conteos aún, se muestra la cifra sin filtrar. */}
+              Todos
+              {Object.keys(levelCounts).length
+                ? ` (${Object.values(levelCounts).reduce((a, b) => a + b, 0)})`
+                : data && !levelFilter
+                  ? ` (${data.total})`
+                  : ''}
+            </button>
+            {LEVEL_ORDER.map(level => {
+              const tone = LEVEL_BADGE[level]?.color ?? 'var(--text-dim)'
+              const active = levelFilter === level
+              const count = levelCounts[level]
+              return (
+                <button
+                  key={level}
+                  onClick={() => setLevelFilter(active ? '' : level)}
+                  aria-pressed={active}
+                  className="border-r border-hud-soft px-3 py-2 font-mono text-[12px] tracking-wide transition-colors last:border-r-0"
+                  style={{
+                    color: active ? tone : 'var(--text-dim)',
+                    background: active ? `${tone}22` : 'transparent',
+                    boxShadow: active ? `inset 0 -2px 0 0 ${tone}` : undefined,
+                  }}
+                >
+                  {LEVEL_LABELS[level]}
+                  {count !== undefined ? ` (${count})` : ''}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
         <div className="max-h-96 overflow-auto border border-hud-soft bg-inset/70">
           <table className="hud-table min-w-full">
             <caption className="sr-only">Eventos sospechosos identificados en el archivo</caption>
             <thead className="sticky top-0 z-[1]">
               <tr>
+                {/* Log_ID va primero: es la clave con la que el asistente cita
+                    cada evento («EVT-00002»), así el analista puede cruzar la
+                    respuesta del RAG con la fila exacta sin buscar a ojo. */}
+                <th scope="col" className="whitespace-nowrap">Log ID</th>
                 <th scope="col" className="whitespace-nowrap">Timestamp</th>
                 <th scope="col" className="whitespace-nowrap">Host</th>
                 <th scope="col" className="whitespace-nowrap">Event ID</th>
@@ -326,7 +444,10 @@ export const SecurityAnalysis: React.FC = () => {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.2, delay: Math.min(idx, 12) * 0.035, ease: 'easeOut' }}
                 >
-                  <td className="whitespace-nowrap">{String(row.Timestamp ?? '—')}</td>
+                  <td className="whitespace-nowrap text-[var(--text-dim)]">
+                    {String(row.Log_ID ?? '—')}
+                  </td>
+                  <td className="whitespace-nowrap">{fmtTimestamp(row.Timestamp)}</td>
                   <td className="whitespace-nowrap font-semibold text-hud-fg">{String(row.Hostname ?? '—')}</td>
                   <td className="whitespace-nowrap">{String(row.Event_ID ?? '—')}</td>
                   <td className="whitespace-nowrap">{String(row.Source_IP ?? '—')}</td>
@@ -349,21 +470,27 @@ export const SecurityAnalysis: React.FC = () => {
                       {LEVEL_LABELS[row.risk_level] ?? row.risk_level}
                     </span>
                   </td>
-                  <td className="max-w-sm text-[11.5px] text-[var(--text-dim)]" title={row.risk_reason}>
+                  {/* Igual que Descripción: una sola línea con tooltip. Sin
+                      esto la justificación (124+ caracteres) se comprime a
+                      ~137 px y la fila medía 204 px en lugar de ~40 px. */}
+                  <td
+                    className="max-w-[240px] truncate text-[11.5px] text-[var(--text-dim)]"
+                    title={row.risk_reason}
+                  >
                     {row.risk_reason}
                   </td>
                 </motion.tr>
               ))}
               {loading && (
                 <tr>
-                  <td colSpan={hasResult ? 8 : 7} className="px-3 py-6 text-center text-[var(--text-dim)]">
+                  <td colSpan={hasResult ? 9 : 8} className="px-3 py-6 text-center text-[var(--text-dim)]">
                     Cargando…
                   </td>
                 </tr>
               )}
               {data && !loading && data.rows.length === 0 && (
                 <tr>
-                  <td colSpan={hasResult ? 8 : 7} className="px-3 py-6 text-center text-[var(--text-dim)]">
+                  <td colSpan={hasResult ? 9 : 8} className="px-3 py-6 text-center text-[var(--text-dim)]">
                     No se encontraron eventos sospechosos
                   </td>
                 </tr>

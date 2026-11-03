@@ -52,6 +52,9 @@ const WARNING_LABEL: Record<string, string> = {
   grounding_rechazado: 'respuesta sustituida: el modelo citó Log_ID inexistentes',
   stream_interrumpido: 'respuesta sustituida: el modelo se interrumpió a mitad',
   llm_sin_respuesta: 'respuesta local: el modelo no devolvió texto',
+  fuera_de_tema: 'fuera del tema: no aparece en tus registros',
+  consulta_bloqueada: 'consulta bloqueada: instrucciones ajenas a los registros',
+  cortesia: 'saludo: sin consulta sobre los registros',
 }
 
 interface ChatMessage {
@@ -67,6 +70,13 @@ interface ChatMessage {
   warning?: string
   /** 'saved' = la corrección alimentó la memoria de criterio del analista. */
   feedback?: 'saved' | 'error'
+  /**
+   * Usuario abrió las coincidencias débiles de esta respuesta. Sin esto, una
+   * consulta fuera de tema pintaba 8 tarjetas rojas de «similitud 2%» justo
+   * debajo del «no aparece en tus registros»; ahora vienen colapsadas tras
+   * un botón que muestra la mejor similitud.
+   */
+  showWeak?: boolean
 }
 
 type RagStatus = RagStatusResponse
@@ -544,8 +554,8 @@ export const AssistantChat: React.FC = () => {
                     <div className="mt-3 space-y-2 border-t border-hud-soft pt-3">
                       <div className="flex flex-wrap items-center gap-2 text-[11px]">
                         <span className="chip whitespace-normal normal-case text-hud-line">
-                          {message.response.mode === 'aggregate'
-                            ? message.response.summary_line
+                          {message.response.mode === 'aggregate' || !message.response.retrieved
+                            ? message.response.summary_line || 'sin eventos recuperados'
                             : `${message.response.retrieved} eventos recuperados`}
                         </span>
                         <span className="chip whitespace-normal normal-case text-[var(--text-dim)]">
@@ -563,6 +573,19 @@ export const AssistantChat: React.FC = () => {
                             baja similitud
                           </span>
                         )}
+                        {/* Cortes de intención (tema ajeno, inyección,
+                            saludo): viajan en `warnings` y se etiquetan aquí,
+                            no en el evento `fallback`. */}
+                        {message.response.warnings
+                          .filter(w => w !== 'baja_confianza' && !!WARNING_LABEL[w])
+                          .map(warning => (
+                            <span
+                              key={warning}
+                              className="chip whitespace-normal normal-case text-[#ffb020]"
+                            >
+                              {WARNING_LABEL[warning]}
+                            </span>
+                          ))}
                         {message.warning && (
                           <span className="chip whitespace-normal normal-case text-[#ffb020]">
                             {WARNING_LABEL[message.warning] ?? message.warning}
@@ -571,57 +594,87 @@ export const AssistantChat: React.FC = () => {
                       </div>
 
                       {message.response.evidence.length > 0 && (
-                        <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-                          {message.response.evidence.map((item, idx) => {
-                            const tone = LEVEL_BADGE[item.level] ?? '#7280a3'
-                            return (
-                              <div
-                                key={`${item.log_id}-${idx}`}
-                                className="border border-hud-soft bg-[var(--bg-void)] p-2.5"
+                        <>
+                          {/* Evidencia débil colapsada: si la similitud no
+                              alcanzó el umbral, las tarjetas no aportan —
+                              se ofrecen tras un botón con la mejor
+                              similitud en vez de inundar el hilo. */}
+                          {message.response.warnings.includes('baja_confianza') &&
+                            !message.showWeak && (
+                              <button
+                                onClick={() =>
+                                  setMessages(prev =>
+                                    prev.map(m =>
+                                      m.id === message.id
+                                        ? { ...m, showWeak: true }
+                                        : m,
+                                    ),
+                                  )
+                                }
+                                className="btn-hud w-full text-left"
                               >
-                                <div className="mb-1.5 flex items-center justify-between gap-2">
-                                  <span className="font-mono text-xs font-semibold text-hud-fg">
-                                    {item.log_id}
-                                  </span>
-                                  <span
-                                    className="chip text-[10px]"
-                                    style={{ color: tone, background: `${tone}1f` }}
+                                {`ver coincidencias débiles (${Math.round(
+                                  Math.max(
+                                    ...message.response.evidence.map(e => e.relevance),
+                                  ) * 100,
+                                )}%)`}
+                              </button>
+                            )}
+                          {(!message.response.warnings.includes('baja_confianza') ||
+                            message.showWeak) && (
+                            <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                              {message.response.evidence.map((item, idx) => {
+                                const tone = LEVEL_BADGE[item.level] ?? '#7280a3'
+                                return (
+                                  <div
+                                    key={`${item.log_id}-${idx}`}
+                                    className="border border-hud-soft bg-[var(--bg-void)] p-2.5"
                                   >
-                                    {LEVEL_LABEL[item.level] ?? item.level}
-                                  </span>
-                                </div>
-                                <div className="space-y-0.5 font-mono text-[11px] text-[var(--text-dim)]">
-                                  <div className="truncate text-[var(--text)]" title={item.description}>
-                                    {item.description}
+                                    <div className="mb-1.5 flex items-center justify-between gap-2">
+                                      <span className="font-mono text-xs font-semibold text-hud-fg">
+                                        {item.log_id}
+                                      </span>
+                                      <span
+                                        className="chip text-[10px]"
+                                        style={{ color: tone, background: `${tone}1f` }}
+                                      >
+                                        {LEVEL_LABEL[item.level] ?? item.level}
+                                      </span>
+                                    </div>
+                                    <div className="space-y-0.5 font-mono text-[11px] text-[var(--text-dim)]">
+                                      <div className="truncate text-[var(--text)]" title={item.description}>
+                                        {item.description}
+                                      </div>
+                                      <div>
+                                        host {item.host} · origen {item.source_ip}
+                                      </div>
+                                      <div>
+                                        Event_ID {item.event_id} · {item.severity}
+                                        {item.result && item.result !== '—' && (
+                                          <span className="text-[var(--text)]"> · Result {item.result}</span>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div className="mt-2">
+                                      <div className="h-1.5 overflow-hidden bg-[var(--bg-panel)]">
+                                        <div
+                                          className="h-full bg-hud-line"
+                                          style={{
+                                            width: `${Math.round(item.relevance * 100)}%`,
+                                            boxShadow: '0 0 8px #1fc8ff',
+                                          }}
+                                        />
+                                      </div>
+                                      <div className="mt-0.5 text-[10px] text-[var(--text-dim)]">
+                                        similitud {(item.relevance * 100).toFixed(0)}%
+                                      </div>
+                                    </div>
                                   </div>
-                                  <div>
-                                    host {item.host} · origen {item.source_ip}
-                                  </div>
-                                  <div>
-                                    Event_ID {item.event_id} · {item.severity}
-                                    {item.result && item.result !== '—' && (
-                                      <span className="text-[var(--text)]"> · Result {item.result}</span>
-                                    )}
-                                  </div>
-                                </div>
-                                <div className="mt-2">
-                                  <div className="h-1.5 overflow-hidden bg-[var(--bg-panel)]">
-                                    <div
-                                      className="h-full bg-hud-line"
-                                      style={{
-                                        width: `${Math.round(item.relevance * 100)}%`,
-                                        boxShadow: '0 0 8px #1fc8ff',
-                                      }}
-                                    />
-                                  </div>
-                                  <div className="mt-0.5 text-[10px] text-[var(--text-dim)]">
-                                    similitud {(item.relevance * 100).toFixed(0)}%
-                                  </div>
-                                </div>
-                              </div>
-                            )
-                          })}
-                        </div>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </>
                       )}
 
                       {/* Vía explícita de aprendizaje: solo con la respuesta ya
