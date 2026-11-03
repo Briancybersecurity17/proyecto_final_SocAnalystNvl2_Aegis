@@ -17,6 +17,7 @@ import {
   fmtCount,
   useChartMotion,
   ChartClickState,
+  buildTimeBuckets,
 } from '../charts'
 import {
   BarChart,
@@ -35,6 +36,10 @@ const LEVEL_BADGE: Record<string, { color: string; bg: string }> = {
   medio: { color: '#facc15', bg: 'rgba(250,204,21,0.16)' },
   bajo: { color: '#10b981', bg: 'rgba(16,185,129,0.16)' },
 }
+
+/** Barras visibles por defecto en los gráficos de hosts/IPs (el resto se
+ *  revela con el botón «ver los N restantes»). */
+const TOP_VISIBLE = 6
 
 /**
  * «2026-10-23T07:46:08.123456» → «2026-10-23 07:46:08».
@@ -64,6 +69,11 @@ export const SecurityAnalysis: React.FC = () => {
   // el resto se atenúa, con su desglose en la tarjeta de debajo.
   const [focusIp, setFocusIp] = useState<string | null>(null)
   const [focusSuspHost, setFocusSuspHost] = useState<string | null>(null)
+  // Las listas de hosts/IPs viajan completas (hasta 50) pero se pintan de 6
+  // en 6: este par de estados controla el despliegue del resto con el botón
+  // «ver los N restantes / ocultar» de cada gráfico.
+  const [showAllIps, setShowAllIps] = useState(false)
+  const [showAllHosts, setShowAllHosts] = useState(false)
   // Filtro por nivel de ESTA tabla (la API ya acepta `level` junto a
   // `suspicious`): los chips filtran el listado sin tocar el resto de la
   // sección. `levelCounts` guarda cuántos sospechosos hay por nivel para
@@ -157,19 +167,34 @@ export const SecurityAnalysis: React.FC = () => {
     .map(([host, count]) => ({ host, count: toCount(count) }))
     .sort((a, b) => b.count - a.count)
 
+  // Por defecto solo se pintan los TOP_VISIBLE primeros (el orden ya viene
+  // por volumen); el botón de cada gráfico despliega el resto de la lista.
+  const visibleIps = showAllIps ? ipData : ipData.slice(0, TOP_VISIBLE)
+  const visibleHosts = showAllHosts ? hostData : hostData.slice(0, TOP_VISIBLE)
+
+  // Dimensión temporal de los SOSPECHOSOS (no del dataset entero): misma
+  // regla de bucketing que la serie general — buildTimeBuckets — para que el
+  // eje horario/diario sea idéntico en ambas vistas. Sin Timestamp el backend
+  // trae las series vacías y la sección no se pinta.
+  const suspBuckets = buildTimeBuckets({
+    events_per_day_by_level: summary.suspicious_per_day_by_level ?? {},
+    events_per_hour_by_level: summary.suspicious_per_hour_by_level ?? {},
+  })
+
   const selectedIp = focusIp ? ipData.find(item => item.ip === focusIp) ?? null : null
   const selectedSuspHost = focusSuspHost
     ? hostData.find(item => item.host === focusSuspHost) ?? null
     : null
   const totalSuspicious = toCount(summary.suspicious_events)
   // Los KPIs enseñan los TOTALES distinct de hosts/IPs sospechosos, no la
-  // longitud de las listas de gráfica (que el backend recorta a top-6):
-  // con el archivo real eran 11 hosts / 10 IPs y aquí se enseñaba «6».
+  // longitud de las listas de gráfica (que el backend acota a 50): con el
+  // archivo real eran 11 hosts / 10 IPs y aquí se enseñaba «6».
   // El fallback a la longitud de la lista cubre summaries antiguos en caché.
   const totalSuspHosts = summary.suspicious_hosts_total ?? hostData.length
   const totalSuspIps = summary.suspicious_ips_total ?? ipData.length
-  // Si el total supera lo que las gráficas pueden mostrar, se avisa: el
+  // Si el total supera lo que el backend envía (tope de 50), se avisa: el
   // analista debe saber que las barras son una selección, no el universo.
+  // Con ≤50 hosts/IPs no hay recorte y el aviso no aparece.
   const hostsTruncated = totalSuspHosts > hostData.length
   const ipsTruncated = totalSuspIps > ipData.length
   // La columna «Resultado» solo existe si el archivo la trae: si no, no se
@@ -215,6 +240,56 @@ export const SecurityAnalysis: React.FC = () => {
         </div>
       </div>
 
+      {/* Dimensión temporal de los sospechosos: se oculta sola si el archivo
+          no trae Timestamp (el backend devuelve las series vacías). Sin
+          pincelado ni clic: esta vista es para escanear concentración en el
+          tiempo, la exploración fina la hace la tabla de abajo. */}
+      {suspBuckets.points.length > 0 && (
+        <DashboardSection title="Eventos sospechosos en el tiempo">
+          <p className="mb-3 font-mono text-[12.5px] leading-relaxed text-[var(--text-dim)]">
+            {suspBuckets.hourly
+              ? 'Agrupación por hora de los eventos marcados como sospechosos; los tramos sin actividad no aparecen.'
+              : 'Agrupación por día de los eventos marcados como sospechosos.'}
+          </p>
+          <ResponsiveContainer width="100%" height={340}>
+            <BarChart
+              data={suspBuckets.points}
+              margin={{ top: 14, right: 20, left: 8, bottom: 8 }}
+            >
+              <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="label" tick={AXIS_TICK} />
+              <YAxis allowDecimals={false} tick={AXIS_TICK} />
+              <Tooltip
+                cursor={BAR_CURSOR}
+                contentStyle={TOOLTIP_STYLE}
+                formatter={(value: number, name) => [`${fmtCount(value)} eventos`, name]}
+                labelFormatter={label => {
+                  const point = suspBuckets.points.find(p => p.label === String(label))
+                  return point ? `${point.detail} · ${fmtCount(point.total)} sospechosos` : String(label)
+                }}
+              />
+              <Legend />
+              {LEVEL_ORDER.map((level, index) => (
+                <Bar
+                  key={level}
+                  dataKey={level}
+                  name={LEVEL_LABELS[level]}
+                  stackId="susp"
+                  fill={LEVEL_BADGE[level]?.color ?? '#888'}
+                  isAnimationActive={chartMotion.isAnimationActive}
+                  animationDuration={chartMotion.duration}
+                  animationBegin={index * 40}
+                />
+              ))}
+            </BarChart>
+          </ResponsiveContainer>
+          <p className="mt-2 font-mono text-[12px] text-[var(--text-dim)]">
+            Los volúmenes por sí solos no prueban malicia: sirven para priorizar la revisión
+            de esos tramos junto al resto de señales.
+          </p>
+        </DashboardSection>
+      )}
+
       {/* Correlation: IP -> hosts */}
       <DashboardSection title="Correlación: IP de origen → hosts impactados">
         <p className="mb-3 font-mono text-[12.5px] leading-relaxed text-[var(--text-dim)]">
@@ -227,10 +302,10 @@ export const SecurityAnalysis: React.FC = () => {
             sospechosas en total (el KPI de arriba refleja el total real).
           </p>
         )}
-        {ipData.length ? (
-          <ResponsiveContainer width="100%" height={Math.max(280, ipData.length * 48)}>
+        {visibleIps.length ? (
+          <ResponsiveContainer width="100%" height={Math.max(280, visibleIps.length * 48)}>
             <BarChart
-              data={ipData}
+              data={visibleIps}
               layout="vertical"
               margin={{ top: 8, right: 44, left: 12, bottom: 8 }}
               onClick={pickIp}
@@ -257,7 +332,7 @@ export const SecurityAnalysis: React.FC = () => {
               >
                 {/* Recharts lee las celdas desde los hijos de cada serie; el i-ésimo
                     <Cell> se aplica al i-ésimo segmento (IP) de cada barra. */}
-                {selectionCells(ipData, focusIp, i => i.ip, '#f97316', true, '#06b6d4')}
+                {selectionCells(visibleIps, focusIp, i => i.ip, '#f97316', true, '#06b6d4')}
               </Bar>
               <Bar
                 dataKey="events"
@@ -267,7 +342,7 @@ export const SecurityAnalysis: React.FC = () => {
                 animationDuration={chartMotion.duration}
                 label={{ position: 'right', fontSize: 10, fill: '#bfefff' }}
               >
-                {selectionCells(ipData, focusIp, i => i.ip, '#f97316', true, '#f97316')}
+                {selectionCells(visibleIps, focusIp, i => i.ip, '#f97316', true, '#f97316')}
               </Bar>
             </BarChart>
           </ResponsiveContainer>
@@ -275,6 +350,21 @@ export const SecurityAnalysis: React.FC = () => {
           <p className="py-8 text-center font-mono text-[13px] text-[var(--text-dim)]">
             No hay IP sospechosas disponibles en este análisis.
           </p>
+        )}
+
+        {/* La lista llega completa (hasta 50): aquí solo se pinta el top-6.
+            Este botón despliega el resto —antes no existía y el analista
+            perdía las IP de abajo sin forma de verlas—. */}
+        {ipData.length > TOP_VISIBLE && (
+          <button
+            onClick={() => setShowAllIps(v => !v)}
+            className="btn-hud mt-3"
+            aria-expanded={showAllIps}
+          >
+            {showAllIps
+              ? 'Ocultar'
+              : `Ver los ${ipData.length - TOP_VISIBLE} restantes`}
+          </button>
         )}
 
         <p className="mt-2 font-mono text-[12px] text-[var(--text-dim)]">
@@ -308,10 +398,10 @@ export const SecurityAnalysis: React.FC = () => {
             con eventos sospechosos en total (el KPI de arriba refleja el total real).
           </p>
         )}
-        {hostData.length ? (
-          <ResponsiveContainer width="100%" height={Math.max(280, hostData.length * 46)}>
+        {visibleHosts.length ? (
+          <ResponsiveContainer width="100%" height={Math.max(280, visibleHosts.length * 46)}>
             <BarChart
-              data={hostData}
+              data={visibleHosts}
               layout="vertical"
               margin={{ top: 8, right: 44, left: 12, bottom: 8 }}
               onClick={pickSuspHost}
@@ -332,7 +422,7 @@ export const SecurityAnalysis: React.FC = () => {
                 animationDuration={chartMotion.duration}
                 label={{ position: 'right', fontSize: 11, fill: '#bfefff' }}
               >
-                {selectionCells(hostData, focusSuspHost, h => h.host, '#f97316')}
+                {selectionCells(visibleHosts, focusSuspHost, h => h.host, '#f97316')}
               </Bar>
             </BarChart>
           </ResponsiveContainer>
@@ -340,6 +430,20 @@ export const SecurityAnalysis: React.FC = () => {
           <p className="py-8 text-center font-mono text-[13px] text-[var(--text-dim)]">
             El análisis no registró eventos sospechosos por host.
           </p>
+        )}
+
+        {/* Mismo despliegue que en el gráfico de IPs: top-6 por defecto y
+            el resto de la lista (hasta 50) bajo demanda. */}
+        {hostData.length > TOP_VISIBLE && (
+          <button
+            onClick={() => setShowAllHosts(v => !v)}
+            className="btn-hud mt-3"
+            aria-expanded={showAllHosts}
+          >
+            {showAllHosts
+              ? 'Ocultar'
+              : `Ver los ${hostData.length - TOP_VISIBLE} restantes`}
+          </button>
         )}
 
         <p className="mt-2 font-mono text-[12px] text-[var(--text-dim)]">

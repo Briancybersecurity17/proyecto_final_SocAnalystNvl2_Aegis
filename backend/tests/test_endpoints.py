@@ -107,6 +107,94 @@ def test_summary_totales_sospechosos_respetan_el_filtrado(client, analysis_id):
     assert res["suspicious_ips_total"] == 2
 
 
+def test_summary_serie_sospechosos_por_dia_y_hora(client, analysis_id):
+    # Hueco 1 de la revision funcional: el panel situaba en el tiempo TODO el
+    # dataset, pero no los eventos marcados — sin este desglose no se ve si los
+    # sospechosos se concentran en un dia/hora concreto.
+    res = client.get(f"/api/analysis/{analysis_id}/summary").json()
+    por_dia = res["suspicious_per_day_by_level"]
+    por_hora = res["suspicious_per_hour_by_level"]
+    # Verdad del dataset de 12 filas: las 6 sospechosas (2,3,4,6,8,11) caen en
+    # 3 dias: 3 el dia 10, 2 el dia 11 y 1 el dia 12.
+    assert set(por_dia) == {"2026-01-10", "2026-01-11", "2026-01-12"}
+    assert {d: sum(n.values()) for d, n in por_dia.items()} == {
+        "2026-01-10": 3, "2026-01-11": 2, "2026-01-12": 1,
+    }
+    # Claves horarias con el MISMO formato que events_per_hour_by_level
+    # ("YYYY-MM-DD HH:00"): es lo que consume buildTimeBuckets del frontend.
+    assert set(por_hora) == {
+        "2026-01-10 09:00", "2026-01-10 11:00", "2026-01-10 16:00",
+        "2026-01-11 09:00", "2026-01-11 17:00", "2026-01-12 13:00",
+    }
+    # Ambas series suman exactamente los eventos sospechosos: no se pierde ni
+    # se inventa ningun registro al pivotar.
+    assert sum(sum(n.values()) for n in por_dia.values()) == res["suspicious_events"] == 6
+    assert sum(sum(n.values()) for n in por_hora.values()) == 6
+    # Reparto por nivel del dia mas cargado: fila 4 (Warning -> critico) +
+    # filas 2 y 3 (High -> alto).
+    assert por_dia["2026-01-10"] == {"critico": 1, "alto": 2, "medio": 0, "bajo": 0}
+
+
+def test_summary_sospechosos_sin_timestamp_no_inventa_series(client, analysis_id_minimo):
+    # El archivo minimo no trae columna Timestamp: las series deben venir
+    # vacias (el panel no pinta la seccion), nunca con fechas inventadas.
+    res = client.get(f"/api/analysis/{analysis_id_minimo}/summary").json()
+    assert res["suspicious_per_day_by_level"] == {}
+    assert res["suspicious_per_hour_by_level"] == {}
+
+
+@pytest.fixture(scope="module")
+def analysis_many_hosts(client):
+    """8 filas sospechosas con host e IP distintos cada una.
+
+    Superan el antiguo recorte top-6 del builder: sin el cambio, las listas
+    venian cortadas y el panel no tenia como mostrar el resto.
+    """
+    filas = [
+        (f"EVT-{n:05d}", f"2026-04-0{n} 08:00", f"H-{n:02d}", 4625, "admin",
+         f"10.20.30.{n}", f"H-{n:02d}", "Windows",
+         "An account failed to log on with an invalid account", "Failure", "High")
+        for n in range(1, 9)
+    ]
+    buffer = io.BytesIO()
+    pd.DataFrame(filas, columns=COLUMNAS).to_excel(buffer, index=False, engine="openpyxl")
+    buffer.seek(0)
+    return _subir_y_esperar(client, "hosts-sospechosos.xlsx", buffer)
+
+
+def test_summary_listas_sospechosas_no_se_recortan_a_6(client, analysis_many_hosts):
+    res = client.get(f"/api/analysis/{analysis_many_hosts}/summary").json()
+    assert res["suspicious_events"] == 8
+    # Hueco 2 de la revision funcional: antes head(6) dejaba fuera a 2 hosts
+    # y 2 IPs sin ningun boton «ver todos» que los recuperara.
+    assert len(res["suspicious_correlations"]) == 8
+    assert len(res["suspicious_by_ip"]) == 8
+    assert set(res["suspicious_correlations"]) == {f"H-{n:02d}" for n in range(1, 9)}
+    # Los totales distinct siguen viajando aparte, intactos.
+    assert res["suspicious_hosts_total"] == 8
+    assert res["suspicious_ips_total"] == 8
+
+
+def test_summary_listas_sospechosas_tienen_tope_50(client):
+    # Proteccion contra archivos con miles de hosts: la lista viaja completa
+    # hasta 50 y el total distinct no se recorta nunca.
+    filas = [
+        (f"EVT-{n:03d}", "2026-05-01 08:00", f"H-{n:03d}", 4625, "admin",
+         f"192.168.1.{n}", f"H-{n:03d}", "Windows",
+         "An account failed to log on with an invalid account", "Failure", "High")
+        for n in range(1, 61)
+    ]
+    buffer = io.BytesIO()
+    pd.DataFrame(filas, columns=COLUMNAS).to_excel(buffer, index=False, engine="openpyxl")
+    buffer.seek(0)
+    many_id = _subir_y_esperar(client, "top50.xlsx", buffer)
+    res = client.get(f"/api/analysis/{many_id}/summary").json()
+    assert len(res["suspicious_correlations"]) == 50
+    assert len(res["suspicious_by_ip"]) == 50
+    assert res["suspicious_hosts_total"] == 60
+    assert res["suspicious_ips_total"] == 60
+
+
 def test_summary_ventana_temporal_acota(client, analysis_id):
     res = client.get(f"/api/analysis/{analysis_id}/summary",
                      params={"from": "2026-01-11T00:00:00", "to": "2026-01-12T23:59:59"}).json()

@@ -699,6 +699,39 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
     suspicious_rows = df[df["_suspicious"]]
     suspicious_details = _records(suspicious_rows[detail_cols + ["_reason"]].head(10)) if suspicious_events else []
 
+    # --- series temporales SOLO de los sospechosos --------------------------
+    # El panel ya situaba en el tiempo TODO el dataset, pero no los eventos
+    # marcados: sin este desglose no se ve si los sospechosos se concentran en
+    # un dia/hora concreto. Mismo pivote y mismo formato de claves
+    # ("YYYY-MM-DD" / "YYYY-MM-DD HH:00") que events_per_* para que el
+    # frontend reutilice buildTimeBuckets sin logica paralela. Sin columna
+    # Timestamp no se calcula nada: la serie viene vacia, nunca inventada.
+    suspicious_per_day_by_level: Dict[str, Dict[str, int]] = {}
+    suspicious_per_hour_by_level: Dict[str, Dict[str, int]] = {}
+    if suspicious_events and "Timestamp" in df.columns:
+        susp_dated = suspicious_rows.dropna(subset=["Timestamp"])
+        if len(susp_dated):
+            susp_pivot = susp_dated.groupby(
+                [susp_dated["Timestamp"].dt.date, "_level"]
+            ).size().unstack(fill_value=0)
+            for lvl in LEVEL_ORDER:
+                if lvl not in susp_pivot.columns:
+                    susp_pivot[lvl] = 0
+            suspicious_per_day_by_level = {
+                str(day): {lvl: int(susp_pivot.loc[day, lvl]) for lvl in LEVEL_ORDER}
+                for day in susp_pivot.index
+            }
+
+            susp_hour_keys = susp_dated["Timestamp"].dt.strftime("%Y-%m-%d %H")
+            susp_pivot_h = susp_dated.groupby([susp_hour_keys, "_level"]).size().unstack(fill_value=0)
+            for lvl in LEVEL_ORDER:
+                if lvl not in susp_pivot_h.columns:
+                    susp_pivot_h[lvl] = 0
+            suspicious_per_hour_by_level = {
+                f"{stamp}:00": {lvl: int(susp_pivot_h.loc[stamp, lvl]) for lvl in LEVEL_ORDER}
+                for stamp in sorted(susp_pivot_h.index)
+            }
+
     # --- HTTP error responses (Result = 4xx/5xx) ---------------------------
     # Registros con un código de respuesta HTTP de error en el campo Result:
     # son la base del hallazgo «respuestas HTTP de error» del informe, con
@@ -723,13 +756,16 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
     suspicious_correlations: Dict[str, int] = {}
     suspicious_by_ip: List[Dict[str, Any]] = []
     if suspicious_events and "Hostname" in df.columns:
-        suspicious_correlations = _counts(suspicious_rows["Hostname"], n=6)
+        # Listas completas con tope de 50 (antes top-6: el panel no tenia
+        # como enseñar el resto). El tope protege contra archivos con miles
+        # de hosts; el total distinct viaja aparte, sin recorte.
+        suspicious_correlations = _counts(suspicious_rows["Hostname"], n=50)
     if suspicious_events and "Source_IP" in df.columns and "Hostname" in df.columns:
         grouped_ip = (
             suspicious_rows.groupby("Source_IP")
             .agg(events=("Source_IP", "size"), hosts=("Hostname", "nunique"))
             .sort_values(["hosts", "events"], ascending=False)
-            .head(6)
+            .head(50)
         )
         suspicious_by_ip = [
             {"ip": str(ip), "events": int(r.events), "hosts": int(r.hosts)}
@@ -742,7 +778,7 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
             suspicious_rows.groupby("Source_IP")
             .size()
             .sort_values(ascending=False)
-            .head(6)
+            .head(50)
         )
         suspicious_by_ip = [
             {"ip": str(ip), "events": int(n), "hosts": 0}
@@ -750,7 +786,7 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
         ]
 
     # --- totales sin truncar de hosts e IPs sospechosos ---------------------
-    # Revisión funcional #1: las listas de arriba son top-6 (head(6)) y el
+    # Revisión funcional #1: las listas de arriba van con tope de 50 y el
     # dashboard las estaba mostrando como si fueran los totales («6 hosts»
     # cuando el archivo real tenía 11). Los conteos distinct reales viajan
     # aparte, sin tocar las listas que alimentan las gráficas.
@@ -852,6 +888,8 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
         "suspicious_by_ip": suspicious_by_ip,
         "suspicious_hosts_total": suspicious_hosts_total,
         "suspicious_ips_total": suspicious_ips_total,
+        "suspicious_per_day_by_level": suspicious_per_day_by_level,
+        "suspicious_per_hour_by_level": suspicious_per_hour_by_level,
         "behavior_patterns": behavior_patterns,
     }
 

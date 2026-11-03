@@ -109,12 +109,16 @@ export interface AnalysisSummary {
   suspicious_correlations: Record<string, number>
   suspicious_by_ip: SuspiciousIp[]
   /**
-   * Totales reales (sin el recorte top-6 de las listas anteriores): el
+   * Totales reales (sin el tope de 50 de las listas anteriores): el
    * dashboard debe enseñar el número de hosts/IPs distintos que tocan
-   * eventos sospechosos, aunque las gráficas solo muestren los 6 primeros.
+   * eventos sospechosos, aunque las gráficas muestren como máximo 50.
    */
   suspicious_hosts_total?: number
   suspicious_ips_total?: number
+  /** Serie temporal SOLO de sospechosos: "2026-01-10" → niveles. */
+  suspicious_per_day_by_level?: Record<string, Record<string, number>>
+  /** Serie por fecha+hora de sospechosos: "2026-01-10 09:00" → niveles. */
+  suspicious_per_hour_by_level?: Record<string, Record<string, number>>
   sheet_names?: string[]
   missing_columns?: string[]
   file_name?: string
