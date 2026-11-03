@@ -71,6 +71,22 @@ export const SecurityAnalysis: React.FC = () => {
   const [levelFilter, setLevelFilter] = useState('')
   const [levelCounts, setLevelCounts] = useState<Record<string, number>>({})
 
+  /**
+   * Cambia el filtro de nivel y vuelve a la página 1 en el MISMO handler.
+   *
+   * Si el reset viviera en un `useEffect`, React renderizaría primero con el
+   * nivel nuevo y la página vieja (petición basura) y después con la página
+   * corregida: dos llamadas y posible carrera. Aquí ambos `setState` se
+   * agrupan en un render único.
+   *
+   * Sin esto, si estás en la página 5 de «Todos» y pulsas «Crítico» (97 filas
+   * = 10 páginas con pageSize 10) te quedarías en una página vacía.
+   */
+  const pickLevel = (nivel: string) => {
+    setLevelFilter(prev => (prev === nivel ? '' : nivel))
+    setPage(1)
+  }
+
   const fetchSuspicious = useCallback(async () => {
     if (!analysisId || status !== 'done') return
     setLoading(true)
@@ -94,13 +110,6 @@ export const SecurityAnalysis: React.FC = () => {
   useEffect(() => {
     fetchSuspicious()
   }, [fetchSuspicious])
-
-  // Cambiar de nivel vuelve a la página 1: sin esto, si estás en la 5 de
-  // «Todos» y pulsas «Crítico» (97 filas = 10 páginas), te quedarías en una
-  // página vacía.
-  useEffect(() => {
-    setPage(1)
-  }, [levelFilter])
 
   // Conteos por nivel de los sospechosos (no del dataset entero): cuatro
   // peticiones de UNA fila al montar. Si alguna falla, los chips siguen
@@ -373,7 +382,10 @@ export const SecurityAnalysis: React.FC = () => {
               real de sospechosos (97/8/5/64 en el archivo de ejemplo). */}
           <div className="flex flex-wrap overflow-hidden border border-hud-soft">
             <button
-              onClick={() => setLevelFilter('')}
+              onClick={() => {
+                setLevelFilter('')
+                setPage(1)
+              }}
               aria-pressed={levelFilter === ''}
               className="border-r border-hud-soft px-3 py-2 font-mono text-[12px] tracking-wide transition-colors last:border-r-0"
               style={{
@@ -400,7 +412,7 @@ export const SecurityAnalysis: React.FC = () => {
               return (
                 <button
                   key={level}
-                  onClick={() => setLevelFilter(active ? '' : level)}
+                  onClick={() => pickLevel(level)}
                   aria-pressed={active}
                   className="border-r border-hud-soft px-3 py-2 font-mono text-[12px] tracking-wide transition-colors last:border-r-0"
                   style={{
