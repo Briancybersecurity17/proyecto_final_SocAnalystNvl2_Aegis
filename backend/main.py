@@ -856,8 +856,16 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
 # Background processing
 # ---------------------------------------------------------------------------
 async def process_analysis(analysis_id: str, file_bytes: bytes, file_name: str = ""):
+    # El análisis puede borrarse (botón BORRAR del historial, retención) mientras
+    # este proceso de fondo sigue corriendo. La entrada se captura una sola vez y
+    # cada escritura a disco se comprueba: sin eso la tarea estallaba con
+    # KeyError al escribir en un store que ya no contiene el id, o resucitaba la
+    # carpeta que el DELETE acaba de borrar.
+    entrada = analysis_store.get(analysis_id)
+    if entrada is None:
+        return
     try:
-        analysis_store[analysis_id]["status"] = "processing"
+        entrada["status"] = "processing"
         await asyncio.sleep(0.5)
         # Read EVERY sheet (BytesIO avoids the deprecated bytes argument)
         sheets: Dict[str, pd.DataFrame] = pd.read_excel(
@@ -886,20 +894,25 @@ async def process_analysis(analysis_id: str, file_bytes: bytes, file_name: str =
         summary["ai_insights"] = await generate_data_insights(summary)
 
         # Keep the classified dataframe so the UI can visualise every record
-        analysis_store[analysis_id]["dataframe"] = df
-        analysis_store[analysis_id]["summary"] = summary
-        analysis_store[analysis_id]["status"] = "done"
+        entrada["dataframe"] = df
+        entrada["summary"] = summary
+        entrada["status"] = "done"
     except Exception as exc:  # noqa: BLE001 – surface any failure to the UI
-        analysis_store[analysis_id]["status"] = "error"
-        analysis_store[analysis_id]["error"] = str(exc)
-        # Spec A: el error también se persiste, para que un reinicio no
-        # convierta un análisis fallido en «ya no existe».
-        analysis_persist.guardar_estado(analysis_id, analysis_store[analysis_id])
+        if analysis_id in analysis_store:
+            entrada["status"] = "error"
+            entrada["error"] = str(exc)
+            # Spec A: el error también se persiste, para que un reinicio no
+            # convierta un análisis fallido en «ya no existe».
+            analysis_persist.guardar_estado(analysis_id, entrada)
+        return
+
+    # Borrado en caliente durante el cálculo: no se persiste ni se indexa.
+    if analysis_id not in analysis_store:
         return
 
     # Spec A: estado y resumen a disco (summary.json) — el dataframe no
     # entra: se reconstruye del Excel al arrancar.
-    analysis_persist.guardar_estado(analysis_id, analysis_store[analysis_id])
+    analysis_persist.guardar_estado(analysis_id, entrada)
 
     # ------------------------------------------------------------------
     # Índice semántico (RAG) — en un hilo para no bloquear el event loop.
@@ -908,7 +921,7 @@ async def process_analysis(analysis_id: str, file_bytes: bytes, file_name: str =
     records = _enrich_records(df)
     # is_available() consulta el cliente de Chroma: a un hilo, porque otra
     # indexación en curso retiene su candado y esto no debe congelar la API.
-    analysis_store[analysis_id]["rag"] = {
+    entrada["rag"] = {
         "available": await asyncio.to_thread(rag_store.is_available),
         "indexed": 0,
         "total": len(records),
@@ -921,12 +934,12 @@ async def process_analysis(analysis_id: str, file_bytes: bytes, file_name: str =
         _INDEX_TASKS[analysis_id] = current
     try:
         rag_result = await asyncio.to_thread(rag_store.index_events, analysis_id, records)
-        analysis_store[analysis_id]["rag"] = rag_result
+        entrada["rag"] = rag_result
         # El índice persiste en disco: nos quedamos solo con los últimos análisis.
         rag_store.purge_except(_recent_analysis_ids(), max_analyses=5)
     except Exception as rag_exc:  # noqa: BLE001
         logger.warning("RAG no disponible para %s: %s", analysis_id[:8], rag_exc)
-        analysis_store[analysis_id]["rag"] = {
+        entrada["rag"] = {
             "available": False,
             "indexed": 0,
             "total": len(records),
@@ -936,8 +949,11 @@ async def process_analysis(analysis_id: str, file_bytes: bytes, file_name: str =
         _INDEX_TASKS.pop(analysis_id, None)
 
     # Se vuelve a persistir para que el estado del índice RAG (available,
-    # indexed, total, reason) sobreviva también a un reinicio.
-    analysis_persist.guardar_estado(analysis_id, analysis_store[analysis_id])
+    # indexed, total, reason) sobreviva también a un reinicio. Solo si el
+    # análisis sigue vivo: si se borró durante la indexación, la carpeta ya
+    # no debe volver a aparecer.
+    if analysis_id in analysis_store:
+        analysis_persist.guardar_estado(analysis_id, entrada)
 
 
 # ---------------------------------------------------------------------------

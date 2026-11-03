@@ -248,6 +248,47 @@ def test_delete_analysis_desconocido_devuelve_404(client):
     assert res.status_code == 404
 
 
+def test_borrado_durante_indexacion_no_revienta(rag_aislado, ai_config_aislado, monkeypatch):
+    """Borrar un análisis mientras process_analysis aún lo procesa es seguro.
+
+    El botón BORRAR se puede pulsar en plena indexación RAG: el DELETE saca la
+    entrada del store y borra la carpeta, y la tarea de fondo sigue escribiendo
+    después. Sin más, eso estallaba con `KeyError` en la rama RAG (observado
+    en vivo) y, si no, resucitaba la carpeta al volver a persistir.
+    """
+    import asyncio
+
+    from tests.conftest import xlsx_bytes
+
+    aid = "id-borrado-en-caliente"
+    contenido = xlsx_bytes().getvalue()
+    analysis_persist.guardar_excel(aid, contenido)
+    analysis_store[aid] = {
+        "analysis_id": aid,
+        "status": "pending",
+        "summary": None,
+        "error": None,
+    }
+
+    def borrando_mientras_indexa(_aid, _records):
+        # El analista pulsa BORRAR en el panel durante la indexación.
+        analysis_store.pop(aid, None)
+        analysis_persist.borrar(aid)
+        return {"available": True, "indexed": 12, "total": 12, "reason": ""}
+
+    monkeypatch.setattr(main.rag_store, "index_events", borrando_mientras_indexa)
+
+    try:
+        asyncio.run(main.process_analysis(aid, contenido, "borrado_en_caliente.xlsx"))
+    finally:
+        analysis_store.pop(aid, None)
+
+    assert aid not in analysis_store
+    assert not analysis_persist.dir_analisis(aid).exists(), (
+        "no debe resucitar en disco la carpeta que el DELETE acaba de borrar"
+    )
+
+
 # ---------------------------------------------------------------------------
 # 5. Retención configurable (Opciones IA, default 30 días)
 # ---------------------------------------------------------------------------
