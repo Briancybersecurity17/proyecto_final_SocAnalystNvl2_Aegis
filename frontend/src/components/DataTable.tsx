@@ -1,8 +1,9 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getRows, RowsResponse } from '../api/client'
 import { useAnalysisStore } from '../store'
 import { useFilterStore } from '../store/filters'
 import { LEVEL_LABELS } from '../charts'
+import ColumnFilter from './ColumnFilter'
 import { DashboardSection } from './DashboardSection'
 
 const LEVELS = [
@@ -52,7 +53,6 @@ const LONG_COLUMNS = new Set(['Event_Description', 'Process_CommandLine'])
 const DataTable: React.FC = () => {
   const analysisId = useAnalysisStore(state => state.analysisId)
   const status = useAnalysisStore(state => state.status)
-  const summary = useAnalysisStore(state => state.summary)
 
   const [data, setData] = useState<RowsResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -67,8 +67,8 @@ const DataTable: React.FC = () => {
     q,
     facets,
     setLevel,
-    setResult,
     setSuspicious,
+    toggleFacet,
   } = useFilterStore()
   // `qInput` es el texto crudo del input (se estabiliza con debounce); el
   // resto de filtros vive en el store compartido para que el dashboard
@@ -199,17 +199,21 @@ const DataTable: React.FC = () => {
     fetchRows()
   }, [fetchRows, filtersKey, page])
 
+  // Contexto de los desplegables de cabecera: los conteos de /facets se
+  // piden con los MISMOS filtros que las filas de la tabla. Memoizado para
+  // que la identidad solo cambie cuando cambia un valor de verdad (si no,
+  // el panel de cada cabecera se refrescaría en cada render).
+  const filterParams = useMemo(
+    () => ({ from, to, level, suspicious, result, q, facets }),
+    [from, to, level, suspicious, result, q, facets],
+  )
+
   if (!analysisId || status !== 'done') {
     return null
   }
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.page_size)) : 1
   const visibleColumns = orderColumns(data?.columns ?? [])
-  // Valores reales del campo Result en el archivo, con su recuento.
-  // Se ordenan por frecuencia: en JS las claves numéricas ("200", "404")
-  // saldrían antes que las de texto si respetamos el orden del objeto.
-  const resultOptions = Object.entries(summary?.result_counts ?? {})
-    .sort((a, b) => b[1] - a[1])
 
   return (
     <DashboardSection title="Registros importados (visualización del Excel)">
@@ -242,23 +246,6 @@ const DataTable: React.FC = () => {
             )
           })}
         </div>
-        {resultOptions.length > 0 && (
-          <label className="flex cursor-pointer items-center gap-2 font-mono text-[12px] text-[var(--text-dim)]">
-            Resultado
-            <select
-              value={result}
-              onChange={e => setResult(e.target.value)}
-              className="hud-input py-2"
-            >
-              <option value="">Todos</option>
-              {resultOptions.map(([value, count]) => (
-                <option key={value} value={value}>
-                  {value} ({count})
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
         <label className="flex cursor-pointer items-center gap-2 font-mono text-[12px] text-[var(--text-dim)]">
           <input
             type="checkbox"
@@ -279,10 +266,20 @@ const DataTable: React.FC = () => {
           <caption className="sr-only">Registros del archivo importado, con su nivel de riesgo</caption>
           <thead className="sticky top-0 z-[1]">
             <tr>
+              {/* AutoFilter de Excel en cada cabecera: la flechita de cada
+                  columna abre su desplegable de valores. «Nivel» no lleva:
+                  es la clasificación derivada (no es faceta del archivo) y
+                  ya tiene sus botones en la barra de arriba. */}
               {visibleColumns.map(col => (
-                <th key={col} scope="col" className="whitespace-nowrap">
-                  {col}
-                </th>
+                <ColumnFilter
+                  key={col}
+                  analysisId={analysisId}
+                  column={col}
+                  filters={filterParams}
+                  selected={facets[col] ?? []}
+                  onToggle={value => toggleFacet(col, value)}
+                  onClear={() => (facets[col] ?? []).forEach(v => toggleFacet(col, v))}
+                />
               ))}
               <th scope="col" className="whitespace-nowrap">Nivel</th>
             </tr>

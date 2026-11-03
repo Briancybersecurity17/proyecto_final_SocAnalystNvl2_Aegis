@@ -256,8 +256,18 @@ def apply_filters(
             continue
         if not values:
             continue
+        serie = df[col]
+        # Un filtro sobre Timestamp compara por DÍA: los valores del
+        # desplegable son fechas (YYYY-MM-DD) y así «2026-01-10» selecciona
+        # el día completo en lugar de una hora concreta (mismo agrupado que
+        # usa _facet_field al servir los valores). Sin esta rama,
+        # astype(str) daría «2026-01-10 08:00:00» y ninguna faceta casaría.
+        if pd.api.types.is_datetime64_any_dtype(serie):
+            comparable = serie.dt.strftime("%Y-%m-%d")
+        else:
+            comparable = serie.astype(str)
         wanted_values = {str(v).lower() for v in values}
-        df = df[df[col].astype(str).str.lower().isin(wanted_values)]
+        df = df[comparable.str.lower().isin(wanted_values)]
 
     return df
 
@@ -276,19 +286,42 @@ class FacetField:
     values: list[dict]        # [{"value": str, "count": int}, ...] hasta `top_n`, ordenados por conteo
 
 
-def _facet_field(serie: pd.Series, name: str, label: str, top_n: int) -> FacetField:
+def _facet_field(
+    serie: pd.Series,
+    name: str,
+    label: str,
+    top_n: int,
+    contiene: str | None = None,
+) -> FacetField:
     """Campo de faceta con sus valores más frecuentes y su cardinalidad real.
 
     `distinct` cuenta todos los valores (para que la UI diga «+ N valores
     más») mientras `values` se acota a `top_n`: enviar todos los valores de
     una columna de miles de filas encarecería la respuesta sin aportar nada.
+
+    Los timestamps se agrupan por día (YYYY-MM-DD), como el autofiltro de
+    Excel agrupa fechas en años/meses/días: un valor por fila no sirve para
+    elegir en el desplegable y «2026-01-10» selecciona el día completo
+    (NaT queda fuera: value_counts y nunique ya ignoran los vacíos).
+
+    `contiene` acota la lista a los valores que contienen esa cadena
+    (insensible a mayúsculas, sin tratarla como regex): es la búsqueda del
+    desplegable, que así alcanza valores fuera del top_n sin ampliar la
+    respuesta ni servir la columna entera.
     """
-    conteos = serie.value_counts().head(top_n)
+    if pd.api.types.is_datetime64_any_dtype(serie):
+        serie = serie.dt.strftime("%Y-%m-%d")
+    conteos = serie.value_counts()
+    if contiene:
+        mascara = conteos.index.astype(str).str.contains(
+            contiene, case=False, regex=False
+        )
+        conteos = conteos[mascara]
     return FacetField(
         name=name,
         label=label,
         distinct=int(serie.nunique()),
-        values=[{"value": str(v), "count": int(c)} for v, c in conteos.items()],
+        values=[{"value": str(v), "count": int(c)} for v, c in conteos.head(top_n).items()],
     )
 
 

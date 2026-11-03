@@ -187,12 +187,21 @@ const AttackCorrelationsPanel: React.FC = () => {
           { label: 'Registros cubiertos', value: coveredRows, hint: `de ${data.observed_rows} con Event_ID` },
         ].map(kpi => (
           <motion.div key={kpi.label} variants={cardIn} className="panel">
-            <div className="panel-body p-4">
-              <div className="hud-label">{kpi.label}</div>
+            {/* Rótulo en caja de 3 líneas: los rótulos ocupan distinto
+                número de líneas («Técnicas observadas» en 2, «Event IDs con
+                glosario» en 3…) y sin caja fija el número quedaba a distinta
+                altura en cada tarjeta. Sin clamp: el desbordamiento de una
+                palabra larga lo absorbe el padding de la tarjeta, mientras
+                que recortarlo cortaba letras. El pie se ancla abajo (mt-auto)
+                para alinear también el texto secundario. */}
+            <div className="panel-body flex h-full flex-col p-4">
+              <div className="hud-label min-h-[48px] leading-[1.45]">{kpi.label}</div>
               <div className="mt-1 font-display text-2xl font-bold text-hud-line">
                 {kpi.value.toLocaleString('es')}
               </div>
-              <div className="mt-0.5 font-mono text-[10.5px] text-[var(--text-dim)]">{kpi.hint}</div>
+              <div className="mt-auto pt-1 font-mono text-[10.5px] text-[var(--text-dim)]">
+                {kpi.hint}
+              </div>
             </div>
           </motion.div>
         ))}

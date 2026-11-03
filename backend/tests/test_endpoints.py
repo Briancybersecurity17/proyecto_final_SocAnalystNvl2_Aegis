@@ -265,6 +265,81 @@ def test_facets_criticidad_conserva_otros_filtros_activos(client, analysis_id):
     assert conteos == {"bajo": 3, "critico": 1}
 
 
+# --- AutoFilter de la tabla: fields / top_n / value_q -----------------------
+# La tabla «Registros importados» abre un desplegable por CABECERA y pide
+# con `fields` solo las columnas que pinta, aunque detect_facets las
+# descarte (Log_ID, Timestamp, Event_Description…).
+
+def test_facets_fields_pide_solo_esas_columnas(client, analysis_id):
+    res = client.get(f"/api/analysis/{analysis_id}/facets",
+                     params={"fields": "Log_ID,Result"}).json()
+    assert [f["name"] for f in res["fields"]] == ["Log_ID", "Result"]
+    log_ids = res["fields"][0]
+    assert log_ids["distinct"] == 12
+    # top_n por defecto (12): los 12 Log_ID con su recuento; van como set
+    # porque todos empatan a 1 y el orden de value_counts no está garantizado.
+    assert {v["value"] for v in log_ids["values"]} == {str(i) for i in range(1, 13)}
+    assert all(v["count"] == 1 for v in log_ids["values"])
+
+
+def test_facets_fields_ignora_desconocidas_y_derivadas(client, analysis_id):
+    # Columna inexistente → se omite; derivada (_level) → también, porque
+    # parse_filters nunca la aceptaría como faceta y el desplegable mentiría.
+    res = client.get(f"/api/analysis/{analysis_id}/facets",
+                     params={"fields": "NoExiste,_level,Result"}).json()
+    assert [f["name"] for f in res["fields"]] == ["Result"]
+
+
+def test_facets_top_n_acota_sin_truncar_la_cardinalidad(client, analysis_id):
+    res = client.get(f"/api/analysis/{analysis_id}/facets",
+                     params={"fields": "Log_ID", "top_n": "3"}).json()
+    campo = res["fields"][0]
+    assert len(campo["values"]) == 3       # la respuesta se acota
+    assert campo["distinct"] == 12          # …pero la cardinalidad real no
+
+
+def test_facets_value_q_busca_valores_fuera_del_top(client, analysis_id):
+    # La búsqueda del desplegable acota ANTES de recortar a top_n: con
+    # top_n=5 viajarían 5 Log_ID arbitrarios, pero «1» devuelve exactamente
+    # los cuatro que contienen esa cadena (1, 10, 11 y 12).
+    res = client.get(f"/api/analysis/{analysis_id}/facets",
+                     params={"fields": "Log_ID", "top_n": "5", "value_q": "1"}).json()
+    campo = res["fields"][0]
+    assert {v["value"] for v in campo["values"]} == {"1", "10", "11", "12"}
+    assert campo["distinct"] == 12
+    # e insensible a mayúsculas, como el resto del motor de filtros
+    res = client.get(f"/api/analysis/{analysis_id}/facets",
+                     params={"fields": "Result", "value_q": "succ"}).json()
+    assert [v["value"] for v in res["fields"][0]["values"]] == ["Success"]
+
+
+def test_facets_top_n_invalido_devuelve_400(client, analysis_id):
+    base = f"/api/analysis/{analysis_id}/facets"
+    assert client.get(base, params={"top_n": "diez"}).status_code == 400
+    assert client.get(base, params={"top_n": "0"}).status_code == 400
+    assert client.get(base, params={"top_n": "301"}).status_code == 400
+
+
+def test_facets_timestamp_agrupa_por_dia(client, analysis_id):
+    # Un valor por fila no sirve para elegir: como en Excel, el desplegable
+    # de Timestamp agrupa por día (4 filas por día en el dataset sintético).
+    res = client.get(f"/api/analysis/{analysis_id}/facets",
+                     params={"fields": "Timestamp"}).json()
+    campo = res["fields"][0]
+    assert campo["distinct"] == 3
+    conteos = {v["value"]: v["count"] for v in campo["values"]}
+    assert conteos == {"2026-01-10": 4, "2026-01-11": 4, "2026-01-12": 4}
+
+
+def test_rows_filtra_timestamp_por_dia_via_faceta(client, analysis_id):
+    # La otra mitad del agrupado: elegir «2026-01-11» en el AutoFilter
+    # trae las 4 filas de ese día (Log_ID 5-8), no una hora concreta.
+    res = client.get(f"/api/analysis/{analysis_id}/rows",
+                     params={"page_size": 200, "Timestamp": "2026-01-11"}).json()
+    assert res["total"] == 4
+    assert {r["Log_ID"] for r in res["rows"]} == {5, 6, 7, 8}
+
+
 # --- Historial de subidas (spec sub-3 §3.5) --------------------------------
 
 def test_analyses_lista_solo_done_con_campos(client, analysis_id, analysis_id_minimo):

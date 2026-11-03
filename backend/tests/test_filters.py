@@ -98,6 +98,21 @@ def test_faceta_sobre_columna_inexistente_se_ignora(df):
     assert len(out) == 5   # la faceta se descarta en silencio, sin restringir (spec §8)
 
 
+def test_faceta_sobre_timestamp_filtra_por_dia(df):
+    # El AutoFilter de Timestamp agrupa por día (como Excel con las fechas):
+    # los valores del desplegable son YYYY-MM-DD y la faceta debe traer el
+    # día completo, no una hora concreta.
+    out = apply_filters(df, FilterParams(facets={"Timestamp": ["2026-01-10"]}))
+    assert sorted(out["Log_ID"]) == [1, 2]
+
+
+def test_faceta_sobre_timestamp_no_casa_por_hora(df):
+    # Contrato del agrupado: por faceta ya no se elige una hora suelta
+    # (para eso está la ventana from/to); un valor con hora no casa nunca.
+    out = apply_filters(df, FilterParams(facets={"Timestamp": ["2026-01-10 08:00"]}))
+    assert len(out) == 0
+
+
 def _peticion(query: str) -> SimpleNamespace:
     """Stub mínimo de Request: a parse_filters solo le llega query_params."""
     return SimpleNamespace(query_params=QueryParams(query))
@@ -126,10 +141,27 @@ def test_parametros_de_paginacion_no_son_faceta(df_con_columna_page):
 
 
 def test_sin_reserved_la_paginacion_sigue_puediendo_ser_faceta(df_con_columna_page):
-    # La otra mitad de R17: /summary y /facets NO reservan nada, así que un
-    # parámetro «page» sigue comportándose como la faceta que es allí.
+    # La otra mitad de R17: /summary no reserva nada y /facets solo sus
+    # propios parámetros (fields/top_n/value_q), así que un parámetro «page»
+    # sigue comportándose como la faceta que es allí.
     params = parse_filters(_peticion("page=2"), df_con_columna_page)
     assert params.facets == {"page": ["2"]}
+
+
+def test_parametros_del_autofilter_no_son_faceta():
+    # Mismo hueco de R17 para el AutoFilter de la tabla: un Excel con una
+    # columna «fields» no debe filtrarse en silencio cuando /facets recibe
+    # su propio «fields=…» (idem top_n y value_q).
+    df = pd.DataFrame({
+        "fields": ["a", "b", "a"],
+        "Hostname": ["DC-01", "WS-018", "DC-01"],
+    })
+    params = parse_filters(
+        _peticion("fields=Hostname&top_n=5&value_q=x&Hostname=DC-01"),
+        df,
+        reserved={"fields", "top_n", "value_q"},
+    )
+    assert params.facets == {"Hostname": ["DC-01"]}
 
 
 def test_ventana_to_fin_de_tramo_cubre_el_dia_completo():

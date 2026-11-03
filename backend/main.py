@@ -1163,14 +1163,23 @@ async def get_scoped_summary(analysis_id: str, request: Request):
 
 @app.get("/api/analysis/{analysis_id}/facets")
 async def get_facets(analysis_id: str, request: Request):
-    """Campos del panel de facetas con sus valores y conteos acotados (spec §4.4).
+    """Campos con sus valores y conteos acotados (spec §4.4) — panel y AutoFilter.
 
-    La detección se hace sobre el dataset completo para que la lista de
-    campos sea estable: un campo no debe desaparecer del panel solo porque
-    el filtro actual lo haya dejado vacío. Los conteos van sobre las filas
-    filtradas con los mismos filtros que /summary, y cada campo se recuenta
-    ignorando la selección de ese mismo campo (estilo Splunk): así con un
-    valor activo el panel sigue ofreciendo los demás para poder cambiar.
+    Dos modos según `fields`:
+    - sin `fields`: la detección clásica de `detect_facets` (solo columnas
+      categóricas), que es lo que usa el panel de facetas. La detección se
+      hace sobre el dataset completo para que la lista de campos sea
+      estable: un campo no debe desaparecer del panel solo porque el filtro
+      actual lo haya dejado vacío.
+    - con `fields=A,B` (AutoFilter de la tabla): se devuelven EXACTAMENTE
+      esas columnas aunque `detect_facets` las descarte por cardinalidad o
+      longitud (Log_ID, Event_Description…), porque en el desplegable la
+      búsqueda (`value_q`) y `top_n` acotan la respuesta.
+
+    Los conteos van sobre las filas filtradas con los mismos filtros que
+    /summary, y cada campo se recuenta ignorando la selección de ese mismo
+    campo (estilo Splunk): así con un valor activo el panel sigue ofreciendo
+    los demás para poder cambiar.
     """
     if analysis_id not in analysis_store:
         raise HTTPException(status_code=404, detail="Analysis not found")
@@ -1178,20 +1187,49 @@ async def get_facets(analysis_id: str, request: Request):
     if df is None:
         raise HTTPException(status_code=409, detail="El análisis aún no está listo")
 
+    query = request.query_params
+    # `fields`, `top_n` y `value_q` configuran ESTA respuesta; nunca son
+    # facetas: van como `reserved` para que parse_filters los ignore (si un
+    # Excel tuviera una columna «fields», el AutoFilter de esa columna viaja
+    # en la misma clave y solo el reserved evita que se autofiltre).
     try:
-        params = parse_filters(request, df)
+        top_n = int(query.get("top_n", "12"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="«top_n» debe ser un entero") from exc
+    if not 1 <= top_n <= 300:
+        raise HTTPException(
+            status_code=400, detail="«top_n» debe estar entre 1 y 300"
+        )
+    value_q = str(query.get("value_q", "")).strip()
+
+    try:
+        params = parse_filters(request, df, reserved={"fields", "top_n", "value_q"})
     except ValueError as exc:
         # Mismos 400 que /summary: una query inválida es inválida para
         # cualquier endpoint, nunca un 500 (R10).
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    solicitados = [n.strip() for n in str(query.get("fields", "")).split(",") if n.strip()]
+    if solicitados:
+        # Pedidos por la tabla: se conserva el orden pedido, sin duplicados
+        # y solo columnas reales del archivo. Las derivadas (_level…) no
+        # empiezan por «_» por casualidad: parse_filters nunca las acepta
+        # como faceta, así que ofrecerlas engañaría (no filtrarían).
+        objetivos = [
+            (n, n)
+            for n in dict.fromkeys(solicitados)
+            if n in df.columns and not n.startswith("_")
+        ]
+    else:
+        objetivos = [(c.name, c.label) for c in detect_facets(df, top_n=top_n)]
+
     filtrado = apply_filters(df, params)
     campos = []
-    # top_n=12 por campo: acorta la respuesta sin perder los valores que
-    # el panel enseña de todos modos (spec §4.4).
-    for campo in detect_facets(df, top_n=12):
-        parcial = apply_filters(df, params, skip_fields={campo.name})
-        campos.append(_facet_field(parcial[campo.name], campo.name, campo.label, 12))
+    for name, label in objetivos:
+        parcial = apply_filters(df, params, skip_fields={name})
+        campos.append(
+            _facet_field(parcial[name], name, label, top_n, contiene=value_q or None)
+        )
 
     return {
         "total": int(len(df)),

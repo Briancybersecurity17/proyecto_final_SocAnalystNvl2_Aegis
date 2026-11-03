@@ -177,17 +177,34 @@ export const getRecentAnalyses = async (signal?: AbortSignal): Promise<RecentAna
 }
 
 /**
- * Campos detectados en el archivo con sus valores y conteos acotados
- * (GET /analysis/{id}/facets). Ignora el filtro del propio campo al contar.
+ * Campos con sus valores y conteos (GET /analysis/{id}/facets). Ignora el
+ * filtro del propio campo al contar (estilo Splunk).
+ *
+ * `opts.fields` pide EXACTAMENTE esas columnas (el AutoFilter de la tabla
+ * lo usa para sus cabeceras, aunque detect_facets descarte esas columnas
+ * por cardinalidad); `opts.topN` acota los valores devueltos y `opts.valueQ`
+ * busca dentro de los valores de cada campo (la lupa del desplegable).
  */
 export const getFacets = async (
   analysisId: string,
   f: FilterParams,
-  signal?: AbortSignal,
+  opts: {
+    /** Columnas concretas a devolver; sin ellas, la detección clásica del panel. */
+    fields?: string[]
+    /** Máximo de valores por campo (el backend lo acota a 1..300). */
+    topN?: number
+    /** Búsqueda insensible a mayúsculas dentro de los valores del campo. */
+    valueQ?: string
+    signal?: AbortSignal
+  } = {},
 ): Promise<{ total: number; filtered_total: number; fields: FacetField[] }> => {
+  const params = buildFilterParams(f)
+  if (opts.fields?.length) params.set('fields', opts.fields.join(','))
+  if (opts.topN) params.set('top_n', String(opts.topN))
+  if (opts.valueQ) params.set('value_q', opts.valueQ)
   const response = await API.get<{ total: number; filtered_total: number; fields: FacetField[] }>(
     `/analysis/${analysisId}/facets`,
-    { params: buildFilterParams(f), signal },
+    { params, signal: opts.signal },
   )
   return response.data
 }
