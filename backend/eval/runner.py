@@ -153,6 +153,11 @@ def _isolated_store(tmp: Path) -> Iterator[None]:
     sin limpiarla haría que la corrida leyera la memoria real del analista.
     `ai_config.json` NO se toca (el motor se conmuta parcheando `get`).
 
+    Fase 3: también se redirige `attack_candidates.CANDIDATES_PATH` — la
+    señal de aprendizaje (pieza 2 de ai_service) se dispara cuando un caso
+    nombra un ataque fuera del catálogo o una ficha no aplica, y sin esta
+    redirección la corrida escribiría en `data/` real del analista.
+
     La siembra (spec §6, ruling del issue 5) es lo que permite al diagnóstico
     few-shot discriminar: con store vacío, rag_examples_used es 0 siempre.
     La colección semántica se parchea a un nombre temporal porque comparte
@@ -163,18 +168,35 @@ def _isolated_store(tmp: Path) -> Iterator[None]:
         mod._cache = None                      # invalidar ANTES de redirigir
         return tmp / "feedback.json"
 
-    with _patched_modules("feedback_store", "FEEDBACK_PATH", _redirect) as mods:
-        with _patched_modules("feedback_store", "FEEDBACK_COLLECTION",
-                              EVAL_FEEDBACK_COLLECTION) as col_mods:
-            for mod in col_mods:
+    def _redirect_candidatas(mod: Any) -> Path:
+        # Fase 3: la señal de aprendizaje (piece 2 de attack_candidates) se
+        # dispara desde answer_question cuando un caso nombra un ataque
+        # fuera del catálogo (p. ej. ref-sqli) o una ficha no aplica. Sin
+        # esta redirección la corrida escribiría en
+        # backend/data/attack_cards_candidates.json, el archivo real.
+        mod._cache = None
+        return tmp / "attack_cards_candidates.json"
+
+    with _patched_modules("attack_candidates", "CANDIDATES_PATH",
+                          _redirect_candidatas) as cand_mods:
+        try:
+            with _patched_modules("feedback_store", "FEEDBACK_PATH", _redirect) as mods:
+                with _patched_modules("feedback_store", "FEEDBACK_COLLECTION",
+                                      EVAL_FEEDBACK_COLLECTION) as col_mods:
+                    for mod in col_mods:
+                        mod._cache = None
+                    _sembrar_store(mods, tmp)
+                    try:
+                        yield
+                    finally:
+                        for mod in mods:
+                            mod._cache = None
+                        _limpiar_coleccion_temp(col_mods)
+        finally:
+            # Path restaurado por _patched_modules; la caché se limpia para
+            # que una lectura posterior REA el archivo real del analista.
+            for mod in cand_mods:
                 mod._cache = None
-            _sembrar_store(mods, tmp)
-            try:
-                yield
-            finally:
-                for mod in mods:
-                    mod._cache = None
-                _limpiar_coleccion_temp(col_mods)
 
 
 @contextlib.contextmanager

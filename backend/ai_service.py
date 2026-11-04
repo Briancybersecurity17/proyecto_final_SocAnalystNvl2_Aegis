@@ -43,10 +43,12 @@ try:
     from backend import ai_config
     from backend import feedback_store
     from backend import attack_cards
+    from backend import attack_candidates
 except ImportError:  # pragma: no cover – módulo suelto (sys.path con backend/)
     import ai_config
     import feedback_store
     import attack_cards
+    import attack_candidates
 
 LEVEL_ORDER = ["critico", "alto", "medio", "bajo"]
 LEVEL_LABELS = {
@@ -3333,6 +3335,145 @@ async def _attack_remote(
     return text, False
 
 
+# ---------------------------------------------------------------------------
+# Fase 3 · pieza 2: la señal de aprendizaje (candidatas con aprobación humana)
+# ---------------------------------------------------------------------------
+# Los CUATRO tipos de regla cerrados con sus campos, tal como los valida
+# attack_cards: el borrador del LLM sale directamente en el formato que la
+# validación determinista espera (sin eval ni código dinámico).
+_CANDIDATA_TIPOS = (
+    "  event_presence: {\"tipo\": \"event_presence\", \"min\": N}  "
+    "(cuenta cuántas veces aparecen los event_ids de la ficha)\n"
+    "  event_burst: {\"tipo\": \"event_burst\", \"event_id\": \"4625\", "
+    "\"min\": N, \"minutos\": 30}  (ráfaga del evento en la ventana)\n"
+    "  group_threshold: {\"tipo\": \"group_threshold\", \"columna\": "
+    "\"Source_IP\", \"min\": N, \"conteo\": {\"Event_ID\": \"4625\"}, "
+    "\"segundo_conteo\": {...}, \"min_segundo\": N, \"distintos\": \"User\", "
+    "\"min_distintos\": N, \"contar_distintos\": \"User\"}  (agrupa por "
+    "columna y exige un mínimo; «conteo» filtra qué filas se cuentan, "
+    "«distintos» exige N valores distintos de otra columna)\n"
+    "  row_filter: {\"tipo\": \"row_filter\", \"columna\": "
+    "\"Event_Description\", \"contiene\": \"texto\", \"min\": N}  "
+    "(filas cuyo texto contiene «contiene», sin mayúsculas ni regex)"
+)
+
+_CANDIDATA_SISTEMA = (
+    "Sos un analista SOC proponiendo una ficha de ataque para el catálogo "
+    "del equipo. Respondés SOLO con un objeto JSON válido: sin ``` ni prosa "
+    "alrededor. La ficha se valida de forma determinista después: si una "
+    "columna o un Event ID que usás no existe en el archivo, se descarta. "
+    "No inventes columnas, eventos ni ids repetidos del catálogo."
+)
+
+
+def _candidata_prompt(
+    question: str, df, card: Optional[Dict[str, Any]], res: Optional[Dict[str, Any]]
+) -> Optional[List[Dict[str, str]]]:
+    """Messages para que el LLM redacte el borrador de una candidata.
+
+    `card is None` → ficha NUEVA (ataque fuera del catálogo). Con `card` →
+    MEJORA de la ficha vigente (mismo id, todos sus sinónimos y
+    `mejora: true`), necesaria para que match_card siga alcanzando la
+    consulta. El prompt siempre se ancla a datos REALES: columnas, Event IDs
+    presentes y el catálogo vigente (a no repetir). None si no hay con qué
+    anclarlo (df sin columnas).
+    """
+    try:
+        columnas = [str(c) for c in df.columns]
+        filas_totales = len(df)
+    except Exception:
+        return None
+    if not columnas:
+        return None
+    eids: List[str] = []
+    if "Event_ID" in df.columns:
+        for value in df["Event_ID"].unique():
+            text = attack_cards._norm_val(value)
+            if text not in eids:
+                eids.append(text)
+            if len(eids) >= 20:
+                break
+    catalogo = [
+        {"id": c.get("id"), "sinonimos": list(c.get("sinonimos") or [])}
+        for c in attack_cards.load_cards()
+    ]
+    bloques = [
+        f"Pregunta del analista: {question or ''}",
+        f"Archivo real: {filas_totales} filas; columnas: {', '.join(columnas)}",
+        f"Event IDs presentes en el archivo: {', '.join(eids) or 'ninguno'}",
+        "Catálogo vigente — ni el id ni los sinónimos pueden repetirse: "
+        + json.dumps(catalogo, ensure_ascii=False),
+        "Tipos de regla cerrados (elegí UNO; sus campos son exactos):\n"
+        + _CANDIDATA_TIPOS,
+        "Campos obligatorios del JSON: id (minúsculas y guiones bajos, sin "
+        "espacios), nombre, sinonimos (lista), que_es, como_se_ve, "
+        "event_ids (SOLO eventos presentes en el archivo), mitre (lista), "
+        "regla, umbrales (texto con el umbral) y ejemplo (una frase).",
+    ]
+    if card is None:
+        bloques.append(
+            "Modo: ficha NUEVA. Proponé UNA ficha para el patrón que el "
+            "analista pregunta y que el catálogo todavía no cubre."
+        )
+    else:
+        vigente = {k: card.get(k)
+                   for k in ("id", "nombre", "sinonimos", "regla", "event_ids")}
+        bloques.append(
+            "Modo: MEJORA de una ficha existente que NO aplica a este "
+            f"archivo (motivo: {str((res or {}).get('motivo') or '')}; "
+            f"faltan: {', '.join(str(m) for m in (res or {}).get('missing') or [])}). "
+            "Devolvé la ficha CON EL MISMO id y TODOS sus sinónimos "
+            "originales, más el campo \"mejora\": true, proponiendo una "
+            "regla que sí aplique a las columnas del archivo. "
+            "Ficha vigente: " + json.dumps(vigente, ensure_ascii=False)
+        )
+    return [
+        {"role": "system", "content": _CANDIDATA_SISTEMA},
+        {"role": "user", "content": "\n\n".join(bloques)},
+    ]
+
+
+async def _crear_candidata(
+    question: str, df, card: Optional[Dict[str, Any]], res: Optional[Dict[str, Any]]
+) -> bool:
+    """Propone con el LLM una ficha candidata y la deja PENDIENTE de aprobación.
+
+    Señal de la fase 3: se dispara cuando la consulta nombra un ataque
+    fuera del catálogo (`card is None`) o cuando la ficha existente no
+    aplica al archivo (`applicable: false`). Solo devuelve True si
+    `attack_candidates.add_candidate` la guardó tras la validación
+    DETERMINISTA; cualquier otra cosa (LLM apagado o caído, JSON ilegible,
+    borrador inválido, archivo sin filas) devuelve False y la respuesta del
+    chat queda intacta. Nunca escribe en el catálogo: la candidata espera
+    la aprobación humana en el panel.
+    """
+    try:
+        if df is None or len(df) == 0:
+            return False   # sin filas no hay con qué anclar el borrador
+    except Exception:      # pragma: no cover – df siempre es DataFrame
+        return False
+    cfg = ai_config.get()
+    if not cfg.get("enabled") or not cfg.get("api_url"):
+        return False
+    try:
+        messages = _candidata_prompt(question, df, card, res)
+        if messages is None:
+            return False
+        text = await ai_config.chat(messages, cfg=cfg)
+        draft = _clean_json(str(text or ""))
+        if not draft:
+            return False
+        out = attack_candidates.add_candidate(draft, question, df)
+    except Exception as exc:
+        logger.warning("Candidata: la señal falló: %s", exc)
+        return False
+    if out.get("ok"):
+        ident = (out.get("candidate") or {}).get("id") or "?"
+        logger.info("Candidata: %s (%s) → pendiente de aprobación",
+                    out.get("motivo"), ident)
+    return bool(out.get("ok"))
+
+
 async def _attack_route(question: str, df) -> Optional[Dict[str, Any]]:
     """Respuesta de la ruta de fichas de ataque, o None si no va por acá.
 
@@ -3342,22 +3483,40 @@ async def _attack_route(question: str, df) -> Optional[Dict[str, Any]]:
     cifras exactas + el chip `ficha <id> · <motivo>` (pieza 2). El LLM solo
     redacta encima del borrador determinista y solo si todas sus cifras ya
     están ancladas.
+
+    Fase 3 (pieza 2): si la consulta cae en `sin_ficha` o la ficha existe
+    pero `applicable: false`, se propone una candidata con el LLM que queda
+    PENDIENTE de aprobación humana (`_crear_candidata`). El texto de la
+    respuesta NO cambia: solo se agrega el warning `candidata_creada`
+    cuando el borrador pasó la validación determinista; sin LLM o con un
+    borrador inválido la respuesta es idéntica a la de siempre.
     """
     card = attack_cards.match_card(question)
     if card is None:
         if not attack_cards.mentions_generic_attack(question):
             return None
+        warnings = ["sin_ficha"]
+        # Fase 3: si hay LLM habilitado, proponer una candidata (queda
+        # PENDIENTE de aprobación humana). El texto NO cambia: solo se
+        # agrega el aviso cuando el borrador pasó la validación.
+        if await _crear_candidata(question, df, None, None):
+            warnings.append("candidata_creada")
         return _base_answer(
             answer=_attack_sin_ficha(),
             summary_line="Ataque fuera del catálogo de fichas",
             confidence="ninguna",
-            warnings=["sin_ficha"],
+            warnings=warnings,
             mode="attack_card",
             attack_card=None,
         )
 
     res = attack_cards.evaluate(card, df)
     estado, warnings = _attack_estado(card, res)
+    # Fase 3: la ficha existe pero no aplica al archivo → proponer una
+    # MEJORA de su regla (misma id; pendiente; el texto no cambia).
+    if not res.get("applicable"):
+        if await _crear_candidata(question, df, card, res):
+            warnings.append("candidata_creada")
     # Pieza 2: el bloque «Material del marco» viaja SOLO en preguntas
     # conceptuales («¿qué es…?», «¿cómo se ve…?»). En una detección era
     # ruido bajo las cifras: ahí mandan los números exactos + el chip

@@ -27,6 +27,8 @@ from sse_starlette.sse import AppStatus
 
 from ai_service import answer_question, routes_pattern, stream_question
 from main import ai_config
+import attack_cards
+import attack_candidates
 
 
 # ---------------------------------------------------------------------------
@@ -403,3 +405,191 @@ def test_ask_stream_de_ataque_emite_un_solo_final(client, analysis_id):
     assert payload["mode"] == "attack_card"
     assert "10.10.2.15" in payload["answer"]
     client.delete(f"/api/analysis/{analysis_id}/chat")
+
+
+# ---------------------------------------------------------------------------
+# Fase 3 · pieza 2: la señal de aprendizaje (candidata PENDIENTE)
+# ---------------------------------------------------------------------------
+# Regla del diseño: la respuesta NO cambia de texto; solo se agrega el
+# warning `candidata_creada` cuando el borrador pasó la validación
+# determinista. Sin LLM, con JSON ilegible o con validación negativa, la
+# respuesta queda EXACTAMENTE igual que hoy y no se escribe nada.
+_BORRADOR_NUEVO = {
+    "id": "credential_stuffing",
+    "nombre": "Credential stuffing",
+    "que_es": "Reutilización de credenciales filtradas contra muchos usuarios.",
+    "como_se_ve": "Muchos 4625 desde una misma IP con usuarios distintos.",
+    "event_ids": ["4625"],
+    "mitre": ["T1110.004"],
+    "sinonimos": ["credential stuffing", "reutilizacion de credenciales"],
+    "regla": {"tipo": "group_threshold", "columna": "Source_IP", "min": 3,
+              "conteo": {"Event_ID": "4625"}},
+    "umbrales": "≥3 eventos 4625 desde la misma IP.",
+    "ejemplo": "Cinco 4625 de 203.0.113.74 en DC-01.",
+}
+
+_BORRADOR_MEJORA = {
+    "id": "fuerza_bruta",
+    "nombre": "Fuerza bruta",
+    "que_es": "Intentos repetidos de adivinar contraseñas.",
+    "como_se_ve": "Muchos 4625 desde una misma IP.",
+    "event_ids": ["4625", "4624"],
+    "mitre": ["T1110"],
+    "sinonimos": ["fuerza bruta", "brute force", "password guessing",
+                  "ataque de diccionario"],
+    "regla": {"tipo": "group_threshold", "columna": "Source_IP", "min": 3,
+              "conteo": {"Event_ID": "4625"}},
+    "umbrales": "≥3 eventos 4625 desde la misma IP.",
+    "ejemplo": "Cinco 4625 de 203.0.113.74 sin depender de Result.",
+    "mejora": True,
+}
+
+
+def _df_sin_result():
+    """Fuerza bruta sin la columna `Result`: la ficha vigente no aplica."""
+    return _df_fuerza_bruta().drop(columns=["Result"])
+
+
+def _encender_llm(ai, monkeypatch, respuesta, llamadas=None):
+    """LLM encendido con `chat` falso; registra cada llamada en `llamadas`."""
+    ai.update({"enabled": True,
+               "api_url": "https://api.test/openai/v1/chat/completions"})
+
+    async def chat_falso(messages, cfg=None):
+        if llamadas is not None:
+            llamadas.append(messages)
+        return respuesta
+
+    monkeypatch.setattr(ai, "chat", chat_falso)
+
+
+def test_sin_ficha_con_llm_crea_candidata_pendiente(ai, monkeypatch):
+    # Respuesta de referencia SIN LLM: el texto no puede cambiar después.
+    sin_llm = asyncio.run(
+        answer_question("¿Hubo un ciberataque?", [], None, df=_df_fuerza_bruta())
+    )
+    _encender_llm(ai, monkeypatch, json.dumps(_BORRADOR_NUEVO, ensure_ascii=False))
+    con_llm = asyncio.run(
+        answer_question("¿Hubo un ciberataque?", [], None, df=_df_fuerza_bruta())
+    )
+
+    # Texto INTACTO (mismo catálogo listado, misma honestidad) + el aviso.
+    assert con_llm["answer"] == sin_llm["answer"]
+    assert "sin_ficha" in con_llm["warnings"]
+    assert "candidata_creada" in con_llm["warnings"]
+
+    # La candidata quedó PENDIENTE en el JSON temporal (nunca en el real).
+    candidatas = attack_candidates.list_candidates()
+    assert [c["id"] for c in candidatas] == ["credential_stuffing"]
+    assert candidatas[0]["status"] == "pendiente"
+    assert candidatas[0]["tipo"] == "nueva"
+    assert candidatas[0]["question"] == "¿Hubo un ciberataque?"
+    assert attack_candidates.CANDIDATES_PATH.exists()
+
+    # Y el catálogo NO cambió: match_card sigue sin conocer la ficha.
+    ids = [c["id"] for c in attack_cards.load_cards()]
+    assert "credential_stuffing" not in ids
+
+
+def test_sin_ficha_sin_llm_no_crea_candidata(ai):
+    res = asyncio.run(
+        answer_question("¿Hubo un ciberataque?", [], None, df=_df_fuerza_bruta())
+    )
+
+    assert res["warnings"] == ["sin_ficha"]
+    assert attack_candidates.list_candidates() == []
+    assert not attack_candidates.CANDIDATES_PATH.exists()
+
+
+def test_el_prompt_de_candidata_trae_datos_reales_del_archivo(ai, monkeypatch):
+    llamadas = []
+    _encender_llm(ai, monkeypatch,
+                  json.dumps(_BORRADOR_NUEVO, ensure_ascii=False), llamadas)
+    asyncio.run(
+        answer_question("¿Hubo un ciberataque?", [], None, df=_df_fuerza_bruta())
+    )
+
+    assert llamadas, "el LLM no llegó a invocarse para proponer la candidata"
+    prompt = json.dumps(llamadas[0], ensure_ascii=False)
+    # Columnas y Event IDs REALES del dataframe (el borrador se ancla a ellos).
+    assert "Source_IP" in prompt
+    assert "4625" in prompt
+    # Tipos de regla cerrados + ids/sinónimos existentes a evitar (colisiones).
+    assert "group_threshold" in prompt
+    assert "fuerza_bruta" in prompt
+    assert "que_es" in prompt
+
+
+def test_llm_basura_no_rompe_la_respuesta_de_sin_ficha(ai, monkeypatch):
+    _encender_llm(ai, monkeypatch, "lo siento, no puedo redactar eso")
+    res = asyncio.run(
+        answer_question("¿Hubo un ciberataque?", [], None, df=_df_fuerza_bruta())
+    )
+
+    assert res["warnings"] == ["sin_ficha"]
+    assert "Catálogo disponible" in res["answer"]
+    assert attack_candidates.list_candidates() == []
+
+
+def test_ficha_no_aplicable_propone_mejora(ai, monkeypatch):
+    df = _df_sin_result()
+    # Respuesta de referencia SIN LLM sobre el mismo archivo sin `Result`.
+    sin_llm = asyncio.run(
+        answer_question("¿Hubo fuerza bruta?", [], None, df=df)
+    )
+    assert "ficha_no_aplicable" in sin_llm["warnings"]
+    _encender_llm(ai, monkeypatch, json.dumps(_BORRADOR_MEJORA, ensure_ascii=False))
+    con_llm = asyncio.run(
+        answer_question("¿Hubo fuerza bruta?", [], None, df=df)
+    )
+
+    # Texto INTACTO + aviso de candidata creada.
+    assert con_llm["answer"] == sin_llm["answer"]
+    assert "ficha_no_aplicable" in con_llm["warnings"]
+    assert "candidata_creada" in con_llm["warnings"]
+
+    candidatas = attack_candidates.list_candidates()
+    assert [c["id"] for c in candidatas] == ["fuerza_bruta"]
+    assert candidatas[0]["tipo"] == "mejora"
+    # La regla VIGENTE viaja junto: el revisor compara propuesta vs. actual.
+    assert "Result" in json.dumps(candidatas[0]["regla_anterior"])
+    # El catálogo sigue intacto: la mejora NO se aplicó sola.
+    card = next(c for c in attack_cards.load_cards() if c["id"] == "fuerza_bruta")
+    assert "Result" in json.dumps(card["regla"])
+
+
+def test_no_aplicable_sin_llm_no_cambia_nada(ai):
+    res = asyncio.run(
+        answer_question("¿Hubo fuerza bruta?", [], None, df=_df_sin_result())
+    )
+
+    assert res["warnings"] == ["ficha_no_aplicable"]
+    assert attack_candidates.list_candidates() == []
+
+
+def test_deteccion_normal_no_dispara_senal(ai, monkeypatch):
+    llamadas = []
+    _encender_llm(ai, monkeypatch,
+                  "La IP 203.0.113.74 acumula 5 fallos y 1 éxito en DC-01.",
+                  llamadas)
+    res = asyncio.run(
+        answer_question("¿Hubo fuerza bruta?", [], None, df=_df_fuerza_bruta())
+    )
+
+    assert res["attack_card"]["total"] > 0
+    assert llamadas, "la redacción de la detección sí debe invocar al LLM"
+    assert "candidata_creada" not in res["warnings"]
+    assert attack_candidates.list_candidates() == []
+
+
+def test_df_vacio_no_invoca_al_llm_para_candidata(ai, monkeypatch):
+    llamadas = []
+    _encender_llm(ai, monkeypatch, json.dumps(_BORRADOR_MEJORA), llamadas)
+    vacio = _df_fuerza_bruta().iloc[0:0]
+    res = asyncio.run(
+        answer_question("¿Hubo fuerza bruta?", [], None, df=vacio)
+    )
+
+    assert res["warnings"] == ["ficha_no_aplicable"]
+    assert llamadas == []   # sin filas no hay con qué anclar el borrador
+    assert attack_candidates.list_candidates() == []

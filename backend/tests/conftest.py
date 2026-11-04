@@ -27,9 +27,11 @@ import importlib as _importlib
 # Orden por dependencias: los hojas primero — si `ai_service` se cargara antes
 # que `rag_store`/`ai_config`, su dual `from backend import X` crearía la
 # instancia de paquete antes que este alias y el mundo se partiría otra vez.
+# `attack_candidates` va justo después de `attack_cards` (de él depende) y
+# antes de `ai_service` (que lo importa para la señal de aprendizaje).
 _MODULOS_DUALES = ("rag_store", "ai_config", "filters", "severity", "rerank",
-                   "kb_store", "feedback_store", "attack_cards", "ai_service",
-                   "analysis_persist")
+                   "kb_store", "feedback_store", "attack_cards",
+                   "attack_candidates", "ai_service", "analysis_persist")
 for _name in _MODULOS_DUALES:
     sys.modules.setdefault(f"backend.{_name}", _importlib.import_module(_name))
 try:
@@ -209,6 +211,27 @@ def analyses_aislado(tmp_path_factory):
         yield analysis_persist.ANALYSES_DIR
     finally:
         analysis_persist.ANALYSES_DIR = original
+
+
+@pytest.fixture(autouse=True)
+def candidatas_aislado(tmp_path):
+    """Candidatas de ataque en un JSON temporal por test (fase 3).
+
+    La señal de aprendizaje (pieza 2) dispara `add_candidate` desde la ruta
+    de fichas: sin este aislamiento, cualquier test que encienda el LLM con
+    una consulta de ataque escribiría en `backend/data/`
+    `attack_cards_candidates.json`, el archivo real del analista. Es
+    autouse porque la señal vive dentro de `answer_question` y no todo test
+    pide un fixture propio. La caché en RAM se limpia antes y después.
+    """
+    import attack_candidates
+
+    original = attack_candidates.CANDIDATES_PATH
+    attack_candidates.CANDIDATES_PATH = tmp_path / "attack_cards_candidates.json"
+    attack_candidates._cache = None
+    yield attack_candidates.CANDIDATES_PATH
+    attack_candidates.CANDIDATES_PATH = original
+    attack_candidates._cache = None
 
 
 @pytest.fixture(scope="session")

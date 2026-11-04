@@ -440,3 +440,30 @@ def test_el_path_real_del_analista_no_es_el_que_usa_la_suite():
     assert attack_candidates.CANDIDATES_PATH != attack_candidates.CANDIDATES_PATH_REAL
     assert attack_candidates.CANDIDATES_PATH.name == "attack_cards_candidates.json"
     assert Path(attack_candidates.CANDIDATES_PATH_REAL).parent.name == "data"
+
+
+# ---------------------------------------------------------------------------
+# Aislamiento del harness de eval: la señal jamás escribe el archivo real
+# ---------------------------------------------------------------------------
+def test_eval_runner_redirige_las_candidatas_a_un_temporal(tmp_path):
+    """Una corrida de eval con LLM dispara la señal de la fase 3 (los casos
+    que nombran un ataque fuera del catálogo pasan por `_attack_route`):
+    sin esta redirección la corrida escribiría en `data/` del analista."""
+    from eval import runner
+
+    antes = attack_candidates.CANDIDATES_PATH
+    # Directorio DISTINTO al del fixture de aislamiento: si el runner no
+    # redirige, la ruta sigue en el tmp del fixture y el test falla.
+    workdir = tmp_path / "corrida_eval"
+    with runner._isolated_store(workdir):
+        destino = workdir / "attack_cards_candidates.json"
+        assert attack_candidates.CANDIDATES_PATH == destino
+        # ai_service es quien invoca add_candidate: ve la MISMA ruta aislada
+        # (patrón dual, una sola instancia — igual que feedback_store).
+        import ai_service
+        assert ai_service.attack_candidates.CANDIDATES_PATH == destino
+        # Caché invalidada ANTES de redirigir: una lectura va al temporal.
+        assert attack_candidates._cache is None
+
+    assert attack_candidates.CANDIDATES_PATH == antes
+    assert attack_candidates._cache is None
