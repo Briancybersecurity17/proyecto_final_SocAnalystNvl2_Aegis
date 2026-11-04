@@ -285,6 +285,31 @@ def test_barrido_con_una_detecta_en_singular(ai):
     assert "13 no se pudieron evaluar" in answer
 
 
+def test_barrido_con_dos_grupos_lista_detecciones_en_plural(ai):
+    """Dos grupos que pasan el umbral: «Fuerza bruta (2 detecciones)».
+
+    Dos IPs con 3 fallos + 1 éxito cada una: la ficha elige 2 grupos y
+    el rótulo del barrido tiene que pluralizar «detecciones» (sin tilde
+    en la e), no «detecciónes».
+    """
+    filas = []
+    for i, ip in enumerate(("203.0.113.74", "198.51.100.88")):
+        for j in range(3):
+            filas.append(_logon(100 + i * 10 + j, ip, "DC-01", "Failure"))
+        filas.append(_logon(106 + i * 10, ip, "DC-01", "Success", event=4624))
+    res = asyncio.run(
+        answer_question("¿Hubo un ciberataque?", [], None, df=pd.DataFrame(filas))
+    )
+
+    answer = res["answer"]
+    assert "1 detecta actividad" in answer
+    assert "Fuerza bruta (2 detecciones)" in answer
+    assert "detecciónes" not in answer
+    # Calibrado: 1 detecta + 4 sin umbral + 10 no evaluables = 15.
+    assert "4 no superan sus umbrales" in answer
+    assert "10 no se pudieron evaluar" in answer
+
+
 def test_barrido_sin_detecciones_con_una_sin_umbral_en_singular(ai):
     """Solo una ficha es evaluable y no detecta: «1 no supera sus umbrales».
 

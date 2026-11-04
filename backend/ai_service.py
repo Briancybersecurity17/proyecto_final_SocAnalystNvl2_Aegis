@@ -3302,7 +3302,7 @@ def _attack_sin_ficha(df) -> str:
     )
     if detectan:
         nombrar = ", ".join(
-            f"{nombre} ({n} detección{'es' if n != 1 else ''})"
+            f"{nombre} ({n} {'detección' if n == 1 else 'detecciones'})"
             for nombre, n in detectan[:6]
         )
         if len(detectan) > 6:
