@@ -2993,7 +2993,8 @@ async def _remote_answer(
 # ---------------------------------------------------------------------------
 # Pregunta que nombra un ataque (sinónimo de ficha O vocabulario genérico) y
 # hay dataframe → la respuesta sale del catálogo + evaluador de reglas, con
-# las cifras EXACTAS del archivo y el bloque «Material del marco» etiquetado.
+# las cifras EXACTAS del archivo. El bloque «Material del marco» etiquetado
+# viaja solo en preguntas conceptuales (pieza 2: en detecciones era ruido).
 # Nunca se cae en silencio al RAG: o la ficha responde, o se contesta
 # honestamente (fuera del catálogo / archivo sin los datos).
 
@@ -3210,8 +3211,9 @@ def _attack_estado(
         return (
             f"La ficha «{nombre}» es explicativa en la versión actual: no "
             "tiene regla de detección, así que no puedo afirmar ni descartar "
-            "este patrón con cifras exactas. Usá el material del marco para "
-            "reconocerlo a mano en tus registros.",
+            "este patrón con cifras exactas. "
+            f"Preguntá «¿Qué es {nombre}?» para ver qué es, cómo se ve en "
+            "logs y qué umbrales aplica.",
             ["ficha_explicativa"],
         )
     if motivo == "sin_columna":
@@ -3335,9 +3337,11 @@ async def _attack_route(question: str, df) -> Optional[Dict[str, Any]]:
     """Respuesta de la ruta de fichas de ataque, o None si no va por acá.
 
     Se activa con dataframe + una pregunta que nombra un ataque (sinónimo
-    de ficha o vocabulario genérico). La salida SIEMPRE incluye el bloque
-    «Material del marco» etiquetado; el LLM solo redacta encima del borrador
-    determinista y solo si todas sus cifras ya están ancladas.
+    de ficha o vocabulario genérico). Solo una pregunta CONCEPTUAL recibe
+    el bloque «Material del marco» etiquetado; en detecciones mandan las
+    cifras exactas + el chip `ficha <id> · <motivo>` (pieza 2). El LLM solo
+    redacta encima del borrador determinista y solo si todas sus cifras ya
+    están ancladas.
     """
     card = attack_cards.match_card(question)
     if card is None:
@@ -3354,13 +3358,16 @@ async def _attack_route(question: str, df) -> Optional[Dict[str, Any]]:
 
     res = attack_cards.evaluate(card, df)
     estado, warnings = _attack_estado(card, res)
-    material = _attack_material(card)
-    # Pregunta conceptual («¿qué es…?»): el material del marco primero y el
-    # hallazgo después; en el orden normal, las cifras primero.
-    if _CONCEPTO_RE.search(_norm_text(question)):
+    # Pieza 2: el bloque «Material del marco» viaja SOLO en preguntas
+    # conceptuales («¿qué es…?», «¿cómo se ve…?»). En una detección era
+    # ruido bajo las cifras: ahí mandan los números exactos + el chip
+    # `ficha <id> · <motivo>` de la línea de resumen.
+    es_concepto = bool(_CONCEPTO_RE.search(_norm_text(question)))
+    material = _attack_material(card) if es_concepto else ""
+    if es_concepto:
         bloques = [material, estado]
     else:
-        bloques = [estado, material]
+        bloques = [estado]
     draft = "\n\n".join(b for b in bloques if b)
 
     answer_text = draft
@@ -3369,7 +3376,7 @@ async def _attack_route(question: str, df) -> Optional[Dict[str, Any]]:
     if res.get("detections"):
         text, rechazado = await _attack_remote(draft, question, df)
         if text:
-            answer_text = f"{text}\n\n{material}"
+            answer_text = f"{text}\n\n{material}" if material else text
             engine = "llm"
             model = ai_config.get().get("model")
         elif rechazado and "grounding_rechazado" not in warnings:
@@ -3421,9 +3428,9 @@ async def answer_question(
     evidencias no cambia (se hace con la pregunta actual).
 
     `df` es el dataframe cargado del análisis: con él, una consulta que
-    nombra un ataque entra en la ruta de fichas (cifras exactas + material
-    del marco) antes que los agregados; sin df (llamadas legadas) la ruta
-    no se activa.
+    nombra un ataque entra en la ruta de fichas (cifras exactas; material
+    del marco solo en preguntas conceptuales) antes que los agregados; sin
+    df (llamadas legadas) la ruta no se activa.
     """
     ctx = build_qa_context(question, hits, summary, reference=reference, index_note=index_note)
     # Cortes de intención (saludo / inyección): respuesta determinista sin

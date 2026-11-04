@@ -5,7 +5,10 @@ Cubre el contrato completo de la ruta:
 1. `routes_pattern` clasifica la pregunta: sinónimo de ficha O vocabulario
    genérico de ataque («ciberataque») → nunca se cae en silencio al RAG.
 2. Respuesta determinista con las cifras EXACTAS de la ficha evaluada sobre
-   el dataframe + bloque «Material del marco» etiquetado (nunca como hallazgo).
+   el dataframe. El bloque «Material del marco» etiquetado viaja SOLO en
+   preguntas conceptuales («¿qué es…?», «¿cómo se ve…?»): en detecciones,
+   negativas y fichas explicativas era ruido (pieza 2), así que ahí mandan
+   las cifras + el chip `ficha <id> · <motivo>`.
 3. Degradación honesta: ficha sin regla (explicativa), archivo sin las
    columnas/Event IDs necesarios, o ataque fuera del catálogo.
 4. Híbrido con anclaje: el LLM redacta SOLO si todas sus cifras ya están en
@@ -125,7 +128,7 @@ def test_preguntas_normales_no_entran_en_la_ruta():
 # ---------------------------------------------------------------------------
 # Respuesta determinista (fase 1 + 2)
 # ---------------------------------------------------------------------------
-def test_respuesta_determinista_con_cifras_de_la_ficha():
+def test_respuesta_determinista_con_cifras_de_la_ficha(ai):
     res = asyncio.run(
         answer_question("¿Hubo fuerza bruta?", [], None, df=_df_fuerza_bruta())
     )
@@ -140,12 +143,11 @@ def test_respuesta_determinista_con_cifras_de_la_ficha():
     assert "203.0.113.74" in answer
     assert "fallos: 5" in answer
     assert "éxitos: 1" in answer
-    # Fase 2: bloque de material del marco etiquetado, nunca como hallazgo.
-    assert "**Material del marco**" in answer
-    assert "NO es un hallazgo" in answer
-    for rotulo in ("Qué es:", "Cómo se ve en logs:", "Umbral:",
-                   "MITRE ATT&CK:", "Ejemplo:"):
-        assert rotulo in answer, f"falta el rótulo «{rotulo}» en la respuesta"
+    # Pieza 2: la detección NO arrastra material del marco (ruido bajo las
+    # cifras): solo cifras exactas + el chip de la ficha en la línea de resumen.
+    assert "material del marco" not in answer.lower()
+    assert "NO es un hallazgo" not in answer
+    assert res["summary_line"] == "ficha fuerza_bruta · ok"
 
 
 def test_sin_detecciones_respuesta_negativa_con_el_umbral():
@@ -159,7 +161,8 @@ def test_sin_detecciones_respuesta_negativa_con_el_umbral():
     assert "ningún grupo supera el umbral" in answer
     # El umbral de la ficha viaja siempre: la negativa es verificable.
     assert "≥3 fallos" in answer
-    assert "Material del marco" in answer
+    # Pieza 2: sin detección tampoco hay bloque de material (es conceptual).
+    assert "material del marco" not in answer.lower()
 
 
 def test_no_aplica_por_falta_de_columnas():
@@ -173,7 +176,8 @@ def test_no_aplica_por_falta_de_columnas():
     answer = res["answer"]
     assert "no tiene los datos" in answer
     assert "Result" in answer
-    assert "Material del marco" in answer
+    # Pieza 2: el material del marco es ruido en una respuesta de «no aplica».
+    assert "material del marco" not in answer.lower()
 
 
 def test_no_aplica_por_event_ids_ausentes():
@@ -197,7 +201,9 @@ def test_ficha_explicativa_no_detecta():
     assert res["attack_card"]["motivo"] == "sin_regla"
     assert "ficha_explicativa" in res["warnings"]
     assert "explicativa" in res["answer"]
-    assert "Material del marco" in res["answer"]
+    # Pieza 2: el bloque de material SOLO en preguntas conceptuales — también
+    # acá se quita (decisión del analista) y la respuesta redirige al «¿qué es?».
+    assert "material del marco" not in res["answer"].lower()
 
 
 def test_ataque_fuera_del_catalogo_respuesta_honesta():
@@ -210,14 +216,33 @@ def test_ataque_fuera_del_catalogo_respuesta_honesta():
     answer = res["answer"]
     assert "catálogo" in answer
     assert "Fuerza bruta" in answer   # el listado de cobertura
+    # Sin ficha no hay material de qué hablar: solo el catálogo disponible.
+    assert "material del marco" not in answer.lower()
 
 
-def test_pregunta_conceptual_encabeza_el_material_del_marco():
+def test_pregunta_conceptual_encabeza_el_material_del_marco(ai):
     res = asyncio.run(
         answer_question("¿Qué es la fuerza bruta?", [], None, df=_df_fuerza_bruta())
     )
     answer = res["answer"]
+    # Es la ÚNICA variante conceptual: el bloque viaja completo y encabezado
+    # (antes del hallazgo), con sus cinco rótulos.
+    assert "Material del marco" in answer
     assert answer.index("Material del marco") < answer.index("detectada en tus registros")
+    for rotulo in ("Qué es:", "Cómo se ve en logs:", "Umbral:",
+                   "MITRE ATT&CK:", "Ejemplo:"):
+        assert rotulo in answer, f"falta el rótulo «{rotulo}» en la respuesta"
+    assert res["summary_line"] == "ficha fuerza_bruta · ok"
+
+
+def test_otra_variant_conceptual_tambien_lleva_material(ai):
+    """«¿Cómo se ve…?» es conceptual igual que «¿qué es…?»."""
+    res = asyncio.run(
+        answer_question("¿Cómo se ve la fuerza bruta en mis logs?", [], None,
+                        df=_df_fuerza_bruta())
+    )
+    assert res["mode"] == "attack_card"
+    assert "Material del marco" in res["answer"]
 
 
 def test_los_ataques_tienen_prioridad_sobre_los_agregados():
@@ -262,6 +287,9 @@ def test_llm_redacta_manteniendo_las_cifras_del_borrador(ai, monkeypatch):
     assert res["engine"] == "llm"
     assert res["answer"].startswith("La IP 203.0.113.74 acumula fallos: 5")
     assert res["attack_card"]["id"] == "fuerza_bruta"
+    # Pieza 2: ni el borrador ni la redacción del LLM traen el bloque de
+    # material del marco en una pregunta de detección.
+    assert "material del marco" not in res["answer"].lower()
 
 
 def test_llm_con_cifra_inventada_usa_el_borrador(ai, monkeypatch):
