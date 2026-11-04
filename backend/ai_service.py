@@ -2731,6 +2731,28 @@ def _cited_log_ids(text: str) -> List[str]:
     return re.findall(r"\b[A-Za-z]{2,12}[-_]\d{2,}\b", text or "")
 
 
+# Guiones tipográficos que el modelo reescribe solo (U+2010–U+2015, U+2212…):
+# se tratan como «-» para los anclajes y para el texto que ve el analista.
+_DASH_RE = re.compile(r"[\u2010-\u2015\u2212\ufe58\ufe63\uff0d]")
+
+
+def _norm_typography(text: str) -> str:
+    """Tipografía → ASCII seguro: guiones largos a «-» y espacios angostos
+    (U+202F, NBSP, finos) a espacio simple.
+
+    No cambia el sentido del texto, pero sí los controles: con «EVT‑00057»
+    (U+2011) `_numbers` lee «00057» como cifra suelta (y tira una redacción
+    válida por «cifra inventada») mientras `_cited_log_ids` ni reconoce el
+    ID (el chequeo de grounding queda vacío: un Log_ID inventado con ese
+    guion pasaría). De paso el analista copia los IDs a otras herramientas:
+    el guion debe ser ASCII.
+    """
+    text = _DASH_RE.sub("-", text or "")
+    for angosto in ("\u202f", "\u00a0", "\u2009", "\u2007"):
+        text = text.replace(angosto, " ")
+    return text.replace("\u200b", "")
+
+
 # --- Presupuesto del bloque few-shot contra la ventana del modelo ------------
 # Ventana de contexto del modelo configurado (gpt-oss-120b en Groq: 131072).
 # Es una constante y no un ajuste del panel porque el tope lo fija el
@@ -2796,14 +2818,20 @@ def _grounding_ok(answer: str, evidence: List[Dict[str, Any]]) -> bool:
     Toma el prefijo de los Log_ID reales (p. ej. «EVT-») y exige que todo
     token con ese formato exista en la evidencia recuperada. Un solo ID
     inventado invalida la respuesta entera y se usa el fallback determinista.
+
+    Los DOS lados se normalizan tipográficamente (guion largo U+2011 → «-»):
+    sin eso, «EVT‑9999» citado por el modelo ni siquiera matchea el formato
+    (chequeo vacío → el ID inventado pasaba) mientras un ID real del archivo
+    escrito con guion raro quedaba excluido por un detalle de forma.
     """
     known = {str(item.get("log_id", "")) for item in evidence}
     known -= {"", "—", "None"}
+    known = {_norm_typography(k) for k in known} - {"", "-", "None"}
     if not known:
         return True  # sin ids reales no hay nada que validar
 
     prefixes = {k.split("-")[0].split("_")[0] for k in known}
-    for token in _cited_log_ids(answer):
+    for token in _cited_log_ids(_norm_typography(answer)):
         family = token.split("-")[0].split("_")[0]
         if family in prefixes and token not in known:
             return False
@@ -2974,10 +3002,6 @@ _CONCEPTO_RE = re.compile(
     r"explicame|significa|para que sirve)\b"
 )
 
-# Guiones tipográficos que el modelo reescribe solo (U+2010–U+2015, U+2212…):
-# se tratan como «-» para los anclajes y para el texto que ve el analista.
-_DASH_RE = re.compile(r"[\u2010-\u2015\u2212\ufe58\ufe63\uff0d]")
-
 # Rótulos de `metricas` tal como se muestran al analista: el contrato del
 # evaluador es ASCII en el JSON («exitos»), pero en la respuesta se escribe
 # «éxitos».
@@ -3105,22 +3129,6 @@ def _attack_sin_ficha() -> str:
         f"inventar. Catálogo disponible: {nombres}. Nombrá uno de esos (o "
         "describí el patrón) y lo evalúo sobre tus registros."
     )
-
-
-def _norm_typography(text: str) -> str:
-    """Tipografía del modelo → ASCII seguro: guiones largos a «-» y
-    espacios angostos (U+202F, NBSP, finos) a espacio simple.
-
-    No cambia el sentido del texto, pero sí los anclajes: con «EVT‑00057»
-    (U+2011) `_numbers` lee «00057» como cifra suelta (y tira la redacción
-    por «cifra inventada») mientras `_cited_log_ids` ni reconoce el ID (el
-    chequeo queda vacío: un Log_ID inventado con ese guion pasaría). De paso
-    el analista copia los IDs a otras herramientas: el guion debe ser ASCII.
-    """
-    text = _DASH_RE.sub("-", text or "")
-    for angosto in ("\u202f", "\u00a0", "\u2009", "\u2007"):
-        text = text.replace(angosto, " ")
-    return text.replace("\u200b", "")
 
 
 def _attack_anchored(draft: str, text: str, df) -> bool:

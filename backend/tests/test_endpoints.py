@@ -565,6 +565,47 @@ def test_ask_no_stream_avisa_cuando_el_guard_rechaza(client, analysis_evt, monke
     assert "EVT-99999" not in body["answer"]
 
 
+def test_ask_no_stream_rechaza_id_inventado_con_guion_largo(
+    client, analysis_evt, monkeypatch
+):
+    """El guard no se salta con tipografía: «EVT‑99999» (U+2011) citado por
+    el modelo es un Log_ID inexistente igual que con guion ASCII, y la
+    respuesta cae al determinista. Sin normalizar, `_cited_log_ids` no
+    matchea el formato y el chequeo quedaba vacío."""
+    client.delete(f"/api/analysis/{analysis_evt}/chat")
+    _llm_activo(
+        monkeypatch,
+        "El host fue comprometido; revise EVT\u201199999 inmediatamente.",
+    )
+
+    res = client.post(f"/api/analysis/{analysis_evt}/ask", json={"question": _Q_DC01})
+    body = res.json()
+
+    assert res.status_code == 200
+    assert "grounding_rechazado" in body["warnings"]
+    assert body["engine"] == "deterministic"
+    assert "99999" not in body["answer"]
+
+
+def test_ask_no_stream_acepta_id_real_escrito_con_tipografia(
+    client, analysis_evt, monkeypatch
+):
+    """La normalización es de forma, no de contenido: un Log_ID REAL del
+    archivo citado con guion largo no invalida la respuesta."""
+    client.delete(f"/api/analysis/{analysis_evt}/chat")
+    _llm_activo(
+        monkeypatch,
+        "El evento EVT\u201100001 muestra el acceso anómalo de DC-01.",
+    )
+
+    res = client.post(f"/api/analysis/{analysis_evt}/ask", json={"question": _Q_DC01})
+    body = res.json()
+
+    assert res.status_code == 200
+    assert body["engine"] == "llm"
+    assert "grounding_rechazado" not in body["warnings"]
+
+
 def test_ask_no_stream_expone_rag_examples_used(client, analysis_id, monkeypatch):
     """Con criterio previo del analista, el bloque few-shot se inyecta y el
     número de ejemplos queda expuesto en la respuesta (auditoría)."""

@@ -338,6 +338,31 @@ def test_stream_llm_con_log_id_inventado_usa_fallback(ai, monkeypatch):
     assert fallback["evidence"]
 
 
+def test_stream_llm_con_log_id_inventado_en_guion_largo_usa_fallback(
+    ai, monkeypatch
+):
+    """El guard del stream tampoco se salta con tipografía: «EVT‑9999»
+    (U+2011) debe matchear el formato y descartar el texto igual que con
+    guion ASCII (sin normalizar, `_cited_log_ids` no lo ve y el texto
+    inventado se habría entregado como final)."""
+    ai.update({"enabled": True, "api_url": "https://api.test/openai/v1/chat/completions"})
+
+    async def chat_stream_falso(messages, cfg=None):
+        yield "El evento "
+        yield "EVT\u20119999 lo confirma."
+
+    monkeypatch.setattr(ai, "chat_stream", chat_stream_falso)
+
+    eventos = asyncio.run(_colectar(
+        stream_question("¿Qué pasó en DC-01?", [_hit("EVT-001")], {"rows": 12})
+    ))
+    assert [e["type"] for e in eventos] == ["meta", "token", "token", "fallback"]
+    fallback = eventos[-1]
+    assert fallback["warning"] == "grounding_rechazado"
+    assert fallback["engine"] == "deterministic"
+    assert "9999" not in fallback["answer"]
+
+
 def test_stream_llm_caido_a_mitad_usa_fallback(ai, monkeypatch):
     """Si el stream del modelo revienta a la mitad, llega el fallback con aviso."""
     ai.update({"enabled": True, "api_url": "https://api.test/openai/v1/chat/completions"})
