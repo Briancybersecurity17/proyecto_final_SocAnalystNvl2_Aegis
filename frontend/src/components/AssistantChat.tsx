@@ -55,6 +55,7 @@ const WARNING_LABEL: Record<string, string> = {
   fuera_de_tema: 'fuera del tema: no aparece en tus registros',
   consulta_bloqueada: 'consulta bloqueada: instrucciones ajenas a los registros',
   cortesia: 'saludo: sin consulta sobre los registros',
+  candidata_creada: 'candidata creada: pendiente de tu aprobación en «Correlaciones ATT&CK»',
 }
 
 interface ChatMessage {

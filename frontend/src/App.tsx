@@ -11,6 +11,7 @@ import UploadSection from './components/UploadSection';
 import ReportGenerator from './components/ReportGenerator';
 import AssistantChat from './components/AssistantChat';
 import AttackCorrelationsPanel from './components/AttackCorrelations';
+import AttackCandidates from './components/AttackCandidates';
 import AiOptions from './components/AiOptions';
 import TypingTitle from './components/TypingTitle';
 import { Sidebar } from './components/Sidebar';
@@ -32,7 +33,8 @@ const SECTION_META: Record<Section, { title: string; subtitle: string }> = {
   },
   attack: {
     title: 'Correlaciones ATT&CK',
-    subtitle: 'Técnicas MITRE ancladas a los Event_ID realmente observados en el dataset',
+    subtitle:
+      'Técnicas MITRE ancladas a los Event_ID observados y fichas candidatas con aprobación humana',
   },
   ai: {
     title: 'Opciones IA',
@@ -211,7 +213,16 @@ const App: React.FC = () => {
                 {activeSection === 'dashboard' && <Dashboard />}
                 {activeSection === 'security' && <SecurityAnalysis />}
                 {activeSection === 'assistant' && <AssistantChat />}
-                {activeSection === 'attack' && <AttackCorrelationsPanel />}
+                {activeSection === 'attack' && (
+                  <>
+                    <div className="space-y-6">
+                      <AttackCorrelationsPanel />
+                    </div>
+                    <div className="mt-6">
+                      <AttackCandidates />
+                    </div>
+                  </>
+                )}
                 {activeSection === 'ai' && <AiOptions />}
                 {activeSection === 'risk' && <RiskClassification />}
                 {activeSection === 'report' && <ReportGenerator />}

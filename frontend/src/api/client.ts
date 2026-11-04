@@ -404,6 +404,77 @@ export const clearFeedback = async () => {
   return response.data as { ok: boolean; removed: number; stats: FeedbackStats }
 }
 
+// ---------------------------------------------------------------------------
+// Fase 3: fichas candidatas — aprendizaje de ataques nuevos con aprobación
+// HUMANA. Nada de esto entra al catálogo sin el POST de aprobación.
+// ---------------------------------------------------------------------------
+
+/** Ficha candidata tal como la guarda `attack_candidates` (JSON espejo). */
+export interface AttackCandidate {
+  id: string
+  tipo: 'nueva' | 'mejora'
+  status: 'pendiente' | 'aprobada' | 'rechazada'
+  /** Pregunta del analista que disparó la señal. */
+  question: string
+  /** Borrador de ficha propuesto por el LLM y validado de forma determinista. */
+  card: {
+    id: string
+    nombre: string
+    que_es?: string
+    como_se_ve?: string
+    sinonimos?: string[]
+    regla?: { tipo?: string; [clave: string]: unknown }
+    umbrales?: string
+    ejemplo?: string
+    [clave: string]: unknown
+  }
+  /** Resultado de `attack_cards.evaluate` sobre el archivo evaluado. */
+  evaluacion: {
+    applicable: boolean
+    motivo: string
+    missing: string[]
+    total: number
+    detections: number
+  }
+  /** Solo en tipo `mejora`: la regla vigente que proponer reemplazar. */
+  regla_anterior?: { tipo?: string; [clave: string]: unknown } | null
+  creada?: string
+  actualizada?: string
+}
+
+/** Respuesta de approve/reject: mismo contrato que el módulo del backend. */
+export interface CandidateAction {
+  ok: boolean
+  motivo: string
+  missing: string[]
+  candidate: AttackCandidate | null
+}
+
+/** Lista de candidatas (opcionalmente filtradas por estado). */
+export const getAttackCandidates = async (status?: string, signal?: AbortSignal) => {
+  const response = await API.get('/attack-candidates', {
+    params: status ? { status } : {},
+    signal,
+  })
+  return response.data as { candidates: AttackCandidate[] }
+}
+
+/** Aprueba: la ficha entra al catálogo y match_card la ve al instante. */
+export const approveAttackCandidate = async (candidateId: string) => {
+  const response = await API.post(
+    `/attack-candidates/${encodeURIComponent(candidateId)}/approve`,
+  )
+  return response.data as CandidateAction
+}
+
+/** Rechaza: queda marcada y no se revive sola. El catálogo no cambia. */
+export const rejectAttackCandidate = async (candidateId: string) => {
+  const response = await API.post(
+    `/attack-candidates/${encodeURIComponent(candidateId)}/reject`,
+  )
+  return response.data as CandidateAction
+}
+
 /**
  * Evento del flujo SSE de `askQuestionStream`:
  * `meta` → 0..n `token` → `final` | `fallback`.
