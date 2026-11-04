@@ -3257,17 +3257,67 @@ def _attack_estado(
     return _attack_detection_lines(card, res), []
 
 
-def _attack_sin_ficha() -> str:
-    """Respuesta honesta cuando la consulta nombra un ataque fuera del
-    catálogo: se lista la cobertura disponible, nunca se cae al RAG."""
-    nombres = ", ".join(
-        str(c.get("nombre")) for c in attack_cards.load_cards()
+def _attack_sin_ficha(df) -> str:
+    """Respuesta honesta cuando la consulta nombra un ataque fuera del catálogo.
+
+    «¿Hubo un ciberataque?» es un término paraguas: en vez de solo listar
+    nombres (que suena a «eso no existe»), se EVALÚA el catálogo entero
+    contra el archivo y se reporta cuántas fichas detectan actividad, con
+    los conteos exactos de `attack_cards.evaluate` — cero invención.
+    Tres salidas: archivo vacío (no hay qué barrer), barrido con
+    detecciones (lista cada ficha que detecta con su total) o barrido sin
+    ninguna (dice «ninguna detecta» con el desglose de no-coincidencias y
+    no-evaluables). Siempre cierra invitando a preguntar por una ficha
+    concreta, que es lo que sí se puede evaluar en detalle.
+    """
+    cards = attack_cards.load_cards()
+    if df is None or len(df) == 0:
+        return (
+            "El archivo está vacío: no hay registros con los cuales evaluar "
+            f"ninguna de las {len(cards)} fichas del catálogo."
+        )
+    detectan: List[Tuple[str, int]] = []
+    sin_coincidencias = 0
+    no_evaluables = 0
+    for card in cards:
+        res = attack_cards.evaluate(card, df)
+        if not res.get("applicable"):
+            no_evaluables += 1
+        elif res.get("detections"):
+            detectan.append(
+                (str(card.get("nombre")), int(res.get("total") or 0)),
+            )
+        else:
+            sin_coincidencias += 1
+    intro = (
+        "No tengo una ficha para ese patrón en el catálogo, así que no doy "
+        "cifras de algo que no puedo evaluar. "
+        f"Sí evalué las {len(cards)} fichas del catálogo sobre tus registros: "
     )
+    if detectan:
+        nombrar = ", ".join(
+            f"{nombre} ({n} detección{'es' if n != 1 else ''})"
+            for nombre, n in detectan[:6]
+        )
+        if len(detectan) > 6:
+            nombrar += f" y {len(detectan) - 6} más"
+        cuerpo = (
+            f"{len(detectan)} detectan actividad — {nombrar}; "
+            f"{sin_coincidencias} no superan sus umbrales y "
+            f"{no_evaluables} no se pudieron evaluar (sin regla o faltan "
+            "columnas)."
+        )
+    else:
+        cuerpo = (
+            f"ninguna detecta actividad; {sin_coincidencias} no superan sus "
+            f"umbrales y {no_evaluables} no se pudieron evaluar (sin regla "
+            "o faltan columnas)."
+        )
     return (
-        "Preguntaste por un ataque que todavía no está en el catálogo de "
-        "fichas, así que no puedo darte cifras exactas sin arriesgarme a "
-        f"inventar. Catálogo disponible: {nombres}. Nombrá uno de esos (o "
-        "describí el patrón) y lo evalúo sobre tus registros."
+        intro
+        + cuerpo
+        + " Preguntá por una de esas fichas y te doy el detalle con sus "
+        "umbrales y evidencias."
     )
 
 
@@ -3502,7 +3552,7 @@ async def _attack_route(question: str, df) -> Optional[Dict[str, Any]]:
         if await _crear_candidata(question, df, None, None):
             warnings.append("candidata_creada")
         return _base_answer(
-            answer=_attack_sin_ficha(),
+            answer=_attack_sin_ficha(df),
             summary_line="Ataque fuera del catálogo de fichas",
             confidence="ninguna",
             warnings=warnings,

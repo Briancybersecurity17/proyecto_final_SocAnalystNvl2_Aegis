@@ -208,7 +208,7 @@ def test_ficha_explicativa_no_detecta():
     assert "material del marco" not in res["answer"].lower()
 
 
-def test_ataque_fuera_del_catalogo_respuesta_honesta():
+def test_ataque_fuera_del_catalogo_respuesta_honesta(ai):
     res = asyncio.run(
         answer_question("¿Hubo un ciberataque?", [], None, df=_df_fuerza_bruta())
     )
@@ -216,10 +216,46 @@ def test_ataque_fuera_del_catalogo_respuesta_honesta():
     assert "sin_ficha" in res["warnings"]
     assert res["confidence"] == "ninguna"
     answer = res["answer"]
-    assert "catálogo" in answer
-    assert "Fuerza bruta" in answer   # el listado de cobertura
-    # Sin ficha no hay material de qué hablar: solo el catálogo disponible.
+    # Pieza 5: «ciberataque» es un término paraguas — la respuesta útil no
+    # es listar nombres sino el BARRIDO del catálogo entero evaluado sobre
+    # el archivo, con conteos exactos de evaluate (calibrado con este df:
+    # 15 fichas = 2 detectan + 3 sin coincidencias + 10 no evaluables).
+    total = len(attack_cards.load_cards())
+    assert f"{total} fichas" in answer
+    assert "2 detectan actividad" in answer
+    assert "Fuerza bruta (1 detección)" in answer
+    assert "Acciones repetidas" in answer
+    assert "3 no superan sus umbrales" in answer
+    assert "10 no se pudieron evaluar" in answer
+    # Sin ficha no hay material de qué hablar.
     assert "material del marco" not in answer.lower()
+
+
+def test_sin_ficha_barrido_sin_detecciones(ai):
+    """Ninguna ficha supera su umbral: el barrido lo dice con conteos."""
+    res = asyncio.run(
+        answer_question("¿Hubo un ciberataque?", [], None, df=_df_sin_fuerza_bruta())
+    )
+
+    assert res["warnings"] == ["sin_ficha"]
+    answer = res["answer"]
+    assert "ninguna detecta actividad" in answer
+    # Calibrado con este df: 0 detectan + 4 sin coincidencias + 11 no eval.
+    assert "4 no superan sus umbrales" in answer
+    assert "11 no se pudieron evaluar" in answer
+    assert "2 detectan actividad" not in answer
+
+
+def test_sin_ficha_df_vacio_no_inventa_conteos(ai):
+    """Sin filas no hay qué barrer: se dice en vez de inventar un «0 de 15»."""
+    vacio = _df_fuerza_bruta().iloc[0:0]
+    res = asyncio.run(
+        answer_question("¿Hubo un ciberataque?", [], None, df=vacio)
+    )
+
+    assert res["warnings"] == ["sin_ficha"]
+    assert "vacío" in res["answer"]
+    assert "Catálogo disponible" not in res["answer"]
 
 
 def test_pregunta_conceptual_encabeza_el_material_del_marco(ai):
@@ -527,7 +563,8 @@ def test_llm_basura_no_rompe_la_respuesta_de_sin_ficha(ai, monkeypatch):
     )
 
     assert res["warnings"] == ["sin_ficha"]
-    assert "Catálogo disponible" in res["answer"]
+    # Pieza 5: el barrido (determinista) viaja aunque el LLM falle.
+    assert f"{len(attack_cards.load_cards())} fichas" in res["answer"]
     assert attack_candidates.list_candidates() == []
 
 
