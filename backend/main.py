@@ -66,6 +66,7 @@ try:
         is_aggregate_question,
         quick_answer,
         routes_aggregate,
+        routes_pattern,
         stream_question,
     )
     from backend import rag_store, kb_store, ai_config, rerank, feedback_store
@@ -82,6 +83,7 @@ except ImportError:  # pragma: no cover
         is_aggregate_question,
         quick_answer,
         routes_aggregate,
+        routes_pattern,
         stream_question,
     )
     import rag_store
@@ -1535,6 +1537,15 @@ async def ask_question(analysis_id: str, payload: AskRequest):
         _remember_turn(entry, question, rapida["answer"])
         return {**common, "retrieved": 0, **rapida}
 
+    # --- Ruta de fichas de ataque: cifras exactas de la ficha, SIN recuperación
+    # (retrieved = 0): se corta antes del RAG igual que los agregados.
+    if prep["df"] is not None and routes_pattern(question):
+        answer = await answer_question(
+            question, [], entry["summary"], reference=None, df=prep["df"],
+        )
+        _remember_turn(entry, question, str(answer.get("answer") or ""))
+        return {**common, "retrieved": 0, **answer}
+
     # --- Consulta de agregación: cifras exactas, sin recuperación -----------
     # Solo si además habla del archivo: «¿cuántos habitantes tiene España?»
     # contiene «cuantos» pero no dice nada de los registros.
@@ -1596,6 +1607,16 @@ async def ask_question_stream(analysis_id: str, payload: AskRequest):
         if rapida is not None:
             _remember_turn(entry, question, rapida["answer"])
             yield _sse("final", {**common, "retrieved": 0, **rapida})
+            return
+
+        # Ruta de fichas de ataque: una sola respuesta final con las cifras
+        # exactas de la ficha, sin recuperación (mismo corte que /ask).
+        if prep["df"] is not None and routes_pattern(question):
+            answer = await answer_question(
+                question, [], entry["summary"], reference=None, df=prep["df"],
+            )
+            _remember_turn(entry, question, str(answer.get("answer") or ""))
+            yield _sse("final", {**common, "retrieved": 0, **answer})
             return
 
         # Agregaciones: una sola respuesta con cifras exactas, sin streaming.

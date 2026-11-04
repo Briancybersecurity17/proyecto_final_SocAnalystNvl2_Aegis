@@ -42,9 +42,11 @@ logger = logging.getLogger("soc.ai")
 try:
     from backend import ai_config
     from backend import feedback_store
+    from backend import attack_cards
 except ImportError:  # pragma: no cover – módulo suelto (sys.path con backend/)
     import ai_config
     import feedback_store
+    import attack_cards
 
 LEVEL_ORDER = ["critico", "alto", "medio", "bajo"]
 LEVEL_LABELS = {
@@ -2958,6 +2960,277 @@ async def _remote_answer(
     return text, info
 
 
+# ---------------------------------------------------------------------------
+# Ruta de fichas de ataque (fase 1+2 del diseño aprobado)
+# ---------------------------------------------------------------------------
+# Pregunta que nombra un ataque (sinónimo de ficha O vocabulario genérico) y
+# hay dataframe → la respuesta sale del catálogo + evaluador de reglas, con
+# las cifras EXACTAS del archivo y el bloque «Material del marco» etiquetado.
+# Nunca se cae en silencio al RAG: o la ficha responde, o se contesta
+# honestamente (fuera del catálogo / archivo sin los datos).
+
+_CONCEPTO_RE = re.compile(
+    r"\b(que es|definicion|definir|como se ve|en que consiste|diferencia|"
+    r"explicame|significa|para que sirve)\b"
+)
+
+# Rótulos de `metricas` tal como se muestran al analista: el contrato del
+# evaluador es ASCII en el JSON («exitos»), pero en la respuesta se escribe
+# «éxitos».
+_METRICA_DISPLAY = {"exitos": "éxitos"}
+
+
+def routes_pattern(question: str) -> bool:
+    """¿La consulta va por la ruta de fichas de ataque?
+
+    Sinónimo de una ficha del catálogo O vocabulario genérico de ataque
+    («ciberataque»): en los dos casos la respuesta se construye con el
+    catálogo y el dataframe, nunca con recuperación silenciosa del RAG.
+    Los endpoints la usan para cortar ANTES de recuperar (retrieved = 0).
+    """
+    return (attack_cards.match_card(question) is not None
+            or attack_cards.mentions_generic_attack(question))
+
+
+def _attack_material(card: Dict[str, Any]) -> str:
+    """Bloque «Material del marco»: conocimiento de la ficha, etiquetado
+    para que nunca se lea como hallazgo de los registros (fase 2)."""
+    mitre = ", ".join(str(t) for t in (card.get("mitre") or [])) or "—"
+    return (
+        "**Material del marco** (conocimiento del marco — NO es un hallazgo "
+        "de tus registros):\n"
+        f"Qué es: {card.get('que_es')}\n"
+        f"Cómo se ve en logs: {card.get('como_se_ve')}\n"
+        f"Umbral: {card.get('umbrales')}\n"
+        f"MITRE ATT&CK: {mitre}\n"
+        f"Ejemplo: {card.get('ejemplo')}"
+    )
+
+
+def _attack_detection_lines(card: Dict[str, Any], res: Dict[str, Any]) -> str:
+    """Sección de hallazgos con las cifras exactas del evaluador (sin
+    pluralizar: «fallos: 5 · éxitos: 1», como en las correlaciones)."""
+    total = int(res.get("total") or 0)
+    lineas = [
+        f"{card.get('nombre')} detectada en tus registros "
+        f"(grupos por encima del umbral: {total}):"
+    ]
+    for det in res.get("detections") or []:
+        valores = det.get("valores") or {}
+        grupo = det.get("grupo") or ", ".join(
+            f"{k}={v}" for k, v in valores.items()
+        )
+        metricas = " · ".join(
+            f"{_METRICA_DISPLAY.get(k, k)}: {v}"
+            for k, v in (det.get("metricas") or {}).items()
+        )
+        linea = f"• {grupo}: {metricas}" if metricas else f"• {grupo}"
+        log_ids = det.get("log_ids") or []
+        if log_ids:
+            linea += f" (Log_IDs: {', '.join(str(x) for x in log_ids[:5])})"
+        lineas.append(linea)
+    return "\n".join(lineas)
+
+
+def _attack_estado(
+    card: Dict[str, Any], res: Dict[str, Any]
+) -> Tuple[str, List[str]]:
+    """(texto de estado, warnings) según el motivo de `evaluate`.
+
+    Cada rama es honesta: si la ficha no aplica al archivo o no tiene regla,
+    se dice con qué falta y qué umbral manda, sin inventar cifras.
+    """
+    nombre = card.get("nombre")
+    motivo = str(res.get("motivo") or "")
+    if motivo == "sin_regla":
+        return (
+            f"La ficha «{nombre}» es explicativa en la versión actual: no "
+            "tiene regla de detección, así que no puedo afirmar ni descartar "
+            "este patrón con cifras exactas. Usá el material del marco para "
+            "reconocerlo a mano en tus registros.",
+            ["ficha_explicativa"],
+        )
+    if motivo == "sin_columna":
+        faltan = ", ".join(str(c) for c in res.get("missing") or [])
+        return (
+            f"Este archivo no tiene los datos que la ficha «{nombre}» "
+            f"necesita: faltan las columnas {faltan or 'del dataset'}. "
+            "Sin ellas la regla no se puede evaluar (no invento columnas "
+            "ni filas).",
+            ["ficha_no_aplicable"],
+        )
+    if motivo == "sin_event_ids":
+        faltan = ", ".join(str(e) for e in res.get("missing") or [])
+        return (
+            f"Este archivo no contiene los Event IDs de la ficha "
+            f"«{nombre}»: {faltan}. Sin esos eventos la regla no se puede "
+            "evaluar.",
+            ["ficha_no_aplicable"],
+        )
+    if motivo == "sin_datos":
+        return (
+            "El archivo está vacío: no hay registros con los cuales evaluar "
+            "la ficha.",
+            ["ficha_no_aplicable"],
+        )
+    if motivo != "ok":
+        return (
+            f"No pude evaluar la regla de la ficha «{nombre}» (motivo: "
+            f"{motivo}). No doy cifras que no pude verificar.",
+            ["ficha_no_aplicable"],
+        )
+    if not res.get("detections"):
+        umbral = card.get("umbrales") or ""
+        return (
+            f"No detecté {nombre} en tus registros: ningún grupo supera el "
+            f"umbral de la ficha ({umbral})",
+            [],
+        )
+    return _attack_detection_lines(card, res), []
+
+
+def _attack_sin_ficha() -> str:
+    """Respuesta honesta cuando la consulta nombra un ataque fuera del
+    catálogo: se lista la cobertura disponible, nunca se cae al RAG."""
+    nombres = ", ".join(
+        str(c.get("nombre")) for c in attack_cards.load_cards()
+    )
+    return (
+        "Preguntaste por un ataque que todavía no está en el catálogo de "
+        "fichas, así que no puedo darte cifras exactas sin arriesgarme a "
+        f"inventar. Catálogo disponible: {nombres}. Nombrá uno de esos (o "
+        "describí el patrón) y lo evalúo sobre tus registros."
+    )
+
+
+def _attack_anchored(draft: str, text: str, df) -> bool:
+    """¿TODAS las cifras del texto del LLM ya están en el borrador?
+
+    Anclaje doble: números (más el largo del dataset) y Log_IDs citados
+    (si la familia existe en el archivo, el token debe ser real). Una cifra
+    inventada invalida la redacción completa → manda el borrador.
+    """
+    allowed = {value for _raw, value in _numbers(draft)}
+    try:
+        if df is not None:
+            allowed.add(float(len(df)))
+    except Exception:              # pragma: no cover - df siempre es DataFrame
+        pass
+    for _raw, value in _numbers(text):
+        if value not in allowed:
+            return False
+    if df is not None and "Log_ID" in df.columns:
+        evidence = [{"log_id": str(v)} for v in df["Log_ID"].tolist()]
+        if not _grounding_ok(text, evidence):
+            return False
+    return True
+
+
+async def _attack_remote(
+    draft: str, question: str, df
+) -> Tuple[Optional[str], bool]:
+    """Redacción del LLM sobre el borrador: (texto aceptado | None, rechazo).
+
+    Solo se invoca con detecciones > 0. El texto se acepta SOLO si pasa el
+    anclaje; si el modelo inventa una cifra → (None, True) y se entrega el
+    borrador determinista con el warning `grounding_rechazado`.
+    """
+    cfg = ai_config.get()
+    if not cfg.get("enabled") or not cfg.get("api_url"):
+        return None, False
+    messages = [
+        {"role": "system", "content": (
+            "Sos un analista SOC redactando en español. Redactá UN párrafo "
+            "corto usando SOLO las cifras del borrador que te paso: no "
+            "inventes IPs, hosts, cantidades ni Log_ID. Si un dato no está "
+            "en el borrador, no lo menciones. Sin encabezados ni listas: "
+            "solo prosa."
+        )},
+        {"role": "user", "content": (
+            f"Pregunta del analista: {question}\n\n"
+            f"Borrador determinista (únicas cifras permitidas):\n{draft}\n\n"
+            "Redactá la respuesta para el analista."
+        )},
+    ]
+    try:
+        text = await ai_config.chat(messages, cfg=cfg)
+    except Exception as exc:
+        logger.warning("Ruta de ataque: el LLM falló: %s", exc)
+        return None, False
+    if not text:
+        return None, False
+    if not _attack_anchored(draft, str(text), df):
+        return None, True
+    return str(text), False
+
+
+async def _attack_route(question: str, df) -> Optional[Dict[str, Any]]:
+    """Respuesta de la ruta de fichas de ataque, o None si no va por acá.
+
+    Se activa con dataframe + una pregunta que nombra un ataque (sinónimo
+    de ficha o vocabulario genérico). La salida SIEMPRE incluye el bloque
+    «Material del marco» etiquetado; el LLM solo redacta encima del borrador
+    determinista y solo si todas sus cifras ya están ancladas.
+    """
+    card = attack_cards.match_card(question)
+    if card is None:
+        if not attack_cards.mentions_generic_attack(question):
+            return None
+        return _base_answer(
+            answer=_attack_sin_ficha(),
+            summary_line="Ataque fuera del catálogo de fichas",
+            confidence="ninguna",
+            warnings=["sin_ficha"],
+            mode="attack_card",
+            attack_card=None,
+        )
+
+    res = attack_cards.evaluate(card, df)
+    estado, warnings = _attack_estado(card, res)
+    material = _attack_material(card)
+    # Pregunta conceptual («¿qué es…?»): el material del marco primero y el
+    # hallazgo después; en el orden normal, las cifras primero.
+    if _CONCEPTO_RE.search(_norm_text(question)):
+        bloques = [material, estado]
+    else:
+        bloques = [estado, material]
+    draft = "\n\n".join(b for b in bloques if b)
+
+    answer_text = draft
+    engine = "deterministic"
+    model = None
+    if res.get("detections"):
+        text, rechazado = await _attack_remote(draft, question, df)
+        if text:
+            answer_text = f"{text}\n\n{material}"
+            engine = "llm"
+            model = ai_config.get().get("model")
+        elif rechazado and "grounding_rechazado" not in warnings:
+            warnings.append("grounding_rechazado")
+
+    payload = {
+        "id": card.get("id"),
+        "nombre": card.get("nombre"),
+        "mitre": list(card.get("mitre") or []),
+        "umbrales": card.get("umbrales") or "",
+        "applicable": bool(res.get("applicable")),
+        "motivo": res.get("motivo"),
+        "missing": list(res.get("missing") or []),
+        "total": int(res.get("total") or 0),
+        "detections": list(res.get("detections") or []),
+    }
+    return _base_answer(
+        answer=answer_text,
+        summary_line=f"ficha {card.get('id')} · {res.get('motivo')}",
+        confidence="alta" if res.get("detections") else "baja",
+        engine=engine,
+        model=model,
+        warnings=warnings,
+        mode="attack_card",
+        attack_card=payload,
+    )
+
+
 async def answer_question(
     question: str,
     hits: List[Dict[str, Any]],
@@ -2965,6 +3238,7 @@ async def answer_question(
     reference: Optional[Dict[str, Any]] = None,
     index_note: str = "",
     history: Optional[List[Dict[str, Any]]] = None,
+    df: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Responde una consulta en lenguaje natural sobre los eventos indexados.
 
@@ -2978,6 +3252,11 @@ async def answer_question(
     `history` son los turnos previos de la conversación (memoria multi-turno)
     que el modelo ve antes de la consulta vigente; la recuperación de
     evidencias no cambia (se hace con la pregunta actual).
+
+    `df` es el dataframe cargado del análisis: con él, una consulta que
+    nombra un ataque entra en la ruta de fichas (cifras exactas + material
+    del marco) antes que los agregados; sin df (llamadas legadas) la ruta
+    no se activa.
     """
     ctx = build_qa_context(question, hits, summary, reference=reference, index_note=index_note)
     # Cortes de intención (saludo / inyección): respuesta determinista sin
@@ -2986,6 +3265,13 @@ async def answer_question(
     rapida = quick_answer(question)
     if rapida is not None:
         return rapida
+    # Ruta de fichas de ataque (fase 1+2): ANTES que los agregados — quien
+    # pregunta por un ataque quiere las cifras de la ficha, no un resumen
+    # genérico. Sin dataframe (llamadas directas legadas) no se activa.
+    if df is not None:
+        ataque = await _attack_route(question, df)
+        if ataque is not None:
+            return ataque
     # Consultas de agregación («¿cuántos...?», «¿qué hosts concentran...?»):
     # se responden con los conteos exactos del dataset, sin pasar por el modelo
     # ni por filas recuperadas (rigor analítico: cero cifras generadas).
@@ -3031,6 +3317,7 @@ async def stream_question(
     reference: Optional[Dict[str, Any]] = None,
     index_note: str = "",
     history: Optional[List[Dict[str, Any]]] = None,
+    df: Optional[Any] = None,
 ):
     """Versión en streaming de ``answer_question`` para el endpoint SSE.
 
@@ -3056,6 +3343,14 @@ async def stream_question(
     if rapida is not None:
         yield {"type": "final", **rapida}
         return
+
+    # Ruta de fichas de ataque: una sola respuesta final (mismo contrato que
+    # los agregados). Sin dataframe no se activa.
+    if df is not None:
+        ataque = await _attack_route(question, df)
+        if ataque is not None:
+            yield {"type": "final", **ataque}
+            return
 
     aggregate = _aggregate_answer(ctx)
     if aggregate is not None:
