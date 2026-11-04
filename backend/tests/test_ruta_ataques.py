@@ -281,6 +281,49 @@ def test_llm_con_cifra_inventada_usa_el_borrador(ai, monkeypatch):
     assert "grounding_rechazado" in res["warnings"]
 
 
+def test_llm_con_tipografia_no_es_cifra_inventada(ai, monkeypatch):
+    """El modelo reescribe los Log_ID con guion largo (U+2011) y espacios
+    angostos (U+202F): es tipografía, no una cifra inventada. La redacción
+    válida debe aceptarse y el texto normalizado a guion ASCII (el analista
+    copia los IDs a otras herramientas)."""
+    ai.update({"enabled": True,
+               "api_url": "https://api.test/openai/v1/chat/completions"})
+
+    async def chat_falso(messages, cfg=None):
+        return ("La IP 203.0.113.74 acumuló\u202f5 fallos y\u202f1 éxito "
+                "(EVT\u2011100, EVT\u2011101); revisá las credenciales.")
+
+    monkeypatch.setattr(ai, "chat", chat_falso)
+    res = asyncio.run(
+        answer_question("¿Hubo fuerza bruta?", [], None, df=_df_fuerza_bruta())
+    )
+    assert res["engine"] == "llm"
+    assert "EVT-100" in res["answer"]
+    assert "\u2011" not in res["answer"]
+    assert "\u202f" not in res["answer"]
+    assert "grounding_rechazado" not in res["warnings"]
+
+
+def test_llm_id_inventado_con_guion_largo_sigue_cayendo(ai, monkeypatch):
+    """La normalización no puede abrir la puerta: «EVT‑00005» (U+2011) cita
+    un ID inexistente del dataset y sus dígitos (5) coinciden con una cifra
+    del borrador. Sin normalizar, `_numbers` lee «00005» como 5 y
+    `_cited_log_ids` no reconoce el ID: la redacción pasaría inventada."""
+    ai.update({"enabled": True,
+               "api_url": "https://api.test/openai/v1/chat/completions"})
+
+    async def chat_falso(messages, cfg=None):
+        return ("La IP 203.0.113.74 acumuló 5 fallos y 1 éxito "
+                "(EVT\u201100005): revisá las credenciales.")
+
+    monkeypatch.setattr(ai, "chat", chat_falso)
+    res = asyncio.run(
+        answer_question("¿Hubo fuerza bruta?", [], None, df=_df_fuerza_bruta())
+    )
+    assert res["engine"] == "deterministic"
+    assert "grounding_rechazado" in res["warnings"]
+
+
 def test_llm_no_se_invoca_cuando_no_hay_deteccion(ai, monkeypatch):
     ai.update({"enabled": True,
                "api_url": "https://api.test/openai/v1/chat/completions"})

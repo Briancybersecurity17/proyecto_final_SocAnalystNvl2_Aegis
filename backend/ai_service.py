@@ -2974,6 +2974,10 @@ _CONCEPTO_RE = re.compile(
     r"explicame|significa|para que sirve)\b"
 )
 
+# Guiones tipográficos que el modelo reescribe solo (U+2010–U+2015, U+2212…):
+# se tratan como «-» para los anclajes y para el texto que ve el analista.
+_DASH_RE = re.compile(r"[\u2010-\u2015\u2212\ufe58\ufe63\uff0d]")
+
 # Rótulos de `metricas` tal como se muestran al analista: el contrato del
 # evaluador es ASCII en el JSON («exitos»), pero en la respuesta se escribe
 # «éxitos».
@@ -3103,6 +3107,22 @@ def _attack_sin_ficha() -> str:
     )
 
 
+def _norm_typography(text: str) -> str:
+    """Tipografía del modelo → ASCII seguro: guiones largos a «-» y
+    espacios angostos (U+202F, NBSP, finos) a espacio simple.
+
+    No cambia el sentido del texto, pero sí los anclajes: con «EVT‑00057»
+    (U+2011) `_numbers` lee «00057» como cifra suelta (y tira la redacción
+    por «cifra inventada») mientras `_cited_log_ids` ni reconoce el ID (el
+    chequeo queda vacío: un Log_ID inventado con ese guion pasaría). De paso
+    el analista copia los IDs a otras herramientas: el guion debe ser ASCII.
+    """
+    text = _DASH_RE.sub("-", text or "")
+    for angosto in ("\u202f", "\u00a0", "\u2009", "\u2007"):
+        text = text.replace(angosto, " ")
+    return text.replace("\u200b", "")
+
+
 def _attack_anchored(draft: str, text: str, df) -> bool:
     """¿TODAS las cifras del texto del LLM ya están en el borrador?
 
@@ -3159,9 +3179,12 @@ async def _attack_remote(
         return None, False
     if not text:
         return None, False
-    if not _attack_anchored(draft, str(text), df):
+    # Tipografía del modelo normalizada ANTES del anclaje (y el texto que se
+    # entrega sale normalizado): guion largo no es cifra ni ID irreconocible.
+    text = _norm_typography(str(text))
+    if not _attack_anchored(draft, text, df):
         return None, True
-    return str(text), False
+    return text, False
 
 
 async def _attack_route(question: str, df) -> Optional[Dict[str, Any]]:
