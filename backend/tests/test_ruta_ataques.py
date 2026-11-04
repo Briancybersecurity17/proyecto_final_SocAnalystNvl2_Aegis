@@ -258,6 +258,50 @@ def test_sin_ficha_df_vacio_no_inventa_conteos(ai):
     assert "Catálogo disponible" not in res["answer"]
 
 
+def test_barrido_con_una_detecta_en_singular(ai):
+    """Una sola ficha detecta: «1 detecta actividad», nunca «1 detectan».
+
+    Columnas mínimas para que UNA ficha sea evaluable y detecte:
+    Event_ID trae un 4720 (cuentas_nuevas) y solo rdp_fuerza_bruta es
+    applicable además (row_filter sobre Event_Description, sin coincidencias).
+    Calibrado: 1 detecta + 1 sin umbral + 13 no evaluables = 15.
+    """
+    df = pd.DataFrame([
+        {"Log_ID": "EVT-001", "Event_ID": 4720,
+         "Event_Description": "Nuevo usuario creado en el dominio"},
+        {"Log_ID": "EVT-002", "Event_ID": 4624,
+         "Event_Description": "Registro de actividad normal"},
+    ])
+    res = asyncio.run(
+        answer_question("¿Hubo un ciberataque?", [], None, df=df)
+    )
+
+    answer = res["answer"]
+    assert "1 detecta actividad" in answer
+    assert "1 detectan actividad" not in answer
+    assert "Cuentas nuevas fuera de ventana (1 detección)" in answer
+    assert "1 no supera sus umbrales" in answer
+    assert "1 no superan sus umbrales" not in answer
+    assert "13 no se pudieron evaluar" in answer
+
+
+def test_barrido_sin_detecciones_con_una_sin_umbral_en_singular(ai):
+    """Solo una ficha es evaluable y no detecta: «1 no supera sus umbrales».
+
+    `_df_minimo` (solo Log_ID + descripción): rdp es la única applicable
+    y no alcanza su umbral; las otras 14 ni se pueden evaluar.
+    """
+    res = asyncio.run(
+        answer_question("¿Hubo un ciberataque?", [], None, df=_df_minimo())
+    )
+
+    answer = res["answer"]
+    assert "ninguna detecta actividad" in answer
+    assert "1 no supera sus umbrales" in answer
+    assert "1 no superan sus umbrales" not in answer
+    assert "14 no se pudieron evaluar" in answer
+
+
 def test_pregunta_conceptual_encabeza_el_material_del_marco(ai):
     res = asyncio.run(
         answer_question("¿Qué es la fuerza bruta?", [], None, df=_df_fuerza_bruta())

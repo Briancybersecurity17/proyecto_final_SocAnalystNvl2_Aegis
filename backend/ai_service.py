@@ -3257,6 +3257,12 @@ def _attack_estado(
     return _attack_detection_lines(card, res), []
 
 
+def _pl(n: int, singular: str, plural: str) -> str:
+    """«1 detecta» / «3 detectan»: el barrido se tiene que leer en plural
+    solo cuando toca (con 15 fichas siempre puede salir «1 no supera»)."""
+    return f"{n} {singular if n == 1 else plural}"
+
+
 def _attack_sin_ficha(df) -> str:
     """Respuesta honesta cuando la consulta nombra un ataque fuera del catálogo.
 
@@ -3302,15 +3308,17 @@ def _attack_sin_ficha(df) -> str:
         if len(detectan) > 6:
             nombrar += f" y {len(detectan) - 6} más"
         cuerpo = (
-            f"{len(detectan)} detectan actividad — {nombrar}; "
-            f"{sin_coincidencias} no superan sus umbrales y "
-            f"{no_evaluables} no se pudieron evaluar (sin regla o faltan "
-            "columnas)."
+            f"{_pl(len(detectan), 'detecta actividad', 'detectan actividad')}"
+            f" — {nombrar}; "
+            f"{_pl(sin_coincidencias, 'no supera sus umbrales', 'no superan sus umbrales')} y "
+            f"{_pl(no_evaluables, 'no se pudo evaluar', 'no se pudieron evaluar')} (sin regla o "
+            "faltan columnas)."
         )
     else:
         cuerpo = (
-            f"ninguna detecta actividad; {sin_coincidencias} no superan sus "
-            f"umbrales y {no_evaluables} no se pudieron evaluar (sin regla "
+            f"ninguna detecta actividad; "
+            f"{_pl(sin_coincidencias, 'no supera sus umbrales', 'no superan sus umbrales')} y "
+            f"{_pl(no_evaluables, 'no se pudo evaluar', 'no se pudieron evaluar')} (sin regla "
             "o faltan columnas)."
         )
     return (
