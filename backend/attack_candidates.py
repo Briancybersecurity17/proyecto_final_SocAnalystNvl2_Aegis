@@ -25,9 +25,15 @@ Tipos de retorno de `add_candidate` / `approve` / `reject`:
     {"ok": bool, "motivo": str, "missing": [...], "candidate": dict|None}
 
 Motivos de `add_candidate`: guardada, actualizada, borrador_invalido,
-id_invalido, id_duplicado, sinonimo_duplicado, rechazada_previa,
-aprobada_previa, sin_regla, regla_desconocida, sin_columna, sin_event_ids,
-regla_invalida, sin_datos.
+id_invalido, id_duplicado, sinonimo_duplicado, mejora_inexistente,
+sinonimo_incompleto, rechazada_previa, aprobada_previa, sin_regla,
+regla_desconocida, sin_columna, sin_event_ids, regla_invalida, sin_datos.
+
+Dos tipos de candidata (campo `tipo`): `nueva` agrega una ficha al
+catálogo; `mejora` (borrador con `mejora: true`) propone una regla
+adaptada para una ficha VIGENTE con `applicable:false` — conserva los
+sinónimos originales, guarda `regla_anterior` para que el revisor compare,
+y al aprobarse REEMPLAZA la regla en el catálogo en vez de duplicar.
 """
 
 from __future__ import annotations
@@ -141,14 +147,34 @@ def _validar(draft: Any, df) -> Dict[str, Any]:
     if not ID_RE.match(idc):
         return _res(False, "id_invalido", ["id"])
 
-    # Colisiones con el catálogo vigente: un id repetido o un sinónimo ya
-    # cubierto harían ambigua a match_card (empate resuelto por longitud,
-    # pero dos fichas para el mismo patrón es desinformación, no señal).
+    mejora = bool(draft.get("mejora"))
+    cards = attack_cards.load_cards()
+    vigente = next((c for c in cards if str(c.get("id")) == idc), None)
     sinonimos = {str(attack_cards._norm(s))
                  for s in draft.get("sinonimos") or [] if str(s).strip()}
-    for card in attack_cards.load_cards():
-        if str(card.get("id")) == idc:
-            return _res(False, "id_duplicado", ["id"])
+
+    if mejora:
+        # Mejora de una ficha VIGENTE (applicable:false con ficha existente):
+        # el id tiene que existir y los sinónimos originales se conservan —
+        # si la mejora los cambiara, la ficha dejaría de matchear las
+        # preguntas que hoy matchea y el alcance se perdería en silencio.
+        if vigente is None:
+            return _res(False, "mejora_inexistente", ["id"])
+        faltan = [str(s) for s in vigente.get("sinonimos") or []
+                  if str(attack_cards._norm(s)) not in sinonimos]
+        if faltan:
+            return _res(False, "sinonimo_incompleto", faltan)
+    elif vigente is not None:
+        # Colisión con el catálogo vigente: un id repetido (o un sinónimo ya
+        # cubierto, abajo) haría ambigua a match_card — dos fichas para el
+        # mismo patrón es desinformación, no señal.
+        return _res(False, "id_duplicado", ["id"])
+
+    # Colisiones con OTRAS fichas: el sinónimo agregado no puede pertenecer
+    # a otro patrón del catálogo (la ficha propia se excluye en la mejora).
+    for card in cards:
+        if mejora and str(card.get("id")) == idc:
+            continue
         for syn in card.get("sinonimos") or []:
             nsyn = str(attack_cards._norm(syn))
             if nsyn and nsyn in sinonimos:
@@ -187,12 +213,14 @@ def add_candidate(draft: Any, question: str, df) -> Dict[str, Any]:
         return res
 
     card = dict(draft)
+    mejora = bool(card.pop("mejora", False))
     with _lock:
         candidates = _load()
         prev = _find(candidates, card["id"])
         now = datetime.now().isoformat(timespec="seconds")
         record = {
             "id": card["id"],
+            "tipo": "mejora" if mejora else "nueva",
             "status": "pendiente",
             "question": str(question or ""),
             "card": card,
@@ -206,6 +234,15 @@ def add_candidate(draft: Any, question: str, df) -> Dict[str, Any]:
             "creada": now,
             "actualizada": now,
         }
+        if mejora:
+            # Qué cambia: la regla vigente viaja junto para que el revisor
+            # compare propuesta vs. actual antes de aprobar.
+            vigente = next(
+                (c for c in attack_cards.load_cards()
+                 if str(c.get("id")) == card["id"]),
+                None,
+            )
+            record["regla_anterior"] = (vigente or {}).get("regla")
         if prev is not None:
             estado = prev.get("status")
             if estado == "rechazada":
@@ -242,14 +279,22 @@ def approve(candidate_id: str) -> Dict[str, Any]:
             logger.warning("attack_candidates: catálogo ilegible: %s", exc)
             return _res(False, "catalogo_ilegible")
         cards = data.get("cards", []) if isinstance(data, dict) else []
-        if not any(str(c.get("id")) == cand["id"] for c in cards
-                   if isinstance(c, dict)):
-            cards.append(cand.get("card") or {})
-            data["cards"] = cards
-            attack_cards.CATALOGO.write_text(
-                json.dumps(data, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+        nuevo = cand.get("card") or {}
+        idx = next(
+            (i for i, c in enumerate(cards)
+             if isinstance(c, dict) and str(c.get("id")) == cand["id"]),
+            None,
+        )
+        if idx is None:
+            cards.append(nuevo)          # ficha nueva: entra al catálogo
+        elif cand.get("tipo") == "mejora":
+            cards[idx] = nuevo           # mejora: REEMPLAZA (nunca duplica)
+        # (nueva con id ya presente: no se pisa la ficha vigente)
+        data["cards"] = cards
+        attack_cards.CATALOGO.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
         # Invalidación DIRECTA: load_cards() cachea en _CACHE y el chat debe
         # ver la ficha aprobada sin reiniciar el backend.
         attack_cards._CACHE = None

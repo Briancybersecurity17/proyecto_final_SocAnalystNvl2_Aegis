@@ -316,6 +316,123 @@ def test_rechazada_no_se_puede_aprobar():
 
 
 # ---------------------------------------------------------------------------
+# Pieza 1b: candidatas de tipo «mejora» (ficha existente, applicable:false)
+# ---------------------------------------------------------------------------
+def _draft_mejora(**extra):
+    """Borrador marcado como mejora de la ficha EXISTENTE `fuerza_bruta`.
+
+    Adapta la regla a un archivo sin la columna `Result` (group_threshold
+    solo por Event_ID) conservando los sinónimos originales.
+    """
+    draft = _draft(
+        idc="fuerza_bruta",
+        nombre="Fuerza bruta",
+        sinonimos=["fuerza bruta", "brute force", "password guessing",
+                   "ataque de diccionario"],
+        regla={"tipo": "group_threshold", "columna": "Source_IP", "min": 3,
+               "conteo": {"Event_ID": "4625"}},
+        umbrales="≥3 eventos 4625 desde la misma IP.",
+        mejora=True,
+    )
+    draft.update(extra)
+    return draft
+
+
+def test_mejora_se_guarda_con_tipo_y_regla_anterior():
+    res = attack_candidates.add_candidate(_draft_mejora(), "¿Hubo fuerza bruta?", _df())
+
+    assert res["ok"] is True
+    assert res["motivo"] == "guardada"
+    candidata = res["candidate"]
+    assert candidata["tipo"] == "mejora"
+    # El revisor necesita ver QUÉ cambia: la regla vigente viaja junto.
+    assert candidata["regla_anterior"] == {
+        "tipo": "group_threshold", "columna": "Source_IP", "conteo": {"Event_ID": "4625",
+        "Result": "Failure"}, "nombre_conteo": "fallos", "min": 3,
+        "segundo_conteo": {"Event_ID": "4624", "Result": "Success"},
+        "nombre_segundo": "exitos", "min_segundo": 1,
+    }
+    # Sigue siendo pendiente: el catálogo NO cambió.
+    card = next(c for c in attack_cards.load_cards() if c["id"] == "fuerza_bruta")
+    assert "Result" in str(card["regla"])
+
+
+def test_mejora_con_id_inexistente_falla():
+    res = attack_candidates.add_candidate(
+        _draft(idc="no_en_catalogo", mejora=True), "p", _df(),
+    )
+
+    assert res["ok"] is False
+    assert res["motivo"] == "mejora_inexistente"
+    assert attack_candidates.list_candidates() == []
+
+
+def test_mejora_que_pierde_sinonimos_falla():
+    # Si la mejora no conserva los sinónimos vigentes, la ficha dejaría de
+    # matchear las preguntas que hoy matchea: se pierde alcance en silencio.
+    res = attack_candidates.add_candidate(
+        _draft_mejora(sinonimos=["fuerza bruta sin resultado"]), "p", _df(),
+    )
+
+    assert res["ok"] is False
+    assert res["motivo"] == "sinonimo_incompleto"
+    assert attack_candidates.list_candidates() == []
+
+
+def test_mejora_con_sinonimo_de_otra_ficha_falla():
+    # Los sinónimos agregados no pueden colisionar con OTRA ficha del catálogo.
+    res = attack_candidates.add_candidate(
+        _draft_mejora(sinonimos=["fuerza bruta", "brute force",
+                                 "password guessing", "ataque de diccionario",
+                                 "spraying"]), "p", _df(),
+    )
+
+    assert res["ok"] is False
+    assert res["motivo"] == "sinonimo_duplicado"
+    assert attack_candidates.list_candidates() == []
+
+
+def test_mejora_tambien_se_valida_con_evaluate():
+    res = attack_candidates.add_candidate(
+        _draft_mejora(regla={
+            "tipo": "group_threshold", "columna": "Puerto", "min": 3,
+        }), "p", _df(),
+    )
+
+    assert res["ok"] is False
+    assert res["motivo"] == "sin_columna"
+    assert attack_candidates.list_candidates() == []
+
+
+def test_approve_de_mejora_reemplaza_la_regla_en_el_catalogo():
+    attack_candidates.add_candidate(_draft_mejora(), "¿Hubo fuerza bruta?", _df())
+
+    res = attack_candidates.approve("fuerza_bruta")
+
+    assert res["ok"] is True
+    assert res["motivo"] == "aprobada"
+    # UNA sola ficha con esa id (reemplazo, no duplicado) y la regla NUEVA
+    # es la que evalúa: sin columna Result, el archivo sin Result ya aplica.
+    cards = [c for c in attack_cards.load_cards() if c["id"] == "fuerza_bruta"]
+    assert len(cards) == 1
+    assert "Result" not in str(cards[0]["regla"])
+    assert attack_cards.evaluate(cards[0], _df())["applicable"] is True
+    # match_card no cambió de alcance (los sinónimos originales siguen).
+    assert attack_cards.match_card("¿hubo fuerza bruta?")["id"] == "fuerza_bruta"
+
+
+def test_approve_de_mejora_es_idempotente():
+    attack_candidates.add_candidate(_draft_mejora(), "p", _df())
+    attack_candidates.approve("fuerza_bruta")
+    res = attack_candidates.approve("fuerza_bruta")
+
+    assert res["ok"] is True
+    assert res["motivo"] == "ya_aprobada"
+    assert len([c for c in attack_cards.load_cards()
+                if c["id"] == "fuerza_bruta"]) == 1
+
+
+# ---------------------------------------------------------------------------
 # Aislamiento: el JSON real del analista jamás se escribe desde la suite
 # ---------------------------------------------------------------------------
 def test_el_path_real_del_analista_no_es_el_que_usa_la_suite():
