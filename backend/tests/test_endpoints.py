@@ -5,6 +5,8 @@ import pytest
 
 from main import analysis_store
 from tests.conftest import COLUMNAS, DATASET_12_FILAS, _subir_y_esperar
+import attack_cards
+import attack_candidates
 
 
 def test_ingesta_enriquece_el_dataframe(client, analysis_id):
@@ -654,3 +656,158 @@ def test_ask_agregado_expone_rag_examples_cero(client, analysis_id):
                        json={"question": "¿Cuántos eventos hay en total?"}).json()
     assert body["mode"] == "aggregate"
     assert body["rag_examples_used"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Fase 3 · pieza 3: endpoints de fichas candidatas (aprobación HUMANA)
+# ---------------------------------------------------------------------------
+# Contrato: GET solo lee; approve/reject devuelven el dict del módulo tal
+# cual (ok/motivo/missing/candidate) salvo id desconocido → 404. Nada entra
+# al catálogo sin el POST de aprobación explícito.
+@pytest.fixture(autouse=True)
+def catalogo_en_tmp(tmp_path, monkeypatch):
+    """El catálogo REAL de fichas jamás se escribe desde la suite.
+
+    `approve()` escribe en `attack_cards.CATALOGO`: sin esta copia en tmp,
+    aprobar una candidata desde un endpoint modificaría
+    `knowledge/attack_cards.json` de verdad (patrón de
+    test_attack_candidates). La caché se limpia antes y después.
+    """
+    copia = tmp_path / "attack_cards.json"
+    copia.write_text(
+        attack_cards.CATALOGO.read_text(encoding="utf-8"), encoding="utf-8",
+    )
+    monkeypatch.setattr(attack_cards, "CATALOGO", copia)
+    monkeypatch.setattr(attack_cards, "_CACHE", None)
+    yield copia
+    monkeypatch.setattr(attack_cards, "_CACHE", None)
+
+
+_DRAFT = {
+    "id": "cambio_password_masivo",
+    "nombre": "Cambio de contraseña masivo",
+    "que_es": "Muchas modificaciones de contraseña en corto tiempo.",
+    "como_se_ve": "Eventos 4723 repetidos para el mismo usuario o host.",
+    "event_ids": ["4723"],
+    "mitre": ["T1098"],
+    "sinonimos": ["cambio de contraseña masivo", "password reset masivo"],
+    "regla": {"tipo": "event_presence", "min": 3},
+    "umbrales": "≥3 eventos 4723 en el archivo.",
+    "ejemplo": "Tres cambios de contraseña de jsmith en una hora.",
+}
+
+
+def _sembrar_pendiente():
+    """Guarda una candidata válida vía la API pública del módulo."""
+    filas = [{
+        "Log_ID": f"EVT-{i + 1:03d}", "Timestamp": "2026-01-10 08:00",
+        "Hostname": "DC-01", "Event_ID": 4723, "User": "jsmith",
+        "Source_IP": "10.10.2.15", "Result": "Success",
+    } for i in range(3)]
+    df = pd.DataFrame(filas, columns=[
+        "Log_ID", "Timestamp", "Hostname", "Event_ID", "User", "Source_IP",
+        "Result",
+    ])
+    res = attack_candidates.add_candidate(_DRAFT, "¿Hubo cambios de contraseña?", df)
+    assert res["ok"], res
+
+
+def test_get_candidatas_vacio(client):
+    res = client.get("/api/attack-candidates")
+
+    assert res.status_code == 200
+    assert res.json() == {"candidates": []}
+
+
+def test_get_candidatas_lista_y_filtra_por_estado(client):
+    _sembrar_pendiente()
+
+    res = client.get("/api/attack-candidates")
+    assert res.status_code == 200
+    items = res.json()["candidates"]
+    assert [c["id"] for c in items] == ["cambio_password_masivo"]
+    assert items[0]["status"] == "pendiente"
+    assert items[0]["tipo"] == "nueva"
+
+    por_estado = client.get("/api/attack-candidates",
+                            params={"status": "pendiente"}).json()
+    assert len(por_estado["candidates"]) == 1
+    vacio = client.get("/api/attack-candidates",
+                       params={"status": "rechazada"}).json()
+    assert vacio["candidates"] == []
+
+
+def test_approve_del_endpoint_mete_la_ficha_al_catalogo(client):
+    _sembrar_pendiente()
+    assert attack_cards.match_card("¿hubo un cambio de contraseña masivo?") is None
+
+    res = client.post("/api/attack-candidates/cambio_password_masivo/approve")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is True
+    assert body["motivo"] == "aprobada"
+    assert body["candidate"]["status"] == "aprobada"
+    # La caché se invalidó: match_card ve la ficha YA, sin reiniciar nada.
+    card = attack_cards.match_card("¿hubo un cambio de contraseña masivo?")
+    assert card is not None and card["id"] == "cambio_password_masivo"
+    # Y el listado la muestra aprobada.
+    items = client.get("/api/attack-candidates").json()["candidates"]
+    assert items[0]["status"] == "aprobada"
+
+
+def test_approve_repetido_es_idempotente(client):
+    _sembrar_pendiente()
+    client.post("/api/attack-candidates/cambio_password_masivo/approve")
+
+    res = client.post("/api/attack-candidates/cambio_password_masivo/approve")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is True
+    assert body["motivo"] == "ya_aprobada"
+    ids = [c["id"] for c in attack_cards.load_cards()]
+    assert ids.count("cambio_password_masivo") == 1
+
+
+def test_approve_desconocido_devuelve_404(client):
+    res = client.post("/api/attack-candidates/no_existe/approve")
+
+    assert res.status_code == 404
+
+
+def test_reject_del_endpoint_marca_sin_tocar_el_catalogo(client):
+    _sembrar_pendiente()
+
+    res = client.post("/api/attack-candidates/cambio_password_masivo/reject")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is True
+    assert body["motivo"] == "rechazada"
+    assert body["candidate"]["status"] == "rechazada"
+    # El catálogo NO cambió y la decisión queda registrada.
+    assert attack_cards.match_card("¿hubo un cambio de contraseña masivo?") is None
+    items = client.get("/api/attack-candidates",
+                       params={"status": "rechazada"}).json()["candidates"]
+    assert [c["id"] for c in items] == ["cambio_password_masivo"]
+
+
+def test_rechazada_no_se_puede_aprobar_por_el_endpoint(client):
+    _sembrar_pendiente()
+    client.post("/api/attack-candidates/cambio_password_masivo/reject")
+
+    res = client.post("/api/attack-candidates/cambio_password_masivo/approve")
+
+    # 200 con ok:false y el motivo: el endpoint procesó y se negó (no 404).
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is False
+    assert body["motivo"] == "rechazada_previa"
+    assert attack_cards.match_card("¿hubo un cambio de contraseña masivo?") is None
+
+
+def test_reject_desconocido_devuelve_404(client):
+    res = client.post("/api/attack-candidates/no_existe/reject")
+
+    assert res.status_code == 404

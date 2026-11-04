@@ -71,7 +71,7 @@ try:
         stream_question,
     )
     from backend import rag_store, kb_store, ai_config, rerank, feedback_store
-    from backend import analysis_persist
+    from backend import analysis_persist, attack_candidates
     from backend.behavior_correlations import compute_behavior_patterns
 except ImportError:  # pragma: no cover
     from ai_service import (
@@ -94,6 +94,7 @@ except ImportError:  # pragma: no cover
     import rerank
     import feedback_store
     import analysis_persist
+    import attack_candidates
     from behavior_correlations import compute_behavior_patterns
 
 # El motor de filtros con el mismo patrón dual paquete/suelto: así todos los
@@ -1728,6 +1729,56 @@ async def feedback_clear():
     removed = await asyncio.to_thread(feedback_store.clear)
     stats = await asyncio.to_thread(feedback_store.status)
     return {"ok": True, "removed": removed, "stats": stats}
+
+
+# ---------------------------------------------------------------------------
+# Fase 3 · fichas candidatas: aprendizaje de ataques nuevos (aprobación humana)
+# ---------------------------------------------------------------------------
+# Nunca automático: GET solo lee los borradores pendientes; la única forma
+# de que una candidata entre a knowledge/attack_cards.json es el POST de
+# approve explícito del analista (reject marca la decisión para siempre).
+@app.get("/api/attack-candidates")
+async def list_attack_candidates(
+    status: str = Query(
+        "", description="Estado a filtrar: pendiente | aprobada | rechazada "
+                        "(vacío = todas)",
+    ),
+):
+    """Fichas candidatas con su estado y evaluación sobre el último archivo.
+
+    La validación DETERMINISTA ya ocurrió al guardar (columnas y Event IDs
+    reales): esto solo expone el resultado para que el revisor decida.
+    """
+    filt = (status or "").strip()
+    items = await asyncio.to_thread(
+        attack_candidates.list_candidates, filt or None,
+    )
+    return {"candidates": items}
+
+
+@app.post("/api/attack-candidates/{candidate_id}/approve")
+async def approve_attack_candidate(candidate_id: str):
+    """Aprueba una candidata: su ficha entra al catálogo y match_card la ve
+    al instante (se invalida la caché de attack_cards).
+
+    Idempotente: repetir la aprobación devuelve `ok: true` con motivo
+    `ya_aprobada`. Un id desconocido es 404; el resto de los motivos de
+    rechazo (p. ej. `rechazada_previa`) viaja en el cuerpo con `ok: false`.
+    """
+    res = await asyncio.to_thread(attack_candidates.approve, candidate_id)
+    if res.get("motivo") == "no_existe":
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    return res
+
+
+@app.post("/api/attack-candidates/{candidate_id}/reject")
+async def reject_attack_candidate(candidate_id: str):
+    """Rechaza una candidata: queda marcada y no se revive sola ante una
+    nueva pregunta con el mismo borrador. El catálogo no cambia."""
+    res = await asyncio.to_thread(attack_candidates.reject, candidate_id)
+    if res.get("motivo") == "no_existe":
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    return res
 
 
 @app.delete("/api/analysis/{analysis_id}/chat")
