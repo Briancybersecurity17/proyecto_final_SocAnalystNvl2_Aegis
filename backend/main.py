@@ -67,6 +67,7 @@ try:
         quick_answer,
         routes_aggregate,
         routes_pattern,
+        routes_list_level,
         stream_question,
     )
     from backend import rag_store, kb_store, ai_config, rerank, feedback_store
@@ -84,6 +85,7 @@ except ImportError:  # pragma: no cover
         quick_answer,
         routes_aggregate,
         routes_pattern,
+        routes_list_level,
         stream_question,
     )
     import rag_store
@@ -1554,6 +1556,15 @@ async def ask_question(analysis_id: str, payload: AskRequest):
         _remember_turn(entry, question, str(answer.get("answer") or ""))
         return {**common, "retrieved": 0, **answer}
 
+    # --- Listado por nivel: Log_ID exactos del dataframe, SIN recuperación
+    # (retrieved = 0): se corta antes del RAG igual que los agregados.
+    if routes_list_level(question, prep["df"]):
+        answer = await answer_question(
+            question, [], entry["summary"], reference=None, df=prep["df"],
+        )
+        _remember_turn(entry, question, str(answer.get("answer") or ""))
+        return {**common, "retrieved": 0, **answer}
+
     # Recuperación + reordenación fuera del event loop: el cross-encoder del
     # rerank tarda ~1 s y bloquearía el resto de peticiones del proceso.
     hits = await asyncio.to_thread(
@@ -1623,6 +1634,16 @@ async def ask_question_stream(analysis_id: str, payload: AskRequest):
         # Solo si la consulta además habla del archivo (mismo criterio que /ask).
         if routes_aggregate(question, entry["summary"]):
             answer = await answer_question(question, [], entry["summary"], reference=None)
+            _remember_turn(entry, question, str(answer.get("answer") or ""))
+            yield _sse("final", {**common, "retrieved": 0, **answer})
+            return
+
+        # Listado por nivel: una sola respuesta final con los Log_ID exactos,
+        # sin recuperación (mismo corte que /ask).
+        if routes_list_level(question, prep["df"]):
+            answer = await answer_question(
+                question, [], entry["summary"], reference=None, df=prep["df"],
+            )
             _remember_turn(entry, question, str(answer.get("answer") or ""))
             yield _sse("final", {**common, "retrieved": 0, **answer})
             return

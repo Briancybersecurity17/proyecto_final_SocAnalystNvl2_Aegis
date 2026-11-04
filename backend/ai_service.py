@@ -3020,6 +3020,142 @@ def routes_pattern(question: str) -> bool:
             or attack_cards.mentions_generic_attack(question))
 
 
+# ---------------------------------------------------------------------------
+# Ruta de LISTADO por nivel de criticidad (pieza 1)
+# ---------------------------------------------------------------------------
+# «Dame los eventos de nivel crítico» quiere los Log_ID reales de ESE nivel
+# contados sobre TODO el dataframe: el RAG generaliza desde unas pocas filas
+# recuperadas y llegó a responder «no existen eventos críticos» con 97
+# críticos reales en el archivo. Sin recuperación (retrieved = 0) ni modelo.
+LIST_LEVEL_MARKERS = (
+    "dame", "muestrame", "muestra", "mostrame", "ensename", "listar",
+    "lista", "listado", "cuales", "que eventos", "ids", "log id", "log_id",
+    "ponme", "sacame", "ver",
+)
+
+
+def _mentions_filter_entity(question: str, df: Any) -> bool:
+    """¿La consulta nombra una entidad filtrable del archivo?
+
+    Si dice «del host DC-01», «de jsmith» o «desde 10.10.2.15», un listado
+    por nivel ignoraría ese filtro y respondería con otros registros: ante
+    la duda la ruta NO se activa y manda el flujo normal (que sí aplica los
+    filtros). Se comparan tanto palabras genéricas («host», «IP») como los
+    valores REALES del dataframe (hosts, usuarios, IPs, Event IDs).
+    """
+    text = _norm_text(question)
+    if re.search(r"\b(hosts?|ips?|usuarios?|user|origen|destino|event_?id)\b", text):
+        return True
+    # Una IP escrita en la consulta («10.10.2.15») también es un filtro,
+    # aunque su valor no exista en este dataframe.
+    if re.search(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", text):
+        return True
+    for col in ("Hostname", "User", "Source_IP", "Destination", "Event_ID"):
+        if col not in df.columns:
+            continue
+        for value in df[col].dropna().unique()[:500]:
+            val = _norm_text(str(value))
+            if len(val) >= 3 and re.search(
+                rf"(?<!\w){re.escape(val)}(?!\w)", text
+            ):
+                return True
+    return False
+
+
+def routes_list_level(question: str, df: Optional[Any]) -> bool:
+    """¿La consulta pide LISTAR eventos de un nivel concreto del archivo?
+
+    Exige a la vez: un nivel de criticidad nombrado, intención de listado
+    («dame», «muestrame», «lista», «cuáles son»…), dataframe con las
+    columnas derivadas y NINGÚN filtro de entidad escrito. Los endpoints la
+    usan para cortar ANTES de recuperar (retrieved = 0).
+    """
+    if df is None or not hasattr(df, "columns"):
+        return False
+    if "Log_ID" not in df.columns or "_level" not in df.columns:
+        return False
+    levels = [lvl for lvl in _level_terms(question) if lvl in LEVEL_ORDER]
+    if not levels:
+        return False
+    text = _norm_text(question)
+    if not any(
+        re.search(rf"(?<!\w){re.escape(marker)}(?!\w)", text)
+        for marker in LIST_LEVEL_MARKERS
+    ):
+        return False
+    if _mentions_filter_entity(question, df):
+        return False
+    # «…críticos sospechosos» exige la columna derivada que lo permite.
+    if "sospechoso" in _level_terms(question) and "_suspicious" not in df.columns:
+        return False
+    return True
+
+
+def _level_list_answer(question: str, df: Optional[Any]) -> Optional[Dict[str, Any]]:
+    """Respuesta de listado por nivel con conteos EXACTOS, o None si no aplica.
+
+    Nunca estima: el total sale de `df["_level"]` y los Log_ID de las filas
+    reales de ese nivel, truncados a `attack_cards.MAX_LOG_IDS` con nota.
+    """
+    if not routes_list_level(question, df):
+        return None
+    levels = [lvl for lvl in _level_terms(question) if lvl in LEVEL_ORDER]
+    susp = "sospechoso" in _level_terms(question)
+    rows = len(df)
+    mask = df["_level"].isin(levels)
+    if susp:
+        mask = mask & df["_suspicious"].fillna(False).astype(bool)
+    seleccion = df.loc[mask]
+    total = int(len(seleccion))
+    ids = [str(v) for v in seleccion["Log_ID"].head(attack_cards.MAX_LOG_IDS)]
+    label = ", ".join(LEVEL_LABELS[lvl] for lvl in levels)
+    if susp:
+        label += " sospechoso"
+
+    lines: List[str] = []
+    if total == 0:
+        lines.append(f"No hay eventos de nivel {label} en tus {rows} registros.")
+        # Qué niveles SÍ existen: evita leer «el archivo no tiene nada».
+        counts = df["_level"].value_counts()
+        presentes = [
+            f"{LEVEL_LABELS.get(lvl, lvl)} ({int(counts.get(lvl, 0))})"
+            for lvl in LEVEL_ORDER if counts.get(lvl)
+        ]
+        if presentes:
+            lines.append(
+                "Niveles presentes en tus registros: " + ", ".join(presentes) + "."
+            )
+    else:
+        lines.append(
+            f"Hay {total} eventos de nivel {label} en tus {rows} registros "
+            f"({_pct(total, rows)})."
+        )
+        if len(levels) > 1:
+            counts = seleccion["_level"].value_counts()
+            lines.append(
+                "Desglose: "
+                + ", ".join(
+                    f"{LEVEL_LABELS[lvl]} {int(counts.get(lvl, 0))}"
+                    for lvl in levels
+                )
+                + "."
+            )
+        if total > len(ids):
+            lines.append(f"Se muestran {len(ids)} de {total} Log_ID.")
+        lines.append("Log_ID: " + ", ".join(ids))
+    lines.append(
+        "Todas las cifras proceden de tus registros importados; no se ha "
+        "añadido ningún dato externo."
+    )
+    return _base_answer(
+        answer="\n".join(lines),
+        summary_line=f"listado por nivel · {total} eventos de nivel {label}",
+        confidence="alta",
+        mode="level_list",
+        warnings=[],
+    )
+
+
 def _attack_material(card: Dict[str, Any]) -> str:
     """Bloque «Material del marco»: conocimiento de la ficha, etiquetado
     para que nunca se lea como hallazgo de los registros (fase 2)."""
@@ -3310,6 +3446,13 @@ async def answer_question(
     if aggregate is not None:
         return {**aggregate, "rag_examples_used": 0}
 
+    # Listado por nivel (pieza 1): DESPUÉS de los agregados («¿qué hosts
+    # concentran…?» es un reparto, no un listado de IDs) y ANTES de la puerta
+    # de tema. Conteos y Log_ID exactos del dataframe, sin recuperación.
+    listado = _level_list_answer(question, df)
+    if listado is not None:
+        return {**listado, "rag_examples_used": 0}
+
     # Puerta de tema: consulta ajena al archivo con similitud por debajo del
     # umbral → se corta sin modelo y sin listar eventos (evita las 8 tarjetas
     # de «similitud 2%» bajo una pregunta que no va de los registros).
@@ -3386,6 +3529,13 @@ async def stream_question(
     aggregate = _aggregate_answer(ctx)
     if aggregate is not None:
         yield {"type": "final", **aggregate, "rag_examples_used": 0}
+        return
+
+    # Listado por nivel (pieza 1): misma ruta que `answer_question`, una
+    # sola respuesta final. En los endpoints el corte va antes de recuperar.
+    listado = _level_list_answer(question, df)
+    if listado is not None:
+        yield {"type": "final", **listado, "rag_examples_used": 0}
         return
 
     # Puerta de tema: consulta ajena al archivo con similitud baja → se corta
