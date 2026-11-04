@@ -1,0 +1,230 @@
+{
+  "version": 1,
+  "cards": [
+    {
+      "id": "fuerza_bruta",
+      "nombre": "Fuerza bruta",
+      "que_es": "Un intento de acceso que prueba muchas contraseñas contra una misma cuenta u host, para adivinarla por repetición.",
+      "como_se_ve": "Muchas autenticaciones fallidas seguidas del mismo usuario o IP, con algún acierto después o al final. En Windows suele ser 4625 (falló) contra 4624 (entró).",
+      "event_ids": ["4625", "4624"],
+      "mitre": ["T1110"],
+      "sinonimos": ["fuerza bruta", "brute force", "password guessing", "ataque de diccionario"],
+      "regla": {
+        "tipo": "group_threshold",
+        "columna": "Source_IP",
+        "conteo": {"Event_ID": "4625", "Result": "Failure"},
+        "nombre_conteo": "fallos",
+        "min": 3,
+        "segundo_conteo": {"Event_ID": "4624", "Result": "Success"},
+        "nombre_segundo": "exitos",
+        "min_segundo": 1
+      },
+      "umbrales": "≥3 fallos de autenticación (4625) desde la misma IP, con al menos 1 éxito (4624) en la misma ventana.",
+      "ejemplo": "10.10.2.15 falla 3 veces contra un usuario (4625) y luego entra (4624): 3 fallos, 1 éxito."
+    },
+    {
+      "id": "spraying",
+      "nombre": "Fuerza bruta distribuida (spraying)",
+      "que_es": "Probar la misma contraseña contra muchas cuentas distintas para no activar los bloqueos por intentos fallidos.",
+      "como_se_ve": "Muchos usuarios distintos fallando autenticación desde la misma IP, casi siempre con 4625.",
+      "event_ids": ["4625"],
+      "mitre": ["T1110.003"],
+      "sinonimos": ["fuerza bruta distribuida", "spraying", "password spraying"],
+      "regla": {
+        "tipo": "group_threshold",
+        "columna": "Source_IP",
+        "conteo": {"Event_ID": "4625", "Result": "Failure"},
+        "nombre_conteo": "fallos",
+        "min": 3,
+        "distintos": "User",
+        "min_distintos": 3,
+        "nombre_distintos": "usuarios"
+      },
+      "umbrales": "≥3 fallos (4625) desde una misma IP sobre ≥3 usuarios distintos.",
+      "ejemplo": "10.10.2.15 falla en 3 cuentas distintas (4625): 4 fallos, 4 usuarios."
+    },
+    {
+      "id": "rdp_fuerza_bruta",
+      "nombre": "Fuerza bruta contra RDP",
+      "que_es": "Fuerza bruta específica sobre el acceso remoto de escritorio (RDP): el atacante prueba credenciales contra el puerto de escritorio remoto.",
+      "como_se_ve": "Muchos intentos de login remoto fallidos (4625 con 'Logon Type: 10' en la descripción), a veces desde una sola IP.",
+      "event_ids": ["4625"],
+      "mitre": ["T1021.001"],
+      "sinonimos": ["fuerza bruta rdp", "fuerza bruta contra rdp", "fuerza bruta escritorio remoto", "fuerza bruta contra el escritorio remoto"],
+      "regla": {
+        "tipo": "row_filter",
+        "columna": "Event_Description",
+        "contiene": "Logon Type: 10",
+        "min": 5
+      },
+      "umbrales": "≥5 autenticaciones RDP fallidas (4625 con Logon Type: 10).",
+      "ejemplo": "10.10.2.15 genera 5 intentos de escritorio remoto fallidos (4625 con Logon Type 10)."
+    },
+    {
+      "id": "movimiento_lateral",
+      "nombre": "Movimiento lateral",
+      "que_es": "Un atacante que ya entró a un equipo se mueve hacia otro: abriendo sesiones remotas o ejecutando comandos en máquinas vecinas.",
+      "como_se_ve": "Autenticaciones remotas entre hosts (4624 tipo 3 o 10, 4648 con credenciales explícitas, 5145 en shares) entre IPs que no hablaban antes.",
+      "event_ids": ["4624", "4648", "5145"],
+      "mitre": ["T1021", "T1570"],
+      "sinonimos": ["movimiento lateral", "lateral movement"],
+      "regla": null,
+      "umbrales": "Abiertas de sesión remotas nuevas entre hosts distintos al par habitual.",
+      "ejemplo": "Un host que solo hablaba con el controlador empieza a abrir sesiones 4624 tipo 10 hacia 4 servidores nuevos."
+    },
+    {
+      "id": "escalamiento",
+      "nombre": "Escalamiento de privilegios",
+      "que_es": "Un usuario común consigue permisos de administrador o sistema, por abuso de un error o de una tarea mal configurada.",
+      "como_se_ve": "Cuentas normales que aparecen en grupos de administración (4732), o cambios en tareas programadas (4698) y tokens (4702).",
+      "event_ids": ["4732", "4698", "4702"],
+      "mitre": ["T1068", "T1134"],
+      "sinonimos": ["escalamiento de privilegios", "elevacion de privilegios", "privilege escalation"],
+      "regla": null,
+      "umbrales": "Altas a grupos de administración de cuentas que no deberían estarlo.",
+      "ejemplo": "La cuenta de invitada del servidor queda como administrador local (4732)."
+    },
+    {
+      "id": "persistencia",
+      "nombre": "Persistencia",
+      "que_es": "El atacante deja una puerta para volver: cuentas nuevas, tareas programadas o servicios que arrancan solos.",
+      "como_se_ve": "Creación de cuentas (4720), tareas programadas (4698), servicios nuevos (7045) o claves de arranque modificadas.",
+      "event_ids": ["4720", "4698", "7045", "4702"],
+      "mitre": ["T1136", "T1053"],
+      "sinonimos": ["persistencia", "cuenta de respaldo", "puerta trasera"],
+      "regla": null,
+      "umbrales": "Cuentas o tareas creadas fuera de la ventana de mantenimiento habitual.",
+      "ejemplo": "Aparece el usuario 'svc_backup' en un servidor que no crea cuentas (4720)."
+    },
+    {
+      "id": "limpieza_logs",
+      "nombre": "Limpieza de logs",
+      "que_es": "Borrar o vaciar el historial para que no quede registro de lo que pasó.",
+      "como_se_ve": "La consola de auditoría limpia el registro (1102) y el registro de seguridad vuelve a empezar vacío.",
+      "event_ids": ["1102", "104"],
+      "mitre": ["T1070.001"],
+      "sinonimos": ["limpieza de logs", "borrado de registros", "clearing logs", "evento 1102"],
+      "regla": null,
+      "umbrales": "Cualquier borrado de logs de seguridad en un host normal.",
+      "ejemplo": "El registro de seguridad se limpia a las 03:00 (1102) fuera de toda ventana de mantenimiento."
+    },
+    {
+      "id": "powershell_codificado",
+      "nombre": "PowerShell con comando codificado",
+      "que_es": "PowerShell con el comando en base64 para que no se lea a simple vista; casi siempre es descarga o ejecución remota.",
+      "como_se_ve": "Eventos de PowerShell (4104 o 100/400) con -enc o -EncodedCommand en la línea de comandos.",
+      "event_ids": ["4104", "100", "400"],
+      "mitre": ["T1059.001"],
+      "sinonimos": ["powershell codificado", "powershell encoded command", "encodedcommand"],
+      "regla": {
+        "tipo": "row_filter",
+        "columna": "Command_Line",
+        "contiene": "-enc",
+        "min": 1
+      },
+      "umbrales": "≥1 comando codificado en PowerShell (-enc / -EncodedCommand) ya es sospechoso.",
+      "ejemplo": "10.10.2.15 ejecuta un 4104 con -enc que descarga un script remoto."
+    },
+    {
+      "id": "barrido",
+      "nombre": "Barrido de red",
+      "que_es": "Reconocimiento: preguntar a muchas máquinas a la vez para ver cuáles están vivas y qué puertos abren.",
+      "como_se_ve": "Un host contactando hosts distintos en pocos segundos (DNS, SMB, ping o logs de firewall).",
+      "event_ids": ["5156", "3"],
+      "mitre": ["T1046"],
+      "sinonimos": ["barrido", "barrido de red", "network scan", "escaneo de puertos", "reconocimiento"],
+      "regla": {
+        "tipo": "group_threshold",
+        "columna": "Source_IP",
+        "contar_distintos": "Hostname",
+        "nombre_conteo": "hosts",
+        "min": 3
+      },
+      "umbrales": "≥3 hosts distintos contactados desde una misma IP.",
+      "ejemplo": "10.10.2.15 toca 4 servidores distintos en un minuto (5156)."
+    },
+    {
+      "id": "exfiltracion",
+      "nombre": "Exfiltración de datos",
+      "que_es": "Sacar información del entorno: archivos grandes hacia un sitio raro o muchas lecturas seguidas de escritura hacia afuera.",
+      "como_se_ve": "Transferencias grandes por SMB, HTTP o correo hacia destinos que no son de la empresa.",
+      "event_ids": ["5145", "300", "4624"],
+      "mitre": ["T1041"],
+      "sinonimos": ["exfiltracion de datos", "exfiltracion", "fuga de datos", "data exfiltration"],
+      "regla": null,
+      "umbrales": "Volúmenes de salida que se salen del patrón diario del host.",
+      "ejemplo": "Un servidor manda 2 GB a una IP externa en horario sin movimiento."
+    },
+    {
+      "id": "credential_dumping",
+      "nombre": "Volcado de credenciales",
+      "que_es": "Leer las credenciales guardadas en memoria o en disco para reutilizarlas después (LSASS, SAM, carpetas de sistema).",
+      "como_se_ve": "Accesos al proceso LSASS (4656 con GUID de acceso a lsass.exe) o lecturas masivas de SAM y SYSTEM.",
+      "event_ids": ["4656", "4663"],
+      "mitre": ["T1003"],
+      "sinonimos": ["volcado de credenciales", "credential dumping", "lsass", "mimikatz"],
+      "regla": null,
+      "umbrales": "Cualquier lectura del LSASS de un usuario que no sea SYSTEM/antivirus.",
+      "ejemplo": "Un proceso abre lsass.exe para leerlo (4656 con el GUID de acceso total)."
+    },
+    {
+      "id": "ransomware",
+      "nombre": "Ransomware",
+      "que_es": "Cifrar o bloquear los archivos para pedir rescate, muchas veces siguiendo con borrado de copias y de logs.",
+      "como_se_ve": "Ráfagas de escritura de archivos con nombres raros, eliminación de shadow copies y de backups.",
+      "event_ids": ["5145", "4656", "1102"],
+      "mitre": ["T1486", "T1490"],
+      "sinonimos": ["ransomware", "cifrado de archivos", "rescate"],
+      "regla": null,
+      "umbrales": "Escrituras masivas de archivos con extensión nueva en minutos.",
+      "ejemplo": "Miles de archivos pasan a .locked en 4 minutos y después se borran copias de seguridad."
+    },
+    {
+      "id": "cuentas_nuevas",
+      "nombre": "Cuentas nuevas fuera de ventana",
+      "que_es": "Creación de cuentas de usuario fuera de la jornada habitual, una señal clásica de que alguien está dejando una puerta.",
+      "como_se_ve": "Eventos 4720 (cuenta creada) a deshoras o en hosts donde no se crean cuentas.",
+      "event_ids": ["4720"],
+      "mitre": ["T1136.001"],
+      "sinonimos": ["cuentas nuevas", "cuenta creada", "usuario nuevo"],
+      "regla": {"tipo": "event_presence", "min": 1},
+      "umbrales": "Un solo 4720 en el dataset ya llama la atención.",
+      "ejemplo": "A las 02:14 aparece la cuenta 'temp_admin' en el servidor de archivos."
+    },
+    {
+      "id": "ip_multi_evento",
+      "nombre": "IP con muchos eventos",
+      "que_es": "Una IP que aparece en muchos eventos distintos: señal genérica de que algo se está moviendo desde ahí.",
+      "como_se_ve": "La misma Source_IP con más de 30 eventos de cualquier tipo en el dataset.",
+      "event_ids": [],
+      "mitre": [],
+      "sinonimos": ["ip con muchos eventos", "ip activa", "ip ruidosa"],
+      "regla": {
+        "tipo": "group_threshold",
+        "columna": "Source_IP",
+        "conteo": {"Event_ID": "*"},
+        "nombre_conteo": "eventos",
+        "min": 30
+      },
+      "umbrales": "≥30 eventos de cualquier tipo desde la misma IP.",
+      "ejemplo": "10.10.2.15 genera 38 eventos mezclados (4625, 4624 y 5156)."
+    },
+    {
+      "id": "acciones_repetidas",
+      "nombre": "Acciones repetidas de un usuario",
+      "que_es": "El mismo usuario repitiendo la misma acción muchas veces, señal de automatización o de un proceso fuera de control.",
+      "como_se_ve": "La misma combinación de IP, host y Event ID repetida más de 4 veces en el dataset.",
+      "event_ids": [],
+      "mitre": [],
+      "sinonimos": ["acciones repetidas", "usuario repetitivo", "eventos repetidos"],
+      "regla": {
+        "tipo": "group_threshold",
+        "columna": ["Source_IP", "Hostname", "Event_ID"],
+        "nombre_conteo": "eventos",
+        "min": 5
+      },
+      "umbrales": "≥5 repeticiones de la misma combinación IP + host + Event ID.",
+      "ejemplo": "La combinación 203.0.113.74 + DC-01 + 4625 se repite 5 veces en la ventana."
+    }
+  ]
+}

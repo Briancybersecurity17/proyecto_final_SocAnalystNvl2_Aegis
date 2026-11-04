@@ -28,7 +28,8 @@ import importlib as _importlib
 # que `rag_store`/`ai_config`, su dual `from backend import X` crearía la
 # instancia de paquete antes que este alias y el mundo se partiría otra vez.
 _MODULOS_DUALES = ("rag_store", "ai_config", "filters", "severity", "rerank",
-                   "kb_store", "feedback_store", "ai_service", "analysis_persist")
+                   "kb_store", "feedback_store", "attack_cards", "ai_service",
+                   "analysis_persist")
 for _name in _MODULOS_DUALES:
     sys.modules.setdefault(f"backend.{_name}", _importlib.import_module(_name))
 try:
