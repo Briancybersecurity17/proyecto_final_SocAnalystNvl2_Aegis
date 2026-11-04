@@ -28,6 +28,11 @@ backend/data/ai_config.json
 # la usa, igual que ai_config.json. Se puede vaciar desde el panel.
 backend/data/feedback.json
 
+# ----- Fichas candidatas de ataque (fase 3, decisiones del analista) -----
+# Borradores pendientes/aprobados/rechazados: datos, no código. Se revisan
+# desde el panel «Correlaciones ATT&CK» y el catálogo real es knowledge/.
+backend/data/attack_cards_candidates.json
+
 # ----- Estado interno de las herramientas de agente -----
 .superpowers/
 
