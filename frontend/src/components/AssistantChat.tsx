@@ -79,6 +79,68 @@ interface ChatMessage {
   showWeak?: boolean
 }
 
+// ---------------------------------------------------------------------------
+// Persistencia del chat en la pestaña (sessionStorage)
+//
+// `App.tsx` desmonta este componente al cambiar de sección y el `useState`
+// perdía todos los mensajes: ir a otra sección —o pulsar F5— borraba la
+// conversación aunque el backend seguía con su memoria multi-turno. La clave
+// es POR ANÁLISIS: sobrevive al cambio de sección y al F5 con la pestaña
+// viva, se limpia al cerrarla, y un archivo nuevo nunca hereda el chat del
+// anterior. Todo en try/catch (mismo patrón que `persist.ts`): sin storage
+// la app sigue funcionando, solo que sin restaurar.
+// ---------------------------------------------------------------------------
+const CHAT_KEY_PREFIX = 'dojo_soc.chat'
+
+/** Tope de mensajes persistidos: una sesión larga no debe acercarse a la
+ *  cuota de sessionStorage (~5 MB); el historial útil es corto. */
+const CHAT_MAX_MESSAGES = 50
+
+const chatKey = (analysisId: string): string => `${CHAT_KEY_PREFIX}.${analysisId}`
+
+/** Forma mínima de un mensaje guardado: lo que no la cumpla se descarta. */
+const isValidStoredMessage = (value: unknown): value is ChatMessage => {
+  if (!value || typeof value !== 'object') return false
+  const m = value as Partial<ChatMessage>
+  return (
+    typeof m.id === 'string' &&
+    m.id.length > 0 &&
+    (m.role === 'user' || m.role === 'assistant') &&
+    typeof m.text === 'string'
+  )
+}
+
+const loadChatMessages = (analysisId: string): ChatMessage[] => {
+  if (!analysisId) return []
+  try {
+    const raw = window.sessionStorage.getItem(chatKey(analysisId))
+    if (!raw) return []
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(isValidStoredMessage).map(m => ({
+      ...m,
+      // Un mensaje que se guardó a mitad de streaming no puede volver con el
+      // cursor de escritura pegado: se restaura como respuesta terminada.
+      streaming: false,
+    }))
+  } catch {
+    // storage no disponible o JSON corrupto: se ignora deliberadamente
+    return []
+  }
+}
+
+const saveChatMessages = (analysisId: string, messages: ChatMessage[]): void => {
+  if (!analysisId) return
+  try {
+    window.sessionStorage.setItem(
+      chatKey(analysisId),
+      JSON.stringify(messages.slice(-CHAT_MAX_MESSAGES)),
+    )
+  } catch {
+    // almacenamiento no disponible (modo privado / cuota): se ignora
+  }
+}
+
 type RagStatus = RagStatusResponse
 
 /**
@@ -318,6 +380,28 @@ export const AssistantChat: React.FC = () => {
       if (timer !== null) window.clearInterval(timer)
     }
   }, [ready, analysisId])
+
+  // Restaura el historial de ESTE análisis: corre en montaje (id restaurado
+  // tras F5) y en cada cambio de archivo, para que un chat viejo nunca se
+  // pinte sobre un análisis nuevo.
+  useEffect(() => {
+    if (!analysisId) return
+    const restored = loadChatMessages(analysisId)
+    // Claves React únicas: los ids siguen del último restaurado (u12/a12 →
+    // los próximos mensajes arrancan en u13/a13), así no colisionan.
+    msgSeq.current = restored.reduce((max, m) => {
+      const n = Number.parseInt(m.id.slice(1), 10)
+      return Number.isNaN(n) ? max : Math.max(max, n)
+    }, msgSeq.current)
+    setMessages(restored)
+  }, [analysisId])
+
+  // Guarda tras cada cambio de mensajes: incluye el vacío, así que «Borrar
+  // conversación» limpia también el storage de la pestaña.
+  useEffect(() => {
+    if (!analysisId) return
+    saveChatMessages(analysisId, messages)
+  }, [messages, analysisId])
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' })
