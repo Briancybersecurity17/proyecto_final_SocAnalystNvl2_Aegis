@@ -328,6 +328,12 @@ export const AssistantChat: React.FC = () => {
   // Contador de mensajes: `Date.now()` repetía clave si dos mensajes caían en
   // el mismo milisegundo (el guard de `loading` es un estado, asíncrono).
   const msgSeq = useRef(0)
+  // true → el PRIMER guardado tras (re)montar se salta: en StrictMode (dev)
+  // React monta dos veces y el efecto de guardado corre con el estado VIEJO
+  // (`[]`) antes de que la segunda restauración lea el storage… y borraba
+  // el chat entero. Tras saltarlo, el cambio de mensajes derivado de la
+  // restauración vuelve a ejecutar el guardado con el estado ya correcto.
+  const skipNextSave = useRef(false)
   const ready = status === 'done' && !!analysisId
 
   // Host dominante del archivo cargado: ancla también el placeholder del input.
@@ -386,6 +392,7 @@ export const AssistantChat: React.FC = () => {
   // pinte sobre un análisis nuevo.
   useEffect(() => {
     if (!analysisId) return
+    skipNextSave.current = true
     const restored = loadChatMessages(analysisId)
     // Claves React únicas: los ids siguen del último restaurado (u12/a12 →
     // los próximos mensajes arrancan en u13/a13), así no colisionan.
@@ -400,6 +407,10 @@ export const AssistantChat: React.FC = () => {
   // conversación» limpia también el storage de la pestaña.
   useEffect(() => {
     if (!analysisId) return
+    if (skipNextSave.current) {
+      skipNextSave.current = false
+      return
+    }
     saveChatMessages(analysisId, messages)
   }, [messages, analysisId])
 
