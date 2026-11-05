@@ -46,18 +46,26 @@ proyecto_final_bootcamp_ComunidadDojo_SocAnalystNvl2/
 ├─ test_rag.py                # prueba del índice semántico (RAG)
 ├─ test_kb.py                 # prueba de la base de conocimiento (ATT&CK + Event IDs)
 ├─ backend/
-│  ├─ main.py                 # FastAPI: /analyze, /rows, /report, /ask, SSE, feedback (8500)
+│  ├─ main.py                 # FastAPI: 25 endpoints — analyze, rows, report, ask/SSE, fichas, IA (8500)
 │  ├─ ai_service.py           # IA de redacción con grounding estricto + fallback local
 │  ├─ ai_config.py            # config del LLM en caliente (endpoint, modelo, temperature…)
+│  ├─ analysis_persist.py     # análisis, informe e índice sobreviven a reinicios (data/)
+│  ├─ filters.py              # motor de facetas/filtros compartido por dashboard y tabla
+│  ├─ severity.py             # mapeo del campo Severity original a la escala de 4 niveles
+│  ├─ behavior_correlations.py # patrones conductuales deterministas (IP ↔ evento ↔ host)
+│  ├─ attack_cards.py         # catálogo de fichas de ataque: reglas + match_card/evaluate
+│  ├─ attack_candidates.py    # taller de fichas nuevas con aprobación humana (data/)
 │  ├─ feedback_store.py       # criterio aprendido del analista (RAG few-shot)
 │  ├─ rerank.py               # reranker cross-encoder sobre los candidatos del RAG
 │  ├─ rag_store.py            # índice semántico de los eventos (ChromaDB, colección soc_events)
 │  ├─ kb_store.py             # base de conocimiento: ATT&CK + glosario (colección soc_kb)
 │  ├─ knowledge/
-│  │  ├─ mitre_attack.json    # 79 técnicas (generada por scripts/build_kb.py)
-│  │  └─ event_ids.json       # 44 Event IDs de Windows (curado a mano)
-│  ├─ scripts/                # build_kb.py + benches de latencia, contexto y recuperación
-│  ├─ tests/                  # pytest: 285 tests (config, streaming SSE, few-shot…)
+│  │  ├─ mitre_attack.json    # 706 técnicas (generada por scripts/build_kb.py)
+│  │  ├─ event_ids.json       # 44 Event IDs de Windows (curado a mano)
+│  │  └─ attack_cards.json    # 15 fichas de ataque con sus reglas evaluables
+│  ├─ eval/                   # harness de evaluación: fixtures + 24 casos + scoring
+│  ├─ scripts/                # build_kb.py, eval_rag.py y benches de latencia
+│  ├─ tests/                  # pytest: 538 tests en 30 archivos
 │  └─ requirements.txt
 └─ frontend/                  # React + Vite + TypeScript (puerto 5300)
    ├─ index.html
@@ -65,21 +73,25 @@ proyecto_final_bootcamp_ComunidadDojo_SocAnalystNvl2/
    └─ src/
       ├─ App.tsx              # layout + cabecera por sección + estado del backend
       ├─ charts.ts            # sistema compartido de estilos de gráficos (Recharts)
-      ├─ store/index.ts       # Zustand (tipado: análisis + navegación)
+      ├─ motion.ts / persist.ts / restore.ts   # variantes, guardado y restauración
+      ├─ store/               # Zustand: análisis, navegación y motor de filtros
       ├─ api/client.ts        # axios + SSE
-      └─ components/
+      └─ components/          # 21 componentes
          ├─ Sidebar.tsx
          ├─ BackendStatus.tsx / EmptyState.tsx   # cabecera y estados vacíos con atajo
-         ├─ UploadSection.tsx / UploadExcel.tsx / DataTable.tsx
-         ├─ Dashboard.tsx
+         ├─ UploadSection.tsx / UploadExcel.tsx / UploadHistory.tsx
+         ├─ DataTable.tsx / ColumnFilter.tsx     # tabla con autofilter por cabecera
+         ├─ Dashboard.tsx / DashboardSection.tsx / SummaryCard.tsx
          ├─ ChartTools.tsx          # SelectionCells + ChartInsight (brillo/contorno y tarjeta de detalle)
+         ├─ TimelineBrush.tsx       # tira temporal con arrastre para acotar el rango
          ├─ SecurityAnalysis.tsx
          ├─ RiskClassification.tsx
          ├─ ReportGenerator.tsx
          ├─ AssistantChat.tsx / ReferenceBlock + FeedbackControl (corrección del analista)
          ├─ AttackCorrelations.tsx  # técnicas ATT&CK ancladas a Event_ID observados
+         ├─ AttackCandidates.tsx    # fichas candidatas: aprobar / rechazar (fase 3)
          ├─ AiOptions.tsx           # panel del LLM + memoria de criterio aprendido
-         └─ SummaryCard.tsx / DashboardSection.tsx
+         └─ TypingTitle.tsx
 ```
 
 ---
@@ -220,7 +232,7 @@ fuentes locales, versionadas en el repositorio y sin API keys:
 
 | Fuente | Archivo | Contenido |
 |---|---|---|
-| **MITRE ATT&CK** | `backend/knowledge/mitre_attack.json` | **79 técnicas** generadas por `backend/scripts/build_kb.py` desde el bundle STIX oficial (`github.com/mitre/cti` → `enterprise-attack.json`). Cada entrada guarda la descripción **oficial en inglés** + la URL en `attack.mitre.org` (verificable) y, en español, qué es y **cómo se detecta**. |
+| **MITRE ATT&CK** | `backend/knowledge/mitre_attack.json` | **706 técnicas** generadas por `backend/scripts/build_kb.py` desde el bundle STIX oficial (`github.com/mitre/cti` → `enterprise-attack.json`). Cada entrada guarda la descripción **oficial en inglés** + la URL en `attack.mitre.org` (verificable) y, en español, qué es y **cómo se detecta**. |
 | **Event IDs de Windows** | `backend/knowledge/event_ids.json` | **44 entradas** curadas a mano (Security, System, PowerShell, IIS/Proxy/Firewall): título, significado, **por qué importa** y técnicas asociadas. |
 
 | Pieza | Archivo | Qué hace |
@@ -301,6 +313,52 @@ DELETE /api/feedback          # vacía la memoria (no toca el modelo ni los dato
 
 ---
 
+## Fichas de ataque y aprendizaje con aprobación humana (fase 3)
+
+El asistente no solo recupera registros: también decide **qué ficha de ataque**
+encaja con la pregunta y, cuando el catálogo no la cubre, propone una nueva —
+pero nunca la escribe solo.
+
+| Pieza | Archivo | Qué hace |
+|---|---|---|
+| Catálogo vigente | `backend/knowledge/attack_cards.json` | **15 fichas** con sinónimos, `que_es`, `como_se_ve`, umbrales, ejemplo y una **regla evaluable** (columnas y Event IDs reales) |
+| Motor | `backend/attack_cards.py` | `match_card()` elige la ficha por sinónimo; `evaluate()` la contrasta con el dataframe (`applicable` + motivo + detecciones) |
+| Taller de candidatas | `backend/attack_candidates.py` | valida el borrador con el **mismo criterio** que el catálogo y lo guarda en `data/attack_cards_candidates.json` con estado `pendiente` |
+| Señal | `backend/ai_service.py` | si la consulta nombra un ataque fuera del catálogo (o una ficha que no aplica) y el LLM está encendido, propone el borrador con las columnas y Event IDs del archivo |
+| Endpoints | `backend/main.py` | `GET /api/attack-candidates` · `POST …/approve` · `POST …/reject` |
+| UI | `AttackCandidates.tsx` (sección *Correlaciones ATT&CK*) | lista las candidatas con su evaluación y los botones **Aprobar** / **Rechazar** |
+
+**Nunca automático:** `approve` es la única vía para que una ficha entre al
+catálogo, y al hacerlo invalida la caché para que la próxima pregunta ya la
+matchee **sin reiniciar** el backend. `reject` queda grabada **para siempre**:
+una pregunta nueva con el mismo borrador no la revive. Hay dos tipos de
+candidata — `nueva`, que agrega una ficha, y `mejora`, que reemplaza la regla
+de una ficha vigente con `applicable:false` conservando sus sinónimos
+originales (así no se pierde el alcance que hoy matchea).
+
+```bash
+GET  /api/attack-candidates                 # ?status=pendiente|aprobada|rechazada
+POST /api/attack-candidates/{id}/approve    # escribe al catálogo + invalida la caché
+POST /api/attack-candidates/{id}/reject     # marca la decisión para siempre
+```
+
+---
+
+## Persistencia (sobrevive a reinicios y a reciclar la pestaña)
+
+`backend/analysis_persist.py` espeja cada análisis en
+`backend/data/analyses/<id>/`: el Excel original (`archivo.xlsx`), el estado
+calculado (`summary.json`: resumen, chat, estado del índice RAG) y el informe
+(`report.json`, que se genera **una sola vez**). Al arrancar, el backend los
+restaura (`Análisis restaurados desde disco: N`).
+
+En el frontend, `restore.ts` ofrece el botón **Restaurar**, `persist.ts`
+guarda la sección activa y `AssistantChat.tsx` mantiene la conversación en
+`sessionStorage` **por análisis**, así un F5 no pierde ni el chat ni dónde
+estabas.
+
+---
+
 ## Pruebas
 
 ```bash
@@ -337,8 +395,9 @@ semántica («fuerza bruta» → T1110, «ransomware» → T1486) → alias renu
 citados en la pregunta → bloque «Referencia técnica» en la respuesta →
 degradación sin Chroma.
 
-Suite unitaria (285 tests: configuración del LLM, streaming SSE, memoria de
-criterio few-shot, presupuesto de ventana, scoring/casos/runner del eval):
+Suite unitaria (538 tests en 30 archivos: configuración del LLM, streaming
+SSE, memoria de criterio few-shot, presupuesto de ventana, fichas de ataque,
+scoring/casos/runner del eval):
 
 ```bash
 cd backend && python -m pytest -q
@@ -394,6 +453,11 @@ categorías elegibles tuvieron ejemplos inyectados, o sea fallo de CALIDAD
 del criterio, no de recall). La línea base determinista no cambia con el
 seed: el determinista no lee few-shot. Corridas completas en
 `backend/eval/runs/`.
+
+> Esas cifras salieron de la corrida del 29/10/2026 con el modelo local
+> `qwen2.5:3b`, anterior a la migración a proveedor cloud (1/11). El harness
+> no cambió: hoy `--motor llm` apunta a `openai/gpt-oss-120b` vía Groq, así
+> que conviene re-correrlo antes de comparar.
 
 > La comparación entre `--motor determinista` y `--motor llm` se sostiene
 > porque el aislamiento garantiza que ambas pasadas parten del mismo estado
