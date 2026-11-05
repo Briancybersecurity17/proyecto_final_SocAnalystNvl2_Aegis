@@ -1,22 +1,29 @@
-import React, { useEffect, useRef } from 'react';
+import React, { Suspense, useEffect, useRef } from 'react';
 import { AnimatePresence, MotionConfig, motion } from 'framer-motion';
 import { useAnalysisStore, useUiStore, Section } from './store';
 import { useFilterStore, selectIsFiltered } from './store/filters';
 import { loadAnalysisRef, saveAnalysisRef } from './persist';
 import { restoreAnalysis } from './restore';
-import Dashboard from './components/Dashboard';
-import SecurityAnalysis from './components/SecurityAnalysis';
-import RiskClassification from './components/RiskClassification';
-import UploadSection from './components/UploadSection';
-import ReportGenerator from './components/ReportGenerator';
-import AssistantChat from './components/AssistantChat';
-import AttackCorrelationsPanel from './components/AttackCorrelations';
-import AttackCandidates from './components/AttackCandidates';
-import AiOptions from './components/AiOptions';
 import TypingTitle from './components/TypingTitle';
 import { Sidebar } from './components/Sidebar';
 import BackendStatus from './components/BackendStatus';
 import { sectionIn } from './motion';
+
+// Cada sección es un chunk aparte: la app arranca con el layout y solo baja el
+// módulo que el analista abre (react-pdf vive solo en «Informe técnico» y
+// recharts en los paneles con gráficos). Sin esto el bundle de entrada era de
+// 2.2 MB.
+const Dashboard = React.lazy(() => import('./components/Dashboard'));
+const SecurityAnalysis = React.lazy(() => import('./components/SecurityAnalysis'));
+const RiskClassification = React.lazy(() => import('./components/RiskClassification'));
+const UploadSection = React.lazy(() => import('./components/UploadSection'));
+const ReportGenerator = React.lazy(() => import('./components/ReportGenerator'));
+const AssistantChat = React.lazy(() => import('./components/AssistantChat'));
+const AttackCorrelationsPanel = React.lazy(
+  () => import('./components/AttackCorrelations'),
+);
+const AttackCandidates = React.lazy(() => import('./components/AttackCandidates'));
+const AiOptions = React.lazy(() => import('./components/AiOptions'));
 
 const SECTION_META: Record<Section, { title: string; subtitle: string }> = {
   dashboard: {
@@ -57,6 +64,11 @@ const SECTION_META: Record<Section, { title: string; subtitle: string }> = {
 // La restauración corre una sola vez aunque React monte dos veces el árbol
 // (StrictMode): duplicarla produciría dos peticiones y dos avisos.
 let restoreStarted = false;
+
+/** Mientras Vite trae el chunk de la sección (solo la primera visita). */
+const SectionLoading: React.FC = () => (
+  <p className="hud-label animate-pulse py-12 text-center">Cargando sección…</p>
+);
 
 const App: React.FC = () => {
   const activeSection = useUiStore(state => state.section);
@@ -209,23 +221,26 @@ const App: React.FC = () => {
                 animate="show"
                 exit="exit"
               >
-                {activeSection === 'upload' && <UploadSection />}
-                {activeSection === 'dashboard' && <Dashboard />}
-                {activeSection === 'security' && <SecurityAnalysis />}
-                {activeSection === 'assistant' && <AssistantChat />}
-                {activeSection === 'attack' && (
-                  <>
-                    <div className="space-y-6">
-                      <AttackCorrelationsPanel />
-                    </div>
-                    <div className="mt-6">
-                      <AttackCandidates />
-                    </div>
-                  </>
-                )}
-                {activeSection === 'ai' && <AiOptions />}
-                {activeSection === 'risk' && <RiskClassification />}
-                {activeSection === 'report' && <ReportGenerator />}
+                {/* Solo la primera visita a cada sección espera su chunk. */}
+                <Suspense fallback={<SectionLoading />}>
+                  {activeSection === 'upload' && <UploadSection />}
+                  {activeSection === 'dashboard' && <Dashboard />}
+                  {activeSection === 'security' && <SecurityAnalysis />}
+                  {activeSection === 'assistant' && <AssistantChat />}
+                  {activeSection === 'attack' && (
+                    <>
+                      <div className="space-y-6">
+                        <AttackCorrelationsPanel />
+                      </div>
+                      <div className="mt-6">
+                        <AttackCandidates />
+                      </div>
+                    </>
+                  )}
+                  {activeSection === 'ai' && <AiOptions />}
+                  {activeSection === 'risk' && <RiskClassification />}
+                  {activeSection === 'report' && <ReportGenerator />}
+                </Suspense>
               </motion.div>
             </AnimatePresence>
           </section>
