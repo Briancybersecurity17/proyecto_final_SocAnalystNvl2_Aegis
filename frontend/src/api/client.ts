@@ -590,6 +590,8 @@ export interface RagStatusResponse {
   events?: number
   levels?: Record<string, number>
   suspicious?: number
+  /** true mientras corre una indexación para este análisis (subida o reparación). */
+  indexing?: boolean
 }
 
 const RAG_TTL_MS = 8000

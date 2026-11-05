@@ -811,3 +811,42 @@ def test_reject_desconocido_devuelve_404(client):
     res = client.post("/api/attack-candidates/no_existe/reject")
 
     assert res.status_code == 404
+
+
+# Senal de indexacion en /api/rag/status: el banner del chat necesita
+# distinguir «esta indexando» de «todavia no hay nada indexado» (p. ej. al
+# restaurar un analisis en un backend recien arrancado, donde la reparacion
+# solo salta con la primera consulta).
+def test_rag_status_indexing_falso_sin_tarea(client, analysis_id):
+    res = client.get("/api/rag/status", params={"analysis_id": analysis_id})
+
+    assert res.status_code == 200
+    assert res.json()["indexing"] is False
+
+
+def test_rag_status_indexing_true_con_tarea_en_curso(client, analysis_id, monkeypatch):
+    import main as main_mod
+
+    class _EnCurso:
+        def done(self):
+            return False
+
+    monkeypatch.setattr(main_mod, "_INDEX_TASKS", {analysis_id: _EnCurso()})
+
+    res = client.get("/api/rag/status", params={"analysis_id": analysis_id})
+
+    assert res.json()["indexing"] is True
+
+
+def test_rag_status_indexing_false_con_tarea_terminada(client, analysis_id, monkeypatch):
+    import main as main_mod
+
+    class _Terminada:
+        def done(self):
+            return True
+
+    monkeypatch.setattr(main_mod, "_INDEX_TASKS", {analysis_id: _Terminada()})
+
+    res = client.get("/api/rag/status", params={"analysis_id": analysis_id})
+
+    assert res.json()["indexing"] is False

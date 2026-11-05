@@ -563,11 +563,21 @@ export const AssistantChat: React.FC = () => {
         tone: '#ffb020',
         text: `Índice semántico no disponible (${rag.reason ?? 'sin motor'}): la consulta usa búsqueda léxica sobre los registros.`,
       }
-    if (!rag.events)
-      return {
-        tone: '#1fc8ff',
-        text: 'Indexando los registros en el índice semántico… la primera consulta puede tardar unos segundos.',
-      }
+    if (!rag.events) {
+      // Dos situaciones distintas con la misma cara (0 eventos): o está
+      // indexando ahora, o este análisis todavía no tiene nada indexado —
+      // p. ej. tras restaurarlo en un backend recién arrancado, donde la
+      // reparación solo salta con la primera consulta.
+      return rag.indexing
+        ? {
+            tone: '#1fc8ff',
+            text: 'Indexando los registros en el índice semántico… la primera consulta puede tardar unos segundos.',
+          }
+        : {
+            tone: '#ffb020',
+            text: 'Sin eventos en el índice semántico todavía: se reconstruye con tu primera consulta (mientras tanto, búsqueda léxica).',
+          }
+    }
     return {
       tone: '#10b981',
       text: `Recuperación híbrida activa · ${rag.events} eventos indexados · ${rag.model}`,

@@ -1919,6 +1919,12 @@ async def rag_status(analysis_id: str = Query("", description="Análisis concret
     info = await asyncio.to_thread(rag_store.get_stats, analysis_id or None)
     if analysis_id and analysis_id not in analysis_store:
         info["known_analysis"] = False
+    # ¿Hay una indexación en curso para ESTE análisis? Sin esta señal el
+    # frontend no distingue «está indexando» de «todavía no hay nada que
+    # indexar» (p. ej. tras restaurar un análisis en un backend recién
+    # arrancado) y el banner del chat promete un trabajo que no corre.
+    task = _INDEX_TASKS.get(analysis_id)
+    info["indexing"] = bool(analysis_id) and task is not None and not task.done()
     return info
 
 
