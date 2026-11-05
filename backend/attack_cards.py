@@ -124,9 +124,10 @@ def mentions_generic_attack(question: str) -> bool:
 _ANDAMIAJE = (
     "hubo", "hubieron", "hay", "existe", "existen", "algun", "alguno",
     "algunos", "alguna", "algunas", "un", "una", "unos", "unas", "el",
-    "la", "los", "las", "en", "sobre", "entre", "registros", "registro",
-    "muestras", "muestra", "actividad", "sospechosa", "sospechosas",
-    "sospechoso", "sospechosos", "detecto", "detectaron", "se", "que",
+    "la", "los", "las", "en", "sobre", "entre", "de", "del", "registros",
+    "registro", "muestras", "muestra", "actividad", "sospechosa",
+    "sospechosas", "sospechoso", "sospechosos", "detecto", "detectaron",
+    "se", "que",
 )
 
 # Vocabulario paraguas: palabras que nombran el TEMA en general, sin decir

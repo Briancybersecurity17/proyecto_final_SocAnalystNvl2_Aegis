@@ -94,6 +94,10 @@ def test_es_consulta_paraguas_cuando_no_queda_nada_especifico():
     assert attack_cards.es_consulta_paraguas("¿Hubo un ciberataque?")
     assert attack_cards.es_consulta_paraguas("¿Algún malware en los registros?")
     assert attack_cards.es_consulta_paraguas("¿Hubo incidentes?")
+    # Igual que el caso ref-malware del eval: «muestras de malware».
+    assert attack_cards.es_consulta_paraguas(
+        "¿Hay muestras de malware en los registros?"
+    )
 
 
 def test_es_consulta_paraguas_con_patron_concreto_es_falso():
