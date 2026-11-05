@@ -208,27 +208,48 @@ def test_ficha_explicativa_no_detecta():
     assert "material del marco" not in res["answer"].lower()
 
 
-def test_ataque_fuera_del_catalogo_respuesta_honesta(ai):
+def test_ataque_paraguas_con_detecciones_reencuadra_la_respuesta(ai):
+    """Paraguas («¿Hubo un ciberataque?») con detecciones: la respuesta
+    empieza diciendo SÍ con el barrido, no con «no tengo una ficha»."""
     res = asyncio.run(
         answer_question("¿Hubo un ciberataque?", [], None, df=_df_fuerza_bruta())
     )
     assert res["mode"] == "attack_card"
-    assert "sin_ficha" in res["warnings"]
-    assert res["confidence"] == "ninguna"
+    assert res["warnings"] == ["sin_ficha"]
+    # El chip manda el barrido completo, no «fuera del catálogo».
+    assert res["confidence"] == "alta"
+    assert res["summary_line"] == "Barrido del catálogo: 2 de 15 detectan actividad"
     answer = res["answer"]
-    # Pieza 5: «ciberataque» es un término paraguas — la respuesta útil no
-    # es listar nombres sino el BARRIDO del catálogo entero evaluado sobre
-    # el archivo, con conteos exactos de evaluate (calibrado con este df:
-    # 15 fichas = 2 detectan + 3 sin coincidencias + 10 no evaluables).
     total = len(attack_cards.load_cards())
-    assert f"{total} fichas" in answer
+    # Encuadre nuevo: «Sí» + barrido (pieza 5: conteos exactos de evaluate;
+    # calibrado con este df: 15 fichas = 2 detectan + 3 sin coincidencias +
+    # 10 no evaluables).
+    assert answer.startswith(f"Sí: revisé las {total} fichas del catálogo")
     assert "2 detectan actividad" in answer
+    assert "No tengo una ficha" not in answer
     assert "Fuerza bruta (1 detección)" in answer
     assert "Acciones repetidas" in answer
     assert "3 no superan sus umbrales" in answer
     assert "10 no se pudieron evaluar" in answer
     # Sin ficha no hay material de qué hablar.
     assert "material del marco" not in answer.lower()
+
+
+def test_pregunta_concreta_fuera_de_catalogo_no_barrida(ai):
+    """Patrón concreto sin ficha («día cero»): texto honesto de siempre,
+    SIN barrido del catálogo ni reencuadre de paraguas."""
+    res = asyncio.run(
+        answer_question("¿Hubo un ataque de día cero?", [], None, df=_df_fuerza_bruta())
+    )
+    assert res["mode"] == "attack_card"
+    assert res["warnings"] == ["sin_ficha"]
+    assert res["confidence"] == "ninguna"
+    assert res["summary_line"] == "Ataque fuera del catálogo de fichas"
+    answer = res["answer"]
+    assert "No tengo una ficha para ese patrón" in answer
+    # El barrido es solo para consultas paraguas: acá no aparece.
+    assert f"{len(attack_cards.load_cards())} fichas" not in answer
+    assert "detectan actividad" not in answer
 
 
 def test_sin_ficha_barrido_sin_detecciones(ai):
@@ -238,7 +259,14 @@ def test_sin_ficha_barrido_sin_detecciones(ai):
     )
 
     assert res["warnings"] == ["sin_ficha"]
+    # Encuadre nuevo: la respuesta empieza por la negativa directa.
+    assert res["confidence"] == "baja"
+    assert res["summary_line"] == "Ninguna de las 15 fichas detecta actividad"
     answer = res["answer"]
+    total = len(attack_cards.load_cards())
+    assert answer.startswith(
+        f"No encontré actividad de ataque: revisé las {total} fichas"
+    )
     assert "ninguna detecta actividad" in answer
     # Calibrado con este df: 0 detectan + 4 sin coincidencias + 11 no eval.
     assert "4 no superan sus umbrales" in answer
@@ -254,6 +282,8 @@ def test_sin_ficha_df_vacio_no_inventa_conteos(ai):
     )
 
     assert res["warnings"] == ["sin_ficha"]
+    assert res["summary_line"] == "Archivo sin registros para evaluar"
+    assert res["confidence"] == "ninguna"
     assert "vacío" in res["answer"]
     assert "Catálogo disponible" not in res["answer"]
 
@@ -569,16 +599,18 @@ def _encender_llm(ai, monkeypatch, respuesta, llamadas=None):
 
 
 def test_sin_ficha_con_llm_crea_candidata_pendiente(ai, monkeypatch):
+    # Patrón CONCRETO fuera del catálogo: es cuando toca proponer candidata.
+    pregunta = "¿Hubo un ataque de día cero?"
     # Respuesta de referencia SIN LLM: el texto no puede cambiar después.
     sin_llm = asyncio.run(
-        answer_question("¿Hubo un ciberataque?", [], None, df=_df_fuerza_bruta())
+        answer_question(pregunta, [], None, df=_df_fuerza_bruta())
     )
     _encender_llm(ai, monkeypatch, json.dumps(_BORRADOR_NUEVO, ensure_ascii=False))
     con_llm = asyncio.run(
-        answer_question("¿Hubo un ciberataque?", [], None, df=_df_fuerza_bruta())
+        answer_question(pregunta, [], None, df=_df_fuerza_bruta())
     )
 
-    # Texto INTACTO (mismo catálogo listado, misma honestidad) + el aviso.
+    # Texto INTACTO (misma honestidad) + el aviso.
     assert con_llm["answer"] == sin_llm["answer"]
     assert "sin_ficha" in con_llm["warnings"]
     assert "candidata_creada" in con_llm["warnings"]
@@ -588,12 +620,28 @@ def test_sin_ficha_con_llm_crea_candidata_pendiente(ai, monkeypatch):
     assert [c["id"] for c in candidatas] == ["credential_stuffing"]
     assert candidatas[0]["status"] == "pendiente"
     assert candidatas[0]["tipo"] == "nueva"
-    assert candidatas[0]["question"] == "¿Hubo un ciberataque?"
+    assert candidatas[0]["question"] == pregunta
     assert attack_candidates.CANDIDATES_PATH.exists()
 
     # Y el catálogo NO cambió: match_card sigue sin conocer la ficha.
     ids = [c["id"] for c in attack_cards.load_cards()]
     assert "credential_stuffing" not in ids
+
+
+def test_paraguas_con_llm_no_propone_candidata(ai, monkeypatch):
+    """«¿Hubo un ciberataque?» no nombra ningún patrón: no hay nada que
+    proponer, así que el LLM ni se invoca y no se escribe candidata."""
+    llamadas = []
+    _encender_llm(ai, monkeypatch,
+                  json.dumps(_BORRADOR_NUEVO, ensure_ascii=False), llamadas)
+    res = asyncio.run(
+        answer_question("¿Hubo un ciberataque?", [], None, df=_df_fuerza_bruta())
+    )
+
+    assert res["warnings"] == ["sin_ficha"]
+    # El LLM NO se invoca para una consulta paraguas (nada que proponer).
+    assert llamadas == []
+    assert attack_candidates.list_candidates() == []
 
 
 def test_sin_ficha_sin_llm_no_crea_candidata(ai):
@@ -611,7 +659,7 @@ def test_el_prompt_de_candidata_trae_datos_reales_del_archivo(ai, monkeypatch):
     _encender_llm(ai, monkeypatch,
                   json.dumps(_BORRADOR_NUEVO, ensure_ascii=False), llamadas)
     asyncio.run(
-        answer_question("¿Hubo un ciberataque?", [], None, df=_df_fuerza_bruta())
+        answer_question("¿Hubo un ataque de día cero?", [], None, df=_df_fuerza_bruta())
     )
 
     assert llamadas, "el LLM no llegó a invocarse para proponer la candidata"
@@ -628,12 +676,12 @@ def test_el_prompt_de_candidata_trae_datos_reales_del_archivo(ai, monkeypatch):
 def test_llm_basura_no_rompe_la_respuesta_de_sin_ficha(ai, monkeypatch):
     _encender_llm(ai, monkeypatch, "lo siento, no puedo redactar eso")
     res = asyncio.run(
-        answer_question("¿Hubo un ciberataque?", [], None, df=_df_fuerza_bruta())
+        answer_question("¿Hubo un ataque de día cero?", [], None, df=_df_fuerza_bruta())
     )
 
     assert res["warnings"] == ["sin_ficha"]
-    # Pieza 5: el barrido (determinista) viaja aunque el LLM falle.
-    assert f"{len(attack_cards.load_cards())} fichas" in res["answer"]
+    # Sin candidata válida la respuesta determinista viaja completa.
+    assert "No tengo una ficha para ese patrón" in res["answer"]
     assert attack_candidates.list_candidates() == []
 
 

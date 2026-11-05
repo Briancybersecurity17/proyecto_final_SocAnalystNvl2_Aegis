@@ -3263,25 +3263,19 @@ def _pl(n: int, singular: str, plural: str) -> str:
     return f"{n} {singular if n == 1 else plural}"
 
 
-def _attack_sin_ficha(df) -> str:
-    """Respuesta honesta cuando la consulta nombra un ataque fuera del catálogo.
+def _attack_barrido(df) -> Dict[str, Any]:
+    """Evalúa el catálogo COMPLETO contra el archivo (cero invención).
 
-    «¿Hubo un ciberataque?» es un término paraguas: en vez de solo listar
-    nombres (que suena a «eso no existe»), se EVALÚA el catálogo entero
-    contra el archivo y se reporta cuántas fichas detectan actividad, con
-    los conteos exactos de `attack_cards.evaluate` — cero invención.
-    Tres salidas: archivo vacío (no hay qué barrer), barrido con
-    detecciones (lista cada ficha que detecta con su total) o barrido sin
-    ninguna (dice «ninguna detecta» con el desglose de no-coincidencias y
-    no-evaluables). Siempre cierra invitando a preguntar por una ficha
-    concreta, que es lo que sí se puede evaluar en detalle.
+    Tres salidas: archivo vacío (no hay qué barrer), o los conteos exactos
+    de `attack_cards.evaluate` por ficha: cuántas detectan (con su nombre y
+    total), cuántas no superan sus umbrales y cuántas no se pudieron evaluar
+    (sin regla o faltan columnas). Compartido entre el texto de `sin_ficha`
+    y el chip del paraguas, para que hablen SIEMPRE con los mismos números.
     """
     cards = attack_cards.load_cards()
     if df is None or len(df) == 0:
-        return (
-            "El archivo está vacío: no hay registros con los cuales evaluar "
-            f"ninguna de las {len(cards)} fichas del catálogo."
-        )
+        return {"vacio": True, "total": len(cards), "detectan": [],
+                "sin_coincidencias": 0, "no_evaluables": 0}
     detectan: List[Tuple[str, int]] = []
     sin_coincidencias = 0
     no_evaluables = 0
@@ -3295,11 +3289,60 @@ def _attack_sin_ficha(df) -> str:
             )
         else:
             sin_coincidencias += 1
-    intro = (
-        "No tengo una ficha para ese patrón en el catálogo, así que no doy "
-        "cifras de algo que no puedo evaluar. "
-        f"Sí evalué las {len(cards)} fichas del catálogo sobre tus registros: "
+    return {"vacio": False, "total": len(cards), "detectan": detectan,
+            "sin_coincidencias": sin_coincidencias,
+            "no_evaluables": no_evaluables}
+
+
+def _attack_chip_paraguas(barrido: Dict[str, Any]) -> Tuple[str, str]:
+    """(línea de resumen, confianza) según el barrido de una consulta
+    paraguas: con detecciones manda el conteo («2 de 15 detectan»), sin
+    ellas la negativa directa, y con el archivo vacío no se inventa un «0»."""
+    if barrido.get("vacio"):
+        return "Archivo sin registros para evaluar", "ninguna"
+    detectan = barrido.get("detectan") or []
+    if detectan:
+        verbo = "detecta actividad" if len(detectan) == 1 else "detectan actividad"
+        return (
+            f"Barrido del catálogo: {len(detectan)} de {barrido['total']} "
+            f"{verbo}",
+            "alta",
+        )
+    return (
+        f"Ninguna de las {barrido['total']} fichas detecta actividad", "baja",
     )
+
+
+def _attack_sin_ficha(
+    df, paraguas: bool = False, barrido: Optional[Dict[str, Any]] = None
+) -> str:
+    """Respuesta honesta cuando la consulta nombra un ataque sin ficha propia.
+
+    Dos encuadres (pieza 6): la consulta PARAGUAS («¿Hubo un ciberataque?»)
+    no pregunta por un patrón sino por el panorama, así que la respuesta va
+    directo al barrido del catálogo — «Sí: … N detectan actividad» o «No
+    encontré actividad de ataque: …» — con los conteos exactos de `evaluate`.
+    El patrón CONCRETO fuera del catálogo («¿Hubo un ataque de día cero?»)
+    mantiene el texto honesto de siempre, SIN barrido: hablar de otras fichas
+    no contesta lo que preguntaron. Siempre cierra invitando a consultar el
+    catálogo, que es lo que sí se puede evaluar en detalle.
+    """
+    b = barrido if barrido is not None else _attack_barrido(df)
+    if b.get("vacio"):
+        return (
+            "El archivo está vacío: no hay registros con los cuales evaluar "
+            f"ninguna de las {b['total']} fichas del catálogo."
+        )
+    if not paraguas:
+        return (
+            "No tengo una ficha para ese patrón en el catálogo, así que no doy "
+            "cifras de algo que no puedo evaluar. Preguntá por un patrón del "
+            "catálogo (fuerza bruta, barrido, exfiltración de datos…) y te doy "
+            "el detalle con sus umbrales y evidencias."
+        )
+    detectan = b["detectan"]
+    sin_coincidencias = int(b["sin_coincidencias"])
+    no_evaluables = int(b["no_evaluables"])
     if detectan:
         nombrar = ", ".join(
             f"{nombre} ({n} {'detección' if n == 1 else 'detecciones'})"
@@ -3307,16 +3350,25 @@ def _attack_sin_ficha(df) -> str:
         )
         if len(detectan) > 6:
             nombrar += f" y {len(detectan) - 6} más"
-        cuerpo = (
+        intro = (
+            f"Sí: revisé las {b['total']} fichas del catálogo sobre tus "
+            "registros y "
             f"{_pl(len(detectan), 'detecta actividad', 'detectan actividad')}"
-            f" — {nombrar}; "
+            " — "
+        )
+        cuerpo = (
+            f"{nombrar}; "
             f"{_pl(sin_coincidencias, 'no supera sus umbrales', 'no superan sus umbrales')} y "
             f"{_pl(no_evaluables, 'no se pudo evaluar', 'no se pudieron evaluar')} (sin regla o "
             "faltan columnas)."
         )
     else:
+        intro = (
+            f"No encontré actividad de ataque: revisé las {b['total']} fichas "
+            "del catálogo sobre tus registros y "
+        )
         cuerpo = (
-            f"ninguna detecta actividad; "
+            "ninguna detecta actividad; "
             f"{_pl(sin_coincidencias, 'no supera sus umbrales', 'no superan sus umbrales')} y "
             f"{_pl(no_evaluables, 'no se pudo evaluar', 'no se pudieron evaluar')} (sin regla "
             "o faltan columnas)."
@@ -3548,21 +3600,34 @@ async def _attack_route(question: str, df) -> Optional[Dict[str, Any]]:
     respuesta NO cambia: solo se agrega el warning `candidata_creada`
     cuando el borrador pasó la validación determinista; sin LLM o con un
     borrador inválido la respuesta es idéntica a la de siempre.
+
+    Pieza 6: en `card is None` la señal de aprendizaje SOLO se dispara con
+    un patrón CONCRETO fuera del catálogo; una consulta paraguas («¿Hubo un
+    ciberataque?») no nombra nada que proponer, así que responde con el
+    barrido (chip y confianza según las detecciones) y no llama al LLM.
     """
     card = attack_cards.match_card(question)
     if card is None:
         if not attack_cards.mentions_generic_attack(question):
             return None
+        paraguas = attack_cards.es_consulta_paraguas(question)
+        barrido = _attack_barrido(df)
         warnings = ["sin_ficha"]
         # Fase 3: si hay LLM habilitado, proponer una candidata (queda
         # PENDIENTE de aprobación humana). El texto NO cambia: solo se
-        # agrega el aviso cuando el borrador pasó la validación.
-        if await _crear_candidata(question, df, None, None):
+        # agrega el aviso cuando el borrador pasó la validación. Solo para
+        # patrones concretos: ver docstring.
+        if not paraguas and await _crear_candidata(question, df, None, None):
             warnings.append("candidata_creada")
+        if paraguas:
+            summary_line, confidence = _attack_chip_paraguas(barrido)
+        else:
+            summary_line = "Ataque fuera del catálogo de fichas"
+            confidence = "ninguna"
         return _base_answer(
-            answer=_attack_sin_ficha(df),
-            summary_line="Ataque fuera del catálogo de fichas",
-            confidence="ninguna",
+            answer=_attack_sin_ficha(df, paraguas=paraguas, barrido=barrido),
+            summary_line=summary_line,
+            confidence=confidence,
             warnings=warnings,
             mode="attack_card",
             attack_card=None,

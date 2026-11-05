@@ -118,6 +118,42 @@ def mentions_generic_attack(question: str) -> bool:
     return any(p in norm_q for p in generico)
 
 
+# Andamiaje de una pregunta: artículos, verbos de existencia y las palabras
+# con las que se pregunta por registros. Se quita ANTES de juzgar si queda
+# un patrón concreto (mismas formas normalizadas que `_norm`).
+_ANDAMIAJE = (
+    "hubo", "hubieron", "hay", "existe", "existen", "algun", "alguno",
+    "algunos", "alguna", "algunas", "un", "una", "unos", "unas", "el",
+    "la", "los", "las", "en", "sobre", "entre", "registros", "registro",
+    "muestras", "muestra", "actividad", "sospechosa", "sospechosas",
+    "sospechoso", "sospechosos", "detecto", "detectaron", "se", "que",
+)
+
+# Vocabulario paraguas: palabras que nombran el TEMA en general, sin decir
+# qué ataque concreto se busca.
+_PARAGUAS = (
+    "ataque", "ataques", "ciberataque", "ciberataques", "incidente",
+    "incidentes", "malware", "ransomware", "phishing", "seguridad",
+    "compromiso", "brecha", "intrusion", "intrusiones",
+)
+
+
+def es_consulta_paraguas(question: str) -> bool:
+    """¿La pregunta es un pedido GENÉRICO de ataque («¿hubo un ciberataque?»)
+    sin ningún patrón concreto del que colgar una evaluación o una ficha?
+
+    Se quita el andamiaje (hubo, algún, registros…) y el vocabulario
+    paraguas (ataque, malware, incidentes…): si NO queda nada, es paraguas.
+    «¿Hubo un ataque de día cero?» deja «de dia cero» → concreto; sin
+    vocabulario de ataque tampoco es paraguas (caso que igual no llega a
+    la ruta, pero el helper tiene que ser honesto por su cuenta)."""
+    if not mentions_generic_attack(question):
+        return False
+    resto = [p for p in _norm(question).split()
+             if p not in _ANDAMIAJE and p not in _PARAGUAS]
+    return not resto
+
+
 # ------------------------------------------------------------------ helpers
 def _norm_val(value: Any) -> str:
     """«4625.0» (Excel numérico) → «4625»: los Event ID se comparan como texto."""

@@ -88,6 +88,23 @@ def test_mentions_generic_attack_solo_con_vocabulario_de_ataque():
     assert not attack_cards.mentions_generic_attack("")
 
 
+def test_es_consulta_paraguas_cuando_no_queda_nada_especifico():
+    # Tras quitar andamiaje (hubo, algún, en, los, registros…) y vocabulario
+    # paraguas (ciberataque, malware, incidentes…) la pregunta queda vacía.
+    assert attack_cards.es_consulta_paraguas("¿Hubo un ciberataque?")
+    assert attack_cards.es_consulta_paraguas("¿Algún malware en los registros?")
+    assert attack_cards.es_consulta_paraguas("¿Hubo incidentes?")
+
+
+def test_es_consulta_paraguas_con_patron_concreto_es_falso():
+    # Queda un patrón específico después de limpiar: NO es paraguas.
+    assert not attack_cards.es_consulta_paraguas("¿Hubo un ataque de día cero?")
+    # Sin vocabulario de ataque tampoco (nunca llega a la ruta, pero el
+    # helper tiene que ser honesto por su cuenta).
+    assert not attack_cards.es_consulta_paraguas("¿Cuántos registros hay en total?")
+    assert not attack_cards.es_consulta_paraguas("")
+
+
 # ---------------------------------------------------------------------------
 # event_presence
 # ---------------------------------------------------------------------------
