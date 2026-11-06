@@ -113,6 +113,10 @@ const ExecutiveProse: React.FC<{ text: string }> = ({ text }) => (
 /* ------------------------------------------------------------------ */
 /* Estilos del PDF                                                     */
 /* ------------------------------------------------------------------ */
+/* NOTA (react-pdf): `lineHeight` numérico NO son puntos — es un MULTIPLICADOR
+   del fontSize (caja de línea = lineHeight × fontSize, ver react-pdf docs).
+   Un valor "15" estira cada línea a 15 × fontSize pt → huecos gigantes,
+   portada desbordada y solapes. Usar valores tipo CSS (≈1.45–1.55). */
 const pdf = StyleSheet.create({
   page: {
     paddingTop: 46,
@@ -128,7 +132,7 @@ const pdf = StyleSheet.create({
   coverSub: { fontSize: 10, color: '#93c5fd', marginTop: 6 },
   coverBody: { paddingHorizontal: 42, paddingTop: 40 },
   coverTitle: { fontFamily: 'Helvetica-Bold', fontSize: 24, color: '#0f2d4f' },
-  coverTagline: { fontSize: 11, color: '#4b5563', marginTop: 8, lineHeight: 16 },
+  coverTagline: { fontSize: 11, color: '#4b5563', marginTop: 8, lineHeight: 1.45 },
   metaBox: {
     marginTop: 30,
     borderWidth: 1,
@@ -140,7 +144,7 @@ const pdf = StyleSheet.create({
   metaRow: { flexDirection: 'row', marginBottom: 5 },
   metaLabel: { width: 130, color: '#6b7280' },
   metaValue: { fontFamily: 'Helvetica-Bold', flex: 1 },
-  note: { marginTop: 24, fontSize: 8.5, color: '#6b7280', lineHeight: 13 },
+  note: { marginTop: 24, fontSize: 8.5, color: '#6b7280', lineHeight: 1.5 },
 
   h1: {
     fontFamily: 'Helvetica-Bold',
@@ -154,10 +158,10 @@ const pdf = StyleSheet.create({
   },
   h2: { fontFamily: 'Helvetica-Bold', fontSize: 11.5, color: '#111827', marginTop: 14, marginBottom: 5 },
   h3: { fontFamily: 'Helvetica-Bold', fontSize: 10, color: '#374151', marginTop: 8, marginBottom: 3 },
-  para: { fontSize: 9.5, lineHeight: 15, marginBottom: 6, textAlign: 'justify' },
+  para: { fontSize: 9.5, lineHeight: 1.55, marginBottom: 6, textAlign: 'justify' },
   /* Entradilla del resumen ejecutivo: primera frase, un punto más grande. */
-  leadPara: { fontSize: 10.5, lineHeight: 16, marginBottom: 6, textAlign: 'justify', color: '#111827' },
-  small: { fontSize: 8.5, color: '#4b5563', lineHeight: 13 },
+  leadPara: { fontSize: 10.5, lineHeight: 1.5, marginBottom: 6, textAlign: 'justify', color: '#111827' },
+  small: { fontSize: 8.5, color: '#4b5563', lineHeight: 1.5 },
 
   /* Resumen ejecutivo: distribución por criticidad como barra apilada. */
   sectionLabel: { fontSize: 8, color: '#6b7280', letterSpacing: 0.6, marginBottom: 5 },
@@ -215,7 +219,7 @@ const pdf = StyleSheet.create({
     marginTop: 5,
     borderRadius: 3,
   },
-  evidenceLine: { fontSize: 8, lineHeight: 12, color: '#374151' },
+  evidenceLine: { fontSize: 8, lineHeight: 1.5, color: '#374151' },
   evidenceBold: { fontFamily: 'Helvetica-Bold' },
 
   planRow: { flexDirection: 'row', marginTop: 7, alignItems: 'flex-start' },
@@ -270,7 +274,9 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
   return (
     <Document title={`Informe SOC – ${file}`} author="AEGIS" subject="Informe técnico de seguridad">
       {/* ---------------- Portada ---------------- */}
-      <Page size="A4" style={[pdf.page, pdf.coverPage]} wrap={false}>
+      {/* Portada: sin wrap={false} — con él la página se dimensiona al
+          contenido (quedaba de 503 pt y el pie solapaba la nota). */}
+      <Page size="A4" style={[pdf.page, pdf.coverPage]}>
         <View style={pdf.coverBar} fixed>
           <Text style={pdf.coverBrand}>AEGIS</Text>
           <Text style={pdf.coverSub}>Plataforma de análisis de seguridad</Text>
@@ -402,7 +408,9 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
         <Text style={pdf.h1}>3. Clasificación de criticidad</Text>
         <Text style={pdf.para}>{summary.risk_justification}</Text>
 
-        <View style={pdf.critTable}>
+        {/* wrap={false}: tabla atómica — evita cabecera huérfana al final
+            de una página con las filas sueltas en la siguiente. */}
+        <View style={pdf.critTable} wrap={false}>
           <View style={pdf.critHeader} wrap={false}>
             <Text style={[pdf.critHeaderText, pdf.w80]}>Nivel</Text>
             <Text style={[pdf.critHeaderText, pdf.w60]}>Registros</Text>
@@ -465,7 +473,7 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
         <Text style={pdf.h1}>5. Correlación de eventos</Text>
         <Text style={pdf.para}>{report.correlation}</Text>
         {summary.suspicious_by_ip.length > 0 && (
-          <View style={pdf.critTable}>
+          <View style={pdf.critTable} wrap={false}>
             <View style={pdf.critHeader} wrap={false}>
               <Text style={[pdf.critHeaderText, { flex: 1 }]}>IP de origen</Text>
               <Text style={[pdf.critHeaderText, pdf.w60]}>Eventos</Text>
