@@ -1,9 +1,10 @@
-# Comunidad Dojo – SOC Analyst Nivel 2
+# AEGIS – Plataforma de análisis de seguridad
 
-Aplicación web para el **proyecto final del bootcamp de Comunidad Dojo (SOC Analyst Nivel 2)**:
-importa un archivo Excel con registros de seguridad, analiza y correlaciona eventos
-sospechosos, clasifica el riesgo en cuatro niveles con justificación, y genera un
-**informe técnico en PDF** con hallazgos, evidencias y plan de acción.
+**AEGIS** es una aplicación web de análisis de seguridad: importa un archivo Excel
+con registros, analiza y correlaciona eventos sospechosos, clasifica el riesgo en
+cuatro niveles con justificación, y genera un **informe técnico en PDF** con
+hallazgos, evidencias y plan de acción. Incluye asistente IA con recuperación
+(RAG) sobre tus propios registros y mapeo MITRE ATT&CK.
 
 > Sin integración con Microsoft Sentinel (requisito de la consigna). Todo el análisis se
 > realiza sobre los registros que tú importas, sin inventar hallazgos.
@@ -39,7 +40,7 @@ sospechosos, clasifica el riesgo en cuatro niveles con justificación, y genera 
 ## Estructura del proyecto
 
 ```
-proyecto_final_bootcamp_ComunidadDojo_SocAnalystNvl2/
+aegis/
 ├─ .gitignore                 # node_modules, .venv, .env, logs, editores, cachés RAG/KB/IA
 ├─ README.md
 ├─ test_backend.py            # prueba end-to-end del backend
@@ -121,6 +122,125 @@ Abrí **http://localhost:5300** → *Carga de archivos* → seleccioná el Excel
 Análisis de seguridad y Clasificación de riesgos → *Informe técnico* → **Descargar informe PDF**.
 
 No se usan puertos adicionales: backend **8500**, frontend **5300**.
+
+---
+
+## Guía de uso de la app
+
+Recorrido completo, de la carga del Excel al PDF. La navegación es por el
+**sidebar izquierdo**; el estado del backend se ve arriba a la derecha
+(punto verde = conectado).
+
+### 1. Carga de archivos
+
+1. Entrá a **Carga de archivos** (también desde el estado vacío inicial).
+2. Seleccioná o arrastrá un `.xlsx`. Se procesan **todas las hojas**.
+3. Esperá a que el estado pase de `pending` a `done`:
+   - la tabla muestra todas las columnas del archivo con paginación y búsqueda;
+   - en segundo plano se indexa el índice semántico (RAG) — el banner del
+     asistente avisa «Indexando…» hasta que queda «Recuperación híbrida activa».
+4. **Filtros rápidos** sobre la tabla: criticidad, `sospechoso`, valor de
+   `Result` (Success/Failure/Allowed y códigos HTTP) y búsqueda de texto.
+   Cada columna tiene autofilter en su cabecera.
+5. **Historial**: los análisis anteriores aparecen abajo; con el botón
+   **Restaurar** se recupera cualquiera (sobreviven a reiniciar el backend).
+
+> El Excel original queda guardado en `backend/data/analyses/<id>/`: la fuente
+> de verdad siempre es el archivo, no el navegador.
+
+### 2. Dashboard
+
+- **KPIs** arriba: total de registros, sospechosos, hosts, distribución por
+  nivel y riesgo global.
+- **Gráficos interactivos**: distribución por criticidad, eventos por día,
+  top hosts, reparto de `Result`/errores HTTP.
+- **Interacción**: clic en un gráfico o arrastre en la barra temporal
+  (TimelineBrush) **acota el rango**; todos los KPIs y gráficos se recalculan
+  al instante sobre la selección. El panel *Detalle* muestra las cifras
+  exactas de lo que se seleccionó.
+
+### 3. Análisis de seguridad
+
+- Lista de **eventos sospechosos** con su justificación (severidad + resultado
+  + palabras clave + Event ID).
+- **Correlaciones** IP ↔ host ↔ tiempo: hosts afectados, IPs de origen y
+  patrones conductuales (fuerza bruta, barrido, IPs multi-host…).
+
+### 4. Correlaciones ATT&CK
+
+- **Técnicas observadas**: las técnicas MITRE ATT&CK que corresponden a los
+  Event ID reales del archivo (con táctica, descripción y enlace oficial).
+- **Tácticas cubiertos** y **Event IDs del dataset** con su glosario.
+- **Fichas de ataque**: 15 fichas evaluables; si el asistente encuentra un
+  ataque fuera del catálogo propone una **ficha candidata** que vos
+  aprobás o rechazás (nunca entra sola).
+
+### 5. Asistente IA (RAG)
+
+1. Entrá a **Asistente IA (RAG)** (requiere un análisis cargado).
+2. Escribí la pregunta en lenguaje natural, p. ej.:
+   - «¿cuántos intentos de login fallido hay?» → cifra exacta del resumen;
+   - «¿qué hosts concentran los eventos críticos?» → agregación;
+   - «¿hubo fuerza bruta?» → evaluación de la ficha con umbrales reales;
+   - «¿qué es el evento 1102?» → referencia técnica de la KB.
+3. Cada respuesta trae **tarjetas de evidencia** con los `Log_ID` citados
+   (verificables) y, si aplica, el bloque **Referencia técnica** (Event IDs y
+   técnicas ATT&CK con enlace).
+4. **Filtros dentro del chat**: acotar a un nivel de criticidad o solo
+   sospechosos antes de preguntar.
+5. **Corregir**: el botón «Corregir» de cualquier respuesta guarda tu
+   criterio en la memoria few-shot (se ve en *Opciones IA* → Memoria de
+   criterio). Las respuestas que repetís el mismo tema se guardan como
+   positivas automáticamente.
+
+### 6. Opciones IA
+
+- **Motor de IA**: endpoint compatible con OpenAI (Groq por defecto), modelo,
+  **API key**, temperature, timeout y on/off — aplica al instante, sin
+  reiniciar. Botón **Probar conexión** para verificar latencia real.
+- **Parámetros de generación** y **retención de datos**.
+- **Memoria de criterio**: estado de los ejemplos few-shot, con opción de
+  vaciarla.
+
+### 7. Clasificación de riesgos
+
+- Los registros agrupados en **Crítico / Alto / Medio / Bajo**, cada nivel con
+  su justificación técnica y ejemplos reales.
+- Se ve el **mapeo de severidad**: `Warning → Crítico`, `High → Alto`,
+  `Medium → Medio`, `Informational/Low → Bajo` (el valor original se conserva
+  sin alterar).
+
+### 8. Informe técnico → PDF
+
+1. Entrá a **Informe técnico** y pulsá **Generar informe**.
+2. El documento tiene **7 secciones**: resumen ejecutivo, alcance y
+   metodología, distribución por criticidad, eventos sospechosos, correlaciones,
+   clasificación de riesgos, conclusiones y plan de acción.
+3. Revisalo en pantalla (vista previa A4) y descargalo con **Descargar informe
+   PDF** — portada con marca AEGIS, numeración de páginas y las cifras
+   ancladas a tus datos.
+
+> **Flujo mínimo para un entregable:** *Carga de archivos* → (esperar `done`)
+> → *Informe técnico* → *Generar* → *Descargar PDF*. El resto de secciones
+> sirve para sustentar y verificar cada hallazgo del informe.
+
+---
+
+## Seguridad: claves API
+
+**Ninguna clave API se sube al repositorio.** El proyecto está limpio de
+secretos y así se mantiene:
+
+- La key se ingresa desde **Opciones IA** y vive solo en
+  `backend/data/ai_config.json`, que está en `.gitignore` (nunca se commitea).
+- También están ignorados `.env` / `.env.local`, `feedback.json`,
+  `attack_cards_candidates.json` y los análisis (`backend/data/analyses/`).
+- En el código y el README solo aparecen **placeholders** (`gsk_…`).
+- Si preferís configurar por entorno, usá variables en tu shell
+  (`AI_API_KEY=…`), nunca un archivo versionado.
+
+**Si alguna vez pegaste una key real en un commit:** rotala inmediatamente en
+el proveedor (borrar el commit no basta — el historial de git la conserva).
 
 ---
 
@@ -484,5 +604,8 @@ Corridas completas en `backend/eval/runs/`.
 
 ## .gitignore
 
-En la raíz ya está creado e ignora: `node_modules/`, `dist/`, `.vite/`, `.env*`,
-`.venv/`, `__pycache__/`, bases de datos, logs y archivos de editor/sistema.
+En la raíz ya está creado e ignora: `node_modules/`, `dist/`, `.vite/`, **`.env*`**,
+`.venv/`, `__pycache__/`, bases de datos, logs, archivos de editor/sistema,
+**`backend/data/ai_config.json`** (donde vive tu API key), `feedback.json`,
+`attack_cards_candidates.json`, `backend/data/analyses/`, el índice RAG y la
+caché de la KB. Ningún secreto ni dato de ejecución entra al repositorio.

@@ -119,7 +119,7 @@ except ImportError:  # pragma: no cover
         _facet_field,
     )
 
-app = FastAPI(title="Comunidad Dojo – SOC Analyst API", lifespan=lifespan)
+app = FastAPI(title="AEGIS – API de análisis de seguridad", lifespan=lifespan)
 
 # Allow the Vite dev server to call the API
 # NOTE: explicit origins – "*" + credentials is an invalid/unsafe combination.

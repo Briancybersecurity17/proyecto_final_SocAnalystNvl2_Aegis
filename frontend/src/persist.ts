@@ -13,7 +13,7 @@ import type { Section } from './store'
  * copia aquí (la fuente de verdad sigue siendo el backend).
  */
 
-const KEY = 'dojo_soc.analysis_ref'
+const KEY = 'aegis.analysis_ref'
 
 export interface AnalysisRef {
   analysisId: string

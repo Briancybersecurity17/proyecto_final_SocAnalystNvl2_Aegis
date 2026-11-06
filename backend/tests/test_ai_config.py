@@ -161,7 +161,7 @@ def test_endpoints_existen_en_openapi(client):
 
 
 def test_app_es_importable():  # guarda contra imports rotos en main/ai_service
-    assert app.title.startswith("Comunidad Dojo")
+    assert app.title.startswith("AEGIS")
     assert callable(ai_config.get) and callable(ai_config.probe)
 
 

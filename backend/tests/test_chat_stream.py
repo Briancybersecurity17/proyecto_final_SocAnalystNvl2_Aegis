@@ -416,5 +416,5 @@ def test_stream_llm_respetar_historial_en_el_prompt(ai, monkeypatch):
 
 
 def test_app_es_importable():  # guarda contra imports rotos en main/ai_service
-    assert app.title.startswith("Comunidad Dojo")
+    assert app.title.startswith("AEGIS")
     assert callable(stream_question)

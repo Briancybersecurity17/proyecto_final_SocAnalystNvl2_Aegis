@@ -91,7 +91,7 @@ interface ChatMessage {
 // anterior. Todo en try/catch (mismo patrón que `persist.ts`): sin storage
 // la app sigue funcionando, solo que sin restaurar.
 // ---------------------------------------------------------------------------
-const CHAT_KEY_PREFIX = 'dojo_soc.chat'
+const CHAT_KEY_PREFIX = 'aegis.chat'
 
 /** Tope de mensajes persistidos: una sesión larga no debe acercarse a la
  *  cuota de sessionStorage (~5 MB); el historial útil es corto. */

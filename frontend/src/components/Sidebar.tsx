@@ -121,11 +121,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ active, setActive }) => {
     <nav className="relative z-[1] w-64 flex-shrink-0 h-full overflow-y-auto border-r border-hud-soft bg-inset/85 backdrop-blur">
       <div className="border-b border-hud-soft p-5">
         <div className="font-display text-lg font-bold uppercase leading-tight tracking-[0.18em] text-hud-line [text-shadow:0_0_10px_rgba(31,200,255,0.45)]">
-          Comunidad
-          <br />
-          Dojo
+          AEGIS
         </div>
-        <div className="hud-label mt-2">SOC Analyst · Nivel 2</div>
+        <div className="hud-label mt-2">Plataforma de análisis de seguridad</div>
       </div>
 
       <ul className="mt-4 space-y-1.5 px-3">
@@ -151,7 +149,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ active, setActive }) => {
       </ul>
 
       <div className="hud-label absolute bottom-0 w-full border-t border-hud-soft p-4">
-        © 2026 Comunidad Dojo
+        © 2026 AEGIS
       </div>
     </nav>
   );

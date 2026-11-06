@@ -262,18 +262,18 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
 
   const Footer: React.FC = () => (
     <View style={pdf.footer} fixed>
-      <Text>Comunidad Dojo · Informe técnico SOC Analyst Nivel 2</Text>
+      <Text>AEGIS · Informe técnico de seguridad</Text>
       <Text render={({ pageNumber, totalPages }) => `Página ${pageNumber} de ${totalPages}`} />
     </View>
   )
 
   return (
-    <Document title={`Informe SOC – ${file}`} author="Comunidad Dojo" subject="Informe técnico de seguridad">
+    <Document title={`Informe SOC – ${file}`} author="AEGIS" subject="Informe técnico de seguridad">
       {/* ---------------- Portada ---------------- */}
       <Page size="A4" style={[pdf.page, pdf.coverPage]} wrap={false}>
         <View style={pdf.coverBar} fixed>
-          <Text style={pdf.coverBrand}>Comunidad Dojo</Text>
-          <Text style={pdf.coverSub}>SOC Analyst · Nivel 2 — Plataforma de análisis de registros</Text>
+          <Text style={pdf.coverBrand}>AEGIS</Text>
+          <Text style={pdf.coverSub}>Plataforma de análisis de seguridad</Text>
         </View>
 
         <View style={pdf.coverBody}>
@@ -497,8 +497,8 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
         <Text style={pdf.h1}>7. Conclusiones</Text>
         <Text style={pdf.para}>{report.conclusions}</Text>
         <Text style={pdf.note}>
-          Informe generado automáticamente por la plataforma Comunidad Dojo (SOC Analyst
-          Nivel 2) mediante asistente de IA sobre datos calculados a partir de los
+          Informe generado automáticamente por la plataforma AEGIS mediante
+          asistente de IA sobre datos calculados a partir de los
           registros importados. Verificable fila a fila desde la sección «Carga de
           archivos» de la aplicación.
         </Text>
@@ -734,7 +734,7 @@ const ReportGenerator: React.FC = () => {
         <article className="m-2 border-t-4 border-primary bg-white text-gray-900 p-6 shadow-[0_18px_40px_-16px_rgba(0,0,0,0.9)] md:p-10">
           {/* Portada */}
           <header className="border-b pb-6 mb-6">
-            <p className="text-xs uppercase tracking-widest text-primary font-semibold">Comunidad Dojo · SOC Analyst Nivel 2</p>
+            <p className="text-xs uppercase tracking-widest text-primary font-semibold">AEGIS · Plataforma de análisis de seguridad</p>
             <h1 className="text-3xl font-bold text-gray-900 mt-2">Informe técnico de seguridad</h1>
             <p className="text-gray-600 mt-2">
               Análisis de registros, correlación de eventos sospechosos, clasificación de
@@ -981,7 +981,7 @@ const ReportGenerator: React.FC = () => {
           </section>
 
           <footer className="mt-8 pt-4 border-t text-[11px] text-gray-500">
-            Documento generado automáticamente por la plataforma Comunidad Dojo · asistente
+            Documento generado automáticamente por la plataforma AEGIS · asistente
             de IA sobre datos calculados de los registros importados. Verificable fila a
             fila desde «Carga de archivos».
           </footer>

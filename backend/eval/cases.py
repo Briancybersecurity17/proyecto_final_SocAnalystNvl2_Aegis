@@ -1,7 +1,7 @@
 """cases.py — los 24 casos del harness con su verdad calculable.
 
 Cada caso define `expected` como un cálculo pandas sobre la muestra fija
-(`fixtures/sample.xlsx`, 715 filas del dataset real del bootcamp): NUNCA una
+(`fixtures/sample.xlsx`, 715 filas del dataset real del proyecto): NUNCA una
 lista escrita a mano. Si el archivo cambia, la verdad cambia con él y los
 tests de test_eval_cases.py la re-verifican antes de cualquier corrida.
 
