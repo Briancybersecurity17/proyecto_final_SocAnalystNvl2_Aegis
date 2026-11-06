@@ -65,7 +65,7 @@ proyecto_final_bootcamp_ComunidadDojo_SocAnalystNvl2/
 │  │  └─ attack_cards.json    # 15 fichas de ataque con sus reglas evaluables
 │  ├─ eval/                   # harness de evaluación: fixtures + 24 casos + scoring
 │  ├─ scripts/                # build_kb.py, eval_rag.py y benches de latencia
-│  ├─ tests/                  # pytest: 538 tests en 30 archivos
+│  ├─ tests/                  # pytest: 541 tests en 28 archivos
 │  └─ requirements.txt
 └─ frontend/                  # React + Vite + TypeScript (puerto 5300)
    ├─ index.html
@@ -395,7 +395,7 @@ semántica («fuerza bruta» → T1110, «ransomware» → T1486) → alias renu
 citados en la pregunta → bloque «Referencia técnica» en la respuesta →
 degradación sin Chroma.
 
-Suite unitaria (538 tests en 30 archivos: configuración del LLM, streaming
+Suite unitaria (541 tests en 28 archivos: configuración del LLM, streaming
 SSE, memoria de criterio few-shot, presupuesto de ventana, fichas de ataque,
 scoring/casos/runner del eval):
 
@@ -439,25 +439,30 @@ registra visible y no contamina el score; el guard del motor aborta si, con
 ningún caso de evidencia puntuó: el guard es fail-closed).
 Resultados por corrida en `backend/eval/runs/` (ignorado por git).
 
-Medida (muestra de 715 filas, `qwen2.5:3b`, temp 0.15, con el seed few-shot
-versionado activo): **determinista 48.7 % macro · LLM 49.5 %** (Δ **+0.8**),
-con la categoría `report` incluida — **7/7 = 100 % en ambos motores** y
-`informe.source = llm` con prosa del modelo en la pasada LLM. El modelo gana
-en `refusal` (+66.7), empata en `aggregate` y `retrieval`, y pierde en
-`filter_set` (−28.6) y `evidence_qa` (−33.3, reproducible en las corridas
-versionadas). Excluyendo `report`, el determinista marca **38.5 %** — idéntico
-a la línea base previa, o sea que el cambio en el reconocimiento de números
-no movió la verdad determinista — y el LLM 39.4 %. Con el LLM, la cobertura
-few-shot es 100 % de los casos elegibles (§6: los 7 fallos del modelo en las
-categorías elegibles tuvieron ejemplos inyectados, o sea fallo de CALIDAD
-del criterio, no de recall). La línea base determinista no cambia con el
-seed: el determinista no lee few-shot. Corridas completas en
-`backend/eval/runs/`.
+Medida (muestra de 715 filas, `openai/gpt-oss-120b` vía Groq, temp 0.15, con el
+seed few-shot versionado activo; corrida del 5/11/2026, guardada en
+`backend/eval/runs/run-20261105-190832.json`): **determinista 58.4 % macro ·
+LLM 64.0 %** (Δ **+5.6**), con la categoría `report` incluida — **7/7 = 100 %
+en ambos motores** y `informe.source = llm` (5448 ms). El modelo gana en
+`evidence_qa` (33.3 → 66.7) y empata en `aggregate` (60.0), `filter_set`
+(57.1), `refusal` (33.3) y `retrieval` (66.7). Excluyendo `report`, el
+determinista marca **50.1 %** y el LLM **56.8 %**. Grounding: 0 % de respuestas
+rechazadas por el guard y 0 Log_ID inventados; 0 errores de caso. Latencia
+media del LLM 5563 ms (determinista 937 ms). Cobertura few-shot 61.5 % de los
+casos elegibles (8/13: `filter_set` 85.7 %, `evidence_qa` 66.7 %, `refusal`
+0 % — las negativas se resuelven sin prompt few-shot: la puerta de tema corta
+`ref-terremoto` y la ruta de fichas de ataque toma `ref-malware`/`ref-sqli`).
+Guards en verde: `motor_guard` (20 % de los casos de evidencia quedaron en el
+determinista, ≤ 30 %) y `determinista_guard` (ninguna pasada base usó el LLM).
+Corridas completas en `backend/eval/runs/`.
 
-> Esas cifras salieron de la corrida del 29/10/2026 con el modelo local
-> `qwen2.5:3b`, anterior a la migración a proveedor cloud (1/11). El harness
-> no cambió: hoy `--motor llm` apunta a `openai/gpt-oss-120b` vía Groq, así
-> que conviene re-correrlo antes de comparar.
+> La corrida previa (29/10/2026, `qwen2.5:3b`, 48.7/49.5) no es comparable
+> línea a línea: además del cambio de modelo, entre ambas entraron la puerta
+> de tema (3/11) y la ruta de fichas de ataque (3-4/11), que enrutan 5 casos
+> al determinista por diseño (`fs-tarea-4698`, `ref-terremoto`, `ref-malware`,
+> `ref-sqli`, `eq-dc01`). Los 429 de Groq durante la corrida no degradaron el
+> resultado: `chat()` reintenta ante cuota y el guard del motor confirmó uso
+> real del LLM.
 
 > La comparación entre `--motor determinista` y `--motor llm` se sostiene
 > porque el aislamiento garantiza que ambas pasadas parten del mismo estado
