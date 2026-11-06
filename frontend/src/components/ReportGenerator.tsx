@@ -15,8 +15,24 @@ import {
   Text,
   View,
   StyleSheet,
+  Font,
 } from '@react-pdf/renderer'
 import * as FileSaver from 'file-saver'
+import fontRegular from '../assets/fonts/JetBrainsMono-Regular.ttf'
+import fontBold from '../assets/fonts/JetBrainsMono-Bold.ttf'
+
+/* Tipografía AEGIS: JetBrains Mono embebida en el PDF.
+   react-pdf NO usa las fuentes del sistema ni las de Google Fonts: hay que
+   registrar el archivo (por eso el informe salía en Helvetica, ajeno a la
+   app). La interfaz entera se renderiza en JetBrains Mono, así que el
+   documento queda con la misma voz que la pantalla. Licencia SIL OFL. */
+Font.register({
+  family: 'JetBrains Mono',
+  fonts: [
+    { src: fontRegular, fontWeight: 400 },
+    { src: fontBold, fontWeight: 700 },
+  ],
+})
 
 /* ------------------------------------------------------------------ */
 /* Constantes de dominio                                               */
@@ -118,123 +134,240 @@ const ExecutiveProse: React.FC<{ text: string }> = ({ text }) => (
    Un valor "15" estira cada línea a 15 × fontSize pt → huecos gigantes,
    portada desbordada y solapes. Usar valores tipo CSS (≈1.45–1.55). */
 const pdf = StyleSheet.create({
+  /* Paleta AEGIS: los mismos tokens de la app (--bg-void, --bg-panel,
+     --hud-line, --text). Fondo oscuro en TODA la página (decisión de diseño
+     validada sobre la maqueta). react-pdf no soporta degradados ni sombras,
+     así que todo va en color plano. */
   page: {
     paddingTop: 46,
     paddingBottom: 52,
     paddingHorizontal: 42,
     fontSize: 9.5,
-    fontFamily: 'Helvetica',
-    color: '#1f2937',
+    fontFamily: 'JetBrains Mono',
+    backgroundColor: '#050212',
+    color: '#dce6f5',
   },
   coverPage: { padding: 0 },
-  coverBar: { height: 120, backgroundColor: '#0f2d4f', paddingHorizontal: 42, paddingTop: 44 },
-  coverBrand: { fontFamily: 'Helvetica-Bold', fontSize: 20, color: '#ffffff' },
-  coverSub: { fontSize: 10, color: '#93c5fd', marginTop: 6 },
-  coverBody: { paddingHorizontal: 42, paddingTop: 40 },
-  coverTitle: { fontFamily: 'Helvetica-Bold', fontSize: 24, color: '#0f2d4f' },
-  coverTagline: { fontSize: 11, color: '#4b5563', marginTop: 8, lineHeight: 1.45 },
+  coverBar: {
+    height: 120,
+    backgroundColor: '#0d0620',
+    borderLeftWidth: 5,
+    borderLeftColor: '#1fc8ff',
+    paddingHorizontal: 37,
+    paddingTop: 34,
+  },
+  coverBrand: { fontSize: 30, fontWeight: 700, color: '#1fc8ff', letterSpacing: 4, lineHeight: 1.2 },
+  coverSub: { fontSize: 8.5, color: '#3f6b88', letterSpacing: 2.4, marginTop: 7, textTransform: 'uppercase' },
+  coverRule: { width: 210, height: 1, backgroundColor: '#1fc8ff', marginTop: 12 },
+  coverBody: { paddingHorizontal: 42, paddingTop: 34 },
+  coverKicker: { fontSize: 8, color: '#1fc8ff', letterSpacing: 1.8, textTransform: 'uppercase' },
+  coverTitle: { fontSize: 25, fontWeight: 700, color: '#f2f6ff', marginTop: 8, lineHeight: 1.2 },
+  coverTagline: { fontSize: 11, color: '#7280a3', marginTop: 9, lineHeight: 1.55 },
   metaBox: {
-    marginTop: 30,
+    marginTop: 26,
     borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 4,
+    borderColor: '#12456a',
+    borderLeftWidth: 3,
+    borderLeftColor: '#1fc8ff',
+    borderRadius: 3,
     padding: 14,
-    backgroundColor: '#f9fafb',
+    backgroundColor: '#0d0620',
   },
-  metaRow: { flexDirection: 'row', marginBottom: 5 },
-  metaLabel: { width: 130, color: '#6b7280' },
-  metaValue: { fontFamily: 'Helvetica-Bold', flex: 1 },
-  note: { marginTop: 24, fontSize: 8.5, color: '#6b7280', lineHeight: 1.5 },
+  metaRow: { flexDirection: 'row', marginBottom: 4 },
+  metaLabel: { width: 132, fontSize: 8, color: '#3f6b88', letterSpacing: 0.6, textTransform: 'uppercase' },
+  metaValue: { flex: 1, fontSize: 9, fontWeight: 700, color: '#dce6f5' },
+  /* Franja de riesgo de la portada (la numérica de la maqueta). */
+  riskStrip: {
+    flexDirection: 'row',
+    marginTop: 24,
+    borderWidth: 1,
+    borderColor: '#12456a',
+    backgroundColor: '#0d0620',
+  },
+  riskCell: { flex: 1, padding: 10 },
+  riskCellDiv: { borderRightWidth: 1, borderRightColor: '#12456a' },
+  riskCellHi: { backgroundColor: '#1a0510', borderLeftWidth: 3, borderLeftColor: '#ef4444' },
+  riskN: { fontSize: 20, fontWeight: 700, lineHeight: 1.1 },
+  riskL: { fontSize: 7.5, color: '#7280a3', letterSpacing: 1, textTransform: 'uppercase', marginTop: 4 },
+  note: {
+    marginTop: 22,
+    fontSize: 8.5,
+    color: '#7280a3',
+    lineHeight: 1.6,
+    borderTopWidth: 1,
+    borderTopColor: '#12456a',
+    paddingTop: 8,
+  },
 
+  /* Encabezados de sección: numeral recuadrado en cian + regla cian. */
   h1: {
-    fontFamily: 'Helvetica-Bold',
-    fontSize: 15,
-    color: '#0f2d4f',
-    marginTop: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 18,
     marginBottom: 8,
-    paddingBottom: 4,
-    borderBottomWidth: 1.5,
-    borderBottomColor: '#0f2d4f',
+    paddingBottom: 6,
+    borderBottomWidth: 2,
+    borderBottomColor: '#1fc8ff',
   },
-  h2: { fontFamily: 'Helvetica-Bold', fontSize: 11.5, color: '#111827', marginTop: 14, marginBottom: 5 },
-  h3: { fontFamily: 'Helvetica-Bold', fontSize: 10, color: '#374151', marginTop: 8, marginBottom: 3 },
-  para: { fontSize: 9.5, lineHeight: 1.55, marginBottom: 6, textAlign: 'justify' },
+  h1Num: {
+    fontSize: 9,
+    color: '#1fc8ff',
+    backgroundColor: '#10293f',
+    borderWidth: 1,
+    borderColor: '#0b7fb5',
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    letterSpacing: 0.8,
+    marginRight: 9,
+  },
+  h1Text: { flex: 1, fontSize: 14.5, fontWeight: 700, color: '#f2f6ff' },
+  h2: { fontSize: 11, fontWeight: 700, color: '#f2f6ff', marginTop: 14, marginBottom: 5 },
+  h3: {
+    fontSize: 8,
+    fontWeight: 700,
+    color: '#1fc8ff',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    marginTop: 8,
+    marginBottom: 3,
+  },
+  para: { fontSize: 9.5, lineHeight: 1.6, marginBottom: 6, color: '#dce6f5' },
   /* Entradilla del resumen ejecutivo: primera frase, un punto más grande. */
-  leadPara: { fontSize: 10.5, lineHeight: 1.5, marginBottom: 6, textAlign: 'justify', color: '#111827' },
-  small: { fontSize: 8.5, color: '#4b5563', lineHeight: 1.5 },
+  leadPara: { fontSize: 10.5, lineHeight: 1.55, marginBottom: 6, color: '#f2f6ff' },
+  /* Tamaños de lectura unificados en 9,5 pt: metodología, tabla, plan. */
+  small: { fontSize: 9.5, color: '#dce6f5', lineHeight: 1.55 },
+  planWhy: { fontSize: 9.5, color: '#7280a3', lineHeight: 1.5, marginTop: 2 },
 
   /* Resumen ejecutivo: distribución por criticidad como barra apilada. */
-  sectionLabel: { fontSize: 8, color: '#6b7280', letterSpacing: 0.6, marginBottom: 5 },
+  sectionLabel: {
+    fontSize: 7.5,
+    fontWeight: 700,
+    color: '#1fc8ff',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    marginBottom: 5,
+  },
   stackBar: {
     flexDirection: 'row',
     height: 10,
     borderRadius: 3,
     overflow: 'hidden',
-    backgroundColor: '#f3f4f6',
+    backgroundColor: '#141033',
   },
   stackLegend: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 6 },
-  legendItem: { flexDirection: 'row', alignItems: 'center', marginRight: 16, marginBottom: 3 },
+  legendItem: { flexDirection: 'row', alignItems: 'center', marginRight: 14, marginBottom: 3 },
   legendDot: { width: 7, height: 7, borderRadius: 2, marginRight: 4 },
-  legendText: { fontSize: 8.5, color: '#374151' },
+  legendText: { fontSize: 7.5, color: '#7280a3' },
+  /* Caja IA con borde completo: los bordes tenues se fundían con el fondo. */
   aiBox: {
-    backgroundColor: '#eff6ff',
+    backgroundColor: '#110a2e',
+    borderWidth: 1,
+    borderColor: '#1e4b73',
     borderLeftWidth: 3,
-    borderLeftColor: '#3b82f6',
-    padding: 8,
+    borderLeftColor: '#1fc8ff',
+    padding: 9,
     marginTop: 6,
   },
-  aiLabel: { fontSize: 8, color: '#1d4ed8', fontFamily: 'Helvetica-Bold', marginBottom: 3 },
+  aiLabel: {
+    fontSize: 7.5,
+    fontWeight: 700,
+    color: '#1fc8ff',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    marginBottom: 3,
+  },
+  aiBullet: { fontSize: 9.5, lineHeight: 1.5, color: '#bfefff', marginBottom: 3 },
 
   critTable: { marginTop: 6 },
-  critHeader: { flexDirection: 'row', backgroundColor: '#0f2d4f', padding: 6 },
-  critHeaderText: { color: '#ffffff', fontFamily: 'Helvetica-Bold', fontSize: 9 },
-  critRow: { flexDirection: 'row', padding: 6, borderBottomWidth: 1, borderBottomColor: '#e5e7eb' },
-  critCell: { fontSize: 9 },
+  critHeader: {
+    flexDirection: 'row',
+    backgroundColor: '#110a2e',
+    padding: 6,
+    borderWidth: 1,
+    borderColor: '#1e4b73',
+  },
+  critHeaderText: {
+    fontSize: 8,
+    fontWeight: 700,
+    color: '#1fc8ff',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  critRow: { flexDirection: 'row', padding: 6, borderBottomWidth: 1, borderBottomColor: '#1c2a4d' },
+  rowAlt: { backgroundColor: '#0f0a2e' },
+  critCell: { fontSize: 9.5, color: '#dce6f5' },
+  levelChip: {
+    alignSelf: 'flex-start',
+    fontSize: 7.5,
+    fontWeight: 700,
+    color: '#ffffff',
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
   w80: { width: 78 },
   w60: { width: 58 },
   w50: { width: 52 },
 
   finding: {
     borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 4,
+    borderColor: '#1e4b73',
+    borderLeftWidth: 3,
+    borderLeftColor: '#1fc8ff',
+    borderRadius: 3,
     padding: 10,
     marginTop: 8,
     marginBottom: 4,
+    backgroundColor: '#100a2b',
   },
   findingHead: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
-  findingId: { fontFamily: 'Helvetica-Bold', fontSize: 10, color: '#0f2d4f', width: 46 },
-  findingTitle: { fontFamily: 'Helvetica-Bold', fontSize: 10, flex: 1 },
+  findingId: { width: 46, fontSize: 9.5, fontWeight: 700, color: '#1fc8ff' },
+  findingTitle: { flex: 1, fontSize: 9.5, fontWeight: 700, color: '#f2f6ff' },
   levelTag: {
-    fontSize: 7.5,
-    fontFamily: 'Helvetica-Bold',
+    fontSize: 7,
+    fontWeight: 700,
     color: '#ffffff',
     paddingHorizontal: 5,
     paddingVertical: 2,
-    borderRadius: 3,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
   },
+  /* Evidencias: bloque tintado en cian con borde propio para que no se funda
+     ni con el fondo de la página ni con la tarjeta que lo contiene. */
   evidence: {
-    backgroundColor: '#f3f4f6',
+    backgroundColor: '#041018',
+    borderWidth: 1,
+    borderColor: '#14466b',
+    borderLeftWidth: 3,
+    borderLeftColor: '#1fc8ff',
     padding: 6,
     marginTop: 5,
-    borderRadius: 3,
   },
-  evidenceLine: { fontSize: 8, lineHeight: 1.5, color: '#374151' },
-  evidenceBold: { fontFamily: 'Helvetica-Bold' },
+  evidenceLine: { fontSize: 8, lineHeight: 1.6, color: '#9fd9f2' },
+  evidenceBold: { fontWeight: 700, color: '#1fc8ff' },
 
   planRow: { flexDirection: 'row', marginTop: 7, alignItems: 'flex-start' },
   planPri: {
     width: 34,
-    fontFamily: 'Helvetica-Bold',
-    fontSize: 9,
+    fontSize: 8,
+    fontWeight: 700,
     color: '#ffffff',
-    backgroundColor: '#0f2d4f',
+    backgroundColor: '#0d2b45',
     textAlign: 'center',
     paddingVertical: 3,
-    borderRadius: 3,
+    borderWidth: 1,
+    borderColor: '#1e4b73',
+    borderLeftWidth: 3,
+    borderLeftColor: '#1fc8ff',
+    borderRadius: 2,
+    overflow: 'hidden',
   },
+  planPri1: { backgroundColor: '#3d0a0a', borderColor: '#7f1d1d', borderLeftColor: '#f87171' },
+  planPri2: { backgroundColor: '#3d2405', borderColor: '#78350f', borderLeftColor: '#fbbf24' },
   planBody: { flex: 1, marginLeft: 7 },
-  planAction: { fontFamily: 'Helvetica-Bold', fontSize: 9.5 },
+  planAction: { fontSize: 9.5, fontWeight: 700, color: '#f2f6ff', lineHeight: 1.5 },
+
   footer: {
     position: 'absolute',
     bottom: 22,
@@ -242,13 +375,26 @@ const pdf = StyleSheet.create({
     right: 42,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    fontSize: 8,
-    color: '#6b7280',
+    alignItems: 'center',
+    fontSize: 9,
+    color: '#bfefff',
     borderTopWidth: 1,
-    borderTopColor: '#e5e7eb',
-    paddingTop: 6,
+    borderTopColor: '#0b7fb5',
+    paddingTop: 7,
   },
+  footerBrand: { fontWeight: 700, color: '#1fc8ff', letterSpacing: 1.6 },
+  footerPage: { fontWeight: 700, color: '#1fc8ff', letterSpacing: 0.8 },
 })
+
+/* Encabezado de sección: numeral recuadrado + título bajo regla cian, como
+   en la maqueta aprobada. `wrap={false}` evita un título huérfano al final
+   de una página. */
+const SecHead: React.FC<{ num: string; title: string }> = ({ num, title }) => (
+  <View style={pdf.h1} wrap={false}>
+    <Text style={pdf.h1Num}>{num}</Text>
+    <Text style={pdf.h1Text}>{title}</Text>
+  </View>
+)
 
 /* ------------------------------------------------------------------ */
 /* Documento PDF                                                       */
@@ -266,13 +412,59 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
 
   const Footer: React.FC = () => (
     <View style={pdf.footer} fixed>
-      <Text>AEGIS · Informe técnico de seguridad</Text>
-      <Text render={({ pageNumber, totalPages }) => `Página ${pageNumber} de ${totalPages}`} />
+      <Text>
+        <Text style={pdf.footerBrand}>AEGIS</Text>
+        {' · Informe técnico de seguridad'}
+      </Text>
+      <Text
+        style={pdf.footerPage}
+        render={({ pageNumber, totalPages }) => `PÁGINA ${pageNumber} / ${totalPages}`}
+      />
     </View>
   )
 
+  /* Tarjeta de hallazgo: cabecera (ID + título + tag de nivel), prosa y
+     bloques de evidencia. `wrap={false}` mantiene la tarjeta entera en una
+     página: no se corta a mitad de las evidencias. */
+  const Finding: React.FC<{ f: (typeof report.findings)[number] }> = ({ f }) => {
+    const meta = LEVEL_META[f.level] ?? LEVEL_META.medio
+    // Texto oscuro sobre los tonos claros: en naranja/amarillo/verde el
+    // blanco no llega al contraste mínimo a 7 pt.
+    const tagText = meta.label === 'Crítico' ? '#ffffff' : '#0b0518'
+    return (
+      <View style={[pdf.finding, { borderLeftColor: meta.color }]} wrap={false}>
+        <View style={pdf.findingHead}>
+          <Text style={pdf.findingId}>{f.id}</Text>
+          <Text style={pdf.findingTitle}>{f.title}</Text>
+          <Text style={[pdf.levelTag, { backgroundColor: meta.color, color: tagText }]}>
+            {meta.label.toUpperCase()}
+          </Text>
+        </View>
+        <Text style={pdf.para}>{f.explanation}</Text>
+
+        {f.evidence.length > 0 && (
+          <View>
+            <Text style={pdf.h3}>Evidencias (registros de origen)</Text>
+            {f.evidence.map((e, i) => (
+              <View key={`${f.id}-${i}`} style={pdf.evidence} wrap={false}>
+                <Text style={pdf.evidenceLine}>
+                  <Text style={pdf.evidenceBold}>#{i + 1}</Text>{'  '}
+                  Log_ID {e.log_id} · {e.timestamp} · Host {e.host} · Event_ID {e.event_id} ·
+                  IP {e.source_ip} · Severidad {e.severity}
+                  {e.result && e.result !== '—' ? ` · Result ${e.result}` : ''}
+                </Text>
+                <Text style={pdf.evidenceLine}>Evento: {e.description}</Text>
+                <Text style={pdf.evidenceLine}>Justificación: {e.reason}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+      </View>
+    )
+  }
+
   return (
-    <Document title={`Informe SOC – ${file}`} author="AEGIS" subject="Informe técnico de seguridad">
+    <Document title={`Informe técnico de seguridad – ${file}`} author="AEGIS" subject="Informe técnico de seguridad">
       {/* ---------------- Portada ---------------- */}
       {/* Portada: sin wrap={false} — con él la página se dimensiona al
           contenido (quedaba de 503 pt y el pie solapaba la nota). */}
@@ -280,9 +472,11 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
         <View style={pdf.coverBar} fixed>
           <Text style={pdf.coverBrand}>AEGIS</Text>
           <Text style={pdf.coverSub}>Plataforma de análisis de seguridad</Text>
+          <View style={pdf.coverRule} />
         </View>
 
         <View style={pdf.coverBody}>
+          <Text style={pdf.coverKicker}>Informe técnico · confidencial</Text>
           <Text style={pdf.coverTitle}>Informe técnico de seguridad</Text>
           <Text style={pdf.coverTagline}>
             Análisis de registros importados, identificación y correlación de eventos
@@ -309,6 +503,40 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
             ))}
           </View>
 
+          {/* Franja de riesgo: los conteos por nivel a golpe de vista, con la
+              celda del nivel global resaltada (como en la maqueta). */}
+          <View style={pdf.riskStrip}>
+            {[
+              ...LEVEL_ORDER.map(lvl => ({
+                key: lvl,
+                n: fmtCount(summary.risk_levels?.[lvl]?.count ?? 0),
+                label: LEVEL_META[lvl].label,
+                color: LEVEL_META[lvl].color,
+                hi: lvl === summary.risk,
+              })),
+              {
+                key: 'sospechosos',
+                n: fmtCount(summary.suspicious_events),
+                label: 'Sospechosos',
+                color: '#1fc8ff',
+                hi: false,
+              },
+            ].map((cell, i, all) => (
+              <View
+                key={cell.key}
+                style={[
+                  pdf.riskCell,
+                  i < all.length - 1 ? pdf.riskCellDiv : {},
+                  cell.hi ? pdf.riskCellHi : {},
+                ]}
+                wrap={false}
+              >
+                <Text style={[pdf.riskN, { color: cell.color }]}>{cell.n}</Text>
+                <Text style={pdf.riskL}>{cell.label}</Text>
+              </View>
+            ))}
+          </View>
+
           <Text style={pdf.note}>
             Rigor analítico: todas las cifras, hallazgos y evidencias de este documento se
             derivan exclusivamente de los registros importados. Cada hallazgo cita su
@@ -325,10 +553,10 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
         <Footer />
 
         {/* 1. Resumen ejecutivo */}
-        <Text style={pdf.h1}>1. Resumen ejecutivo</Text>
+        <SecHead num="01" title="Resumen ejecutivo" />
         {LEVEL_ORDER.some((lvl) => (summary.risk_levels?.[lvl]?.count ?? 0) > 0) && (
           <View>
-            <Text style={pdf.sectionLabel}>DISTRIBUCIÓN POR CRITICIDAD</Text>
+            <Text style={pdf.sectionLabel}>Distribución por criticidad</Text>
             {/* Barra apilada al 100%: `flexGrow` proporcional al porcentaje de
                 cada nivel, así el ancho no depende de redondeos. */}
             <View style={pdf.stackBar}>
@@ -379,17 +607,17 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
         )}
 
         {/* 2. Alcance y metodología */}
-        <Text style={pdf.h1}>2. Alcance y metodología</Text>
+        <SecHead num="02" title="Alcance y metodología" />
         {splitSteps(report.methodology).map((step, i) => (
           <Text key={`met-${i}`} style={pdf.para}>
             {step}
           </Text>
         ))}
         {summary.ai_insights && summary.ai_insights.length > 0 && (
-          <View>
-            <Text style={pdf.h2}>Observaciones del análisis asistido por IA</Text>
+          <View style={pdf.aiBox}>
+            <Text style={pdf.aiLabel}>Observaciones del análisis asistido por IA</Text>
             {summary.ai_insights.map((t, i) => (
-              <Text key={`ins-${i}`} style={pdf.para}>
+              <Text key={`ins-${i}`} style={pdf.aiBullet}>
                 {`• ${t}`}
               </Text>
             ))}
@@ -405,7 +633,7 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
         </Text>
 
         {/* 3. Clasificación de criticidad */}
-        <Text style={pdf.h1}>3. Clasificación de criticidad</Text>
+        <SecHead num="03" title="Clasificación de criticidad" />
         <Text style={pdf.para}>{summary.risk_justification}</Text>
 
         {/* wrap={false}: tabla atómica — evita cabecera huérfana al final
@@ -417,14 +645,23 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
             <Text style={[pdf.critHeaderText, pdf.w50]}>%</Text>
             <Text style={[pdf.critHeaderText, { flex: 1 }]}>Justificación</Text>
           </View>
-          {LEVEL_ORDER.map((lvl) => {
+          {LEVEL_ORDER.map((lvl, i) => {
             const block = summary.risk_levels?.[lvl]
             const meta = LEVEL_META[lvl]
+            // Texto oscuro sobre los tonos claros: en naranja/amarillo/verde el
+            // blanco no llega al contraste mínimo a 7,5 pt.
+            const tagText = meta.label === 'Crítico' ? '#ffffff' : '#0b0518'
             return (
-              <View key={lvl} style={pdf.critRow} wrap={false}>
-                <Text style={[pdf.critCell, pdf.w80, { fontFamily: 'Helvetica-Bold', color: meta.color }]}>
-                  {meta.label}
-                </Text>
+              <View
+                key={lvl}
+                style={[pdf.critRow, i % 2 === 1 ? pdf.rowAlt : {}]}
+                wrap={false}
+              >
+                <View style={[pdf.critCell, pdf.w80]}>
+                  <Text style={[pdf.levelChip, { backgroundColor: meta.color, color: tagText }]}>
+                    {meta.label}
+                  </Text>
+                </View>
                 <Text style={[pdf.critCell, pdf.w60]}>{fmtCount(block?.count ?? 0)}</Text>
                 <Text style={[pdf.critCell, pdf.w50]}>{fmtPct(block?.percentage ?? 0)}%</Text>
                 <Text style={[pdf.critCell, { flex: 1 }]}>{block?.justification ?? '—'}</Text>
@@ -433,44 +670,21 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
           })}
         </View>
 
-        {/* 4. Hallazgos */}
-        <Text style={pdf.h1}>4. Hallazgos, evidencias y explicación técnica</Text>
-        {report.findings.map((f) => {
-          const meta = LEVEL_META[f.level] ?? LEVEL_META.medio
-          return (
-            <View key={f.id} style={pdf.finding} wrap={false}>
-              <View style={pdf.findingHead}>
-                <Text style={pdf.findingId}>{f.id}</Text>
-                <Text style={pdf.findingTitle}>{f.title}</Text>
-                <Text style={[pdf.levelTag, { backgroundColor: meta.color }]}>
-                  {meta.label.toUpperCase()}
-                </Text>
-              </View>
-              <Text style={pdf.para}>{f.explanation}</Text>
-
-              {f.evidence.length > 0 && (
-                <View>
-                  <Text style={pdf.h3}>Evidencias (registros de origen)</Text>
-                  {f.evidence.map((e, i) => (
-                    <View key={`${f.id}-${i}`} style={pdf.evidence} wrap={false}>
-                      <Text style={pdf.evidenceLine}>
-                        <Text style={pdf.evidenceBold}>#{i + 1}</Text>{'  '}
-                        Log_ID {e.log_id} · {e.timestamp} · Host {e.host} · Event_ID {e.event_id} ·
-                        IP {e.source_ip} · Severidad {e.severity}
-                        {e.result && e.result !== '—' ? ` · Result ${e.result}` : ''}
-                      </Text>
-                      <Text style={pdf.evidenceLine}>Evento: {e.description}</Text>
-                      <Text style={pdf.evidenceLine}>Justificación: {e.reason}</Text>
-                    </View>
-                  ))}
-                </View>
-              )}
-            </View>
-          )
-        })}
+        {/* 4. Hallazgos — el encabezado viaja con la primera tarjeta
+            (View wrap={false}): si no, quedaba huérfano al final de una
+            página con todas las tarjetas en la siguiente. */}
+        {report.findings.length > 0 && (
+          <View wrap={false}>
+            <SecHead num="04" title="Hallazgos, evidencias y explicación técnica" />
+            <Finding f={report.findings[0]} />
+          </View>
+        )}
+        {report.findings.slice(1).map((f) => (
+          <Finding key={f.id} f={f} />
+        ))}
 
         {/* 5. Correlación */}
-        <Text style={pdf.h1}>5. Correlación de eventos</Text>
+        <SecHead num="05" title="Correlación de eventos" />
         <Text style={pdf.para}>{report.correlation}</Text>
         {summary.suspicious_by_ip.length > 0 && (
           <View style={pdf.critTable} wrap={false}>
@@ -479,9 +693,13 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
               <Text style={[pdf.critHeaderText, pdf.w60]}>Eventos</Text>
               <Text style={[pdf.critHeaderText, pdf.w60]}>Hosts</Text>
             </View>
-            {summary.suspicious_by_ip.slice(0, 6).map((ip) => (
-              <View key={ip.ip} style={pdf.critRow} wrap={false}>
-                <Text style={[pdf.critCell, { flex: 1 }]}>{ip.ip}</Text>
+            {summary.suspicious_by_ip.slice(0, 6).map((ip, i) => (
+              <View
+                key={ip.ip}
+                style={[pdf.critRow, i % 2 === 1 ? pdf.rowAlt : {}]}
+                wrap={false}
+              >
+                <Text style={[pdf.critCell, { flex: 1, color: '#bfefff' }]}>{ip.ip}</Text>
                 <Text style={[pdf.critCell, pdf.w60]}>{ip.events}</Text>
                 <Text style={[pdf.critCell, pdf.w60]}>{ip.hosts}</Text>
               </View>
@@ -490,19 +708,27 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
         )}
 
         {/* 6. Plan de acción */}
-        <Text style={pdf.h1}>6. Plan de acción</Text>
+        <SecHead num="06" title="Plan de acción" />
         {report.action_plan.map((item, i) => (
           <View key={`${item.priority}-${i}`} style={pdf.planRow} wrap={false}>
-            <Text style={pdf.planPri}>{item.priority}</Text>
+            <Text
+              style={[
+                pdf.planPri,
+                item.priority.endsWith('1') ? pdf.planPri1 : {},
+                item.priority.endsWith('2') ? pdf.planPri2 : {},
+              ]}
+            >
+              {item.priority}
+            </Text>
             <View style={pdf.planBody}>
               <Text style={pdf.planAction}>{item.action}</Text>
-              <Text style={pdf.small}>Fundamento: {item.rationale}</Text>
+              <Text style={pdf.planWhy}>Fundamento: {item.rationale}</Text>
             </View>
           </View>
         ))}
 
         {/* 7. Conclusiones */}
-        <Text style={pdf.h1}>7. Conclusiones</Text>
+        <SecHead num="07" title="Conclusiones" />
         <Text style={pdf.para}>{report.conclusions}</Text>
         <Text style={pdf.note}>
           Informe generado automáticamente por la plataforma AEGIS mediante
