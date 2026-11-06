@@ -46,6 +46,30 @@ const LEVEL_META: Record<string, { label: string; color: string; chip: string }>
   bajo: { label: 'Bajo', color: '#059669', chip: 'bg-emerald-500 text-white' },
 }
 
+/* Tonos por nivel para la franja de riesgo y las tarjetas de hallazgo.
+   react-pdf no admite rgba(..., 0.x) en backgroundColor, así que el tinte
+   va precalculado como color plano sobre el fondo que lo recibe (el mismo
+   cálculo de alpha de la maqueta: ~7–18 % del color del nivel). El filete
+   izquierdo va en el color pleno del nivel. */
+const RISK_TINT: Record<string, { bg: string; edge: string }> = {
+  critico: { bg: '#210b25', edge: '#922a36' },
+  alto: { bg: '#200f20', edge: '#8c411b' },
+  medio: { bg: '#1e151f', edge: '#846414' },
+  bajo: { bg: '#0c1426', edge: '#16643f' },
+  sospecha: { bg: '#0c1533', edge: '#15668f' },
+}
+/* La celda del nivel global (la del análisis) va un escalón más fuerte. */
+const RISK_TINT_HI = '#331027'
+
+/* Fondo de la tarjeta de hallazgo por nivel (tinte muy tenue: el texto
+   conserva el mismo contraste que con el fondo base). */
+const FINDING_TINT: Record<string, string> = {
+  critico: '#100a2b',
+  alto: '#1b0d20',
+  medio: '#1a111f',
+  bajo: '#0b1124',
+}
+
 // Los 4 campos de prosa que el validador puede aceptar del LLM (los mismos
 // que define el backend en `_PROSE_FIELDS`): su presencia en `field_sources`
 // distingue un informe 100 % IA de uno con prosa mixta.
@@ -139,9 +163,11 @@ const pdf = StyleSheet.create({
      validada sobre la maqueta). react-pdf no soporta degradados ni sombras,
      así que todo va en color plano. */
   page: {
-    paddingTop: 46,
-    paddingBottom: 52,
-    paddingHorizontal: 42,
+    /* Márgenes dejados para que el encuadre perimetral (fijo a 26 pt de
+       los bordes) no toque el contenido: 54 pt laterales + 58/66 arriba/abajo. */
+    paddingTop: 58,
+    paddingBottom: 66,
+    paddingHorizontal: 54,
     fontSize: 9.5,
     fontFamily: 'JetBrains Mono',
     backgroundColor: '#050212',
@@ -149,30 +175,22 @@ const pdf = StyleSheet.create({
   },
   coverPage: { padding: 0 },
   coverBar: {
-    height: 120,
+    height: 118,
     backgroundColor: '#0d0620',
     borderLeftWidth: 5,
     borderLeftColor: '#1fc8ff',
-    paddingHorizontal: 37,
-    paddingTop: 34,
+    borderBottomWidth: 1.5,
+    borderBottomColor: '#12456a',
+    paddingHorizontal: 34,
+    paddingTop: 30,
   },
   coverBrand: { fontSize: 30, fontWeight: 700, color: '#1fc8ff', letterSpacing: 4, lineHeight: 1.2 },
   coverSub: { fontSize: 8.5, color: '#3f6b88', letterSpacing: 2.4, marginTop: 7, textTransform: 'uppercase' },
   coverRule: { width: 210, height: 1, backgroundColor: '#1fc8ff', marginTop: 12 },
-  coverBody: { paddingHorizontal: 42, paddingTop: 34 },
+  coverBody: { paddingHorizontal: 54, paddingTop: 34 },
   coverKicker: { fontSize: 8, color: '#1fc8ff', letterSpacing: 1.8, textTransform: 'uppercase' },
   coverTitle: { fontSize: 25, fontWeight: 700, color: '#f2f6ff', marginTop: 8, lineHeight: 1.2 },
   coverTagline: { fontSize: 11, color: '#7280a3', marginTop: 9, lineHeight: 1.55 },
-  metaBox: {
-    marginTop: 26,
-    borderWidth: 1,
-    borderColor: '#12456a',
-    borderLeftWidth: 3,
-    borderLeftColor: '#1fc8ff',
-    borderRadius: 3,
-    padding: 14,
-    backgroundColor: '#0d0620',
-  },
   metaRow: { flexDirection: 'row', marginBottom: 4 },
   metaLabel: { width: 132, fontSize: 8, color: '#3f6b88', letterSpacing: 0.6, textTransform: 'uppercase' },
   metaValue: { flex: 1, fontSize: 9, fontWeight: 700, color: '#dce6f5' },
@@ -184,9 +202,8 @@ const pdf = StyleSheet.create({
     borderColor: '#12456a',
     backgroundColor: '#0d0620',
   },
-  riskCell: { flex: 1, padding: 10 },
+  riskCell: { flex: 1, padding: 10, borderLeftWidth: 3, borderLeftColor: '#12456a' },
   riskCellDiv: { borderRightWidth: 1, borderRightColor: '#12456a' },
-  riskCellHi: { backgroundColor: '#1a0510', borderLeftWidth: 3, borderLeftColor: '#ef4444' },
   riskN: { fontSize: 20, fontWeight: 700, lineHeight: 1.1 },
   riskL: { fontSize: 7.5, color: '#7280a3', letterSpacing: 1, textTransform: 'uppercase', marginTop: 4 },
   note: {
@@ -199,29 +216,61 @@ const pdf = StyleSheet.create({
     paddingTop: 8,
   },
 
-  /* Encabezados de sección: numeral recuadrado en cian + regla cian. */
-  h1: {
+  /* ---------- Paneles por sección (réplica del panel HUD de la app) ---------- */
+  panel: {
+    marginTop: 14,
+    marginBottom: 4,
+    borderWidth: 1.5,
+    borderColor: '#1e4b73',
+    backgroundColor: '#0a0521',
+  },
+  panelHead: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 18,
-    marginBottom: 8,
-    paddingBottom: 6,
-    borderBottomWidth: 2,
-    borderBottomColor: '#1fc8ff',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    backgroundColor: '#0c0726',
+    borderBottomWidth: 1.5,
+    borderBottomColor: '#12456a',
   },
-  h1Num: {
-    fontSize: 9,
-    color: '#1fc8ff',
-    backgroundColor: '#10293f',
+  /* Pill de cabecera: en el PDF no hay clip-path (chaflán), así que va
+     rectangular; el rombo del mockup es un cuadrado cian de 5 pt. */
+  pill: {
+    flexDirection: 'row',
+    alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#0b7fb5',
-    paddingHorizontal: 5,
-    paddingVertical: 2,
-    letterSpacing: 0.8,
-    marginRight: 9,
+    borderColor: '#1c7ba8',
+    backgroundColor: '#0e1a3c',
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    /* La pill se encoge si el título es largo: sin esto, un título largo
+       (§04) pisaba el meta de la derecha en vez de cortarse. */
+    flexShrink: 1,
   },
-  h1Text: { flex: 1, fontSize: 14.5, fontWeight: 700, color: '#f2f6ff' },
-  h2: { fontSize: 11, fontWeight: 700, color: '#f2f6ff', marginTop: 14, marginBottom: 5 },
+  pillTick: { width: 5, height: 5, backgroundColor: '#1fc8ff', marginRight: 7 },
+  pillText: {
+    fontSize: 11,
+    fontWeight: 700,
+    color: '#1fc8ff',
+    letterSpacing: 1.4,
+    textTransform: 'uppercase',
+  },
+  headMeta: {
+    fontSize: 8,
+    color: '#3f6b88',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    marginLeft: 10,
+    flexShrink: 0,
+  },
+  /* Cuerpo del panel: el primer bloque (atado a la cabecera con
+     wrap={false}) y el resto llevan padding propio para que el interlineado
+     entre bloques no se doble. */
+  panelBodyTop: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 0 },
+  panelBodyRest: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 16 },
+  panelBody: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 16 },
+
   h3: {
     fontSize: 8,
     fontWeight: 700,
@@ -368,11 +417,51 @@ const pdf = StyleSheet.create({
   planBody: { flex: 1, marginLeft: 7 },
   planAction: { fontSize: 9.5, fontWeight: 700, color: '#f2f6ff', lineHeight: 1.5 },
 
+  /* ---------- Encuadre HUD de la hoja (fijo en todas las páginas) ----------
+     A4 = 595×842 pt. El marco va a 26 pt de los bordes; los ticks medios
+     se centran con left = (543 − 70)/2 y top = (790 − 70)/2, calculados
+     sobre el interior del marco (595−52 = 543, 842−52 = 790). */
+  frame: {
+    position: 'absolute',
+    top: 26,
+    left: 26,
+    right: 26,
+    bottom: 26,
+    borderWidth: 1,
+    borderColor: '#12456a',
+  },
+  /* Esquinas en picuda: cada una son dos lados de un cuadrado de 34 pt. */
+  cornerTL: {
+    position: 'absolute', top: -1, left: -1, width: 34, height: 34,
+    borderTopWidth: 2.5, borderLeftWidth: 2.5, borderColor: '#1fc8ff',
+  },
+  cornerTR: {
+    position: 'absolute', top: -1, right: -1, width: 34, height: 34,
+    borderTopWidth: 2.5, borderRightWidth: 2.5, borderColor: '#1fc8ff',
+  },
+  cornerBL: {
+    position: 'absolute', bottom: -1, left: -1, width: 34, height: 34,
+    borderBottomWidth: 2.5, borderLeftWidth: 2.5, borderColor: '#1fc8ff',
+  },
+  cornerBR: {
+    position: 'absolute', bottom: -1, right: -1, width: 34, height: 34,
+    borderBottomWidth: 2.5, borderRightWidth: 2.5, borderColor: '#1fc8ff',
+  },
+  /* Ticks medios de cada lado. */
+  tickTop: { position: 'absolute', top: -1.5, left: 236, width: 70, height: 3, backgroundColor: '#1fc8ff' },
+  tickBottom: { position: 'absolute', bottom: -1.5, left: 236, width: 70, height: 3, backgroundColor: '#1fc8ff' },
+  tickLeft: { position: 'absolute', left: -1.5, top: 360, width: 3, height: 70, backgroundColor: '#1fc8ff' },
+  tickRight: { position: 'absolute', right: -1.5, top: 360, width: 3, height: 70, backgroundColor: '#1fc8ff' },
+  /* Rótulos en el margen superior (fuera del marco, a 14 pt). El lateral
+     se descartó: react-pdf no admite rotación de texto y un hash suelto no
+     aportaba contexto. */
+  edgeLeft: { position: 'absolute', top: 12, left: 34, fontSize: 7.5, letterSpacing: 1.6, textTransform: 'uppercase', color: '#1fc8ff' },
+
   footer: {
     position: 'absolute',
-    bottom: 22,
-    left: 42,
-    right: 42,
+    bottom: 36,
+    left: 54,
+    right: 54,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -386,13 +475,48 @@ const pdf = StyleSheet.create({
   footerPage: { fontWeight: 700, color: '#1fc8ff', letterSpacing: 0.8 },
 })
 
-/* Encabezado de sección: numeral recuadrado + título bajo regla cian, como
-   en la maqueta aprobada. `wrap={false}` evita un título huérfano al final
-   de una página. */
-const SecHead: React.FC<{ num: string; title: string }> = ({ num, title }) => (
-  <View style={pdf.h1} wrap={false}>
-    <Text style={pdf.h1Num}>{num}</Text>
-    <Text style={pdf.h1Text}>{title}</Text>
+/* Chrome de página: encuadre perimetral con picudas, ticks medios y los
+   dos rótulos del margen superior. Va con `fixed` (react-pdf lo repite en
+   CADA página, como el pie) y se pinta el PRIMERO: así la barra de la
+   portada lo tapa por arriba, igual que en la maqueta. */
+const Chrome: React.FC<{ edges?: boolean }> = ({ edges }) => (
+  <View style={pdf.frame} fixed>
+    <View style={pdf.cornerTL} />
+    <View style={pdf.cornerTR} />
+    <View style={pdf.cornerBL} />
+    <View style={pdf.cornerBR} />
+    <View style={pdf.tickTop} />
+    <View style={pdf.tickBottom} />
+    <View style={pdf.tickLeft} />
+    <View style={pdf.tickRight} />
+    {edges && <Text style={pdf.edgeLeft}>AEGIS // DOC-REPORT-001</Text>}
+  </View>
+)
+
+/* Panel de sección: cabecera con pill (número + título) y meta a la
+   derecha, más el cuerpo. La cabecera viaja con el PRIMER bloque de
+   contenido dentro de un `wrap={false}`: si no, quedaba huérfana al final
+   de una página (el bug que tenía la §04 antes de los paneles).
+   react-pdf no soporta clip-path ni glow → rectángulo y color plano. */
+const Panel: React.FC<{
+  num: string
+  title: string
+  meta?: string
+  first: React.ReactNode
+  children?: React.ReactNode
+}> = ({ num, title, meta, first, children }) => (
+  <View style={pdf.panel}>
+    <View wrap={false}>
+      <View style={pdf.panelHead}>
+        <View style={pdf.pill}>
+          <View style={pdf.pillTick} />
+          <Text style={pdf.pillText}>{`${num} · ${title}`}</Text>
+        </View>
+        {meta ? <Text style={pdf.headMeta}>{meta}</Text> : <Text style={pdf.headMeta}>{' '}</Text>}
+      </View>
+      <View style={pdf.panelBodyTop}>{first}</View>
+    </View>
+    {children ? <View style={pdf.panelBodyRest}>{children}</View> : null}
   </View>
 )
 
@@ -409,6 +533,30 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
   const file = summary.file_name || 'archivo importado'
   const risk = LEVEL_META[summary.risk] ?? LEVEL_META.bajo
   const generated = (report.generated_at || '').replace('T', ' ')
+
+  /* Bloques reutilizados por los paneles del cuerpo: el PRIMER elemento de
+     cada panel viaja en `wrap={false}` (junto a la cabecera) y el resto va
+     como hijos. */
+  const steps = splitSteps(report.methodology)
+  const execProse = splitSentences(report.executive_summary)
+  const execLlm = report.field_sources?.executive_summary === 'llm'
+  const hasDist = LEVEL_ORDER.some((lvl) => (summary.risk_levels?.[lvl]?.count ?? 0) > 0)
+  /* La prosa del resumen, frase a frase con la primera como entradilla; si
+     viene de la IA va enterrada en la caja «Lectura del análisis». La
+     justificación del riesgo vive solo en §3 (revisión #3). */
+  const execSentences = execProse.map((frase, i) => (
+    <Text key={`ej-${i}`} style={i === 0 ? pdf.leadPara : pdf.para}>
+      {frase}
+    </Text>
+  ))
+  const execBody = execLlm ? (
+    <View style={pdf.aiBox}>
+      <Text style={pdf.aiLabel}>Lectura del análisis</Text>
+      {execSentences}
+    </View>
+  ) : (
+    <>{execSentences}</>
+  )
 
   const Footer: React.FC = () => (
     <View style={pdf.footer} fixed>
@@ -432,7 +580,15 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
     // blanco no llega al contraste mínimo a 7 pt.
     const tagText = meta.label === 'Crítico' ? '#ffffff' : '#0b0518'
     return (
-      <View style={[pdf.finding, { borderLeftColor: meta.color }]} wrap={false}>
+      <View
+        style={[
+          pdf.finding,
+          // Fondo tonificado al nivel de criticidad (tinte muy tenue: el
+          // texto conserva el mismo contraste que con el fondo base).
+          { borderLeftColor: meta.color, backgroundColor: FINDING_TINT[f.level] ?? '#100a2b' },
+        ]}
+        wrap={false}
+      >
         <View style={pdf.findingHead}>
           <Text style={pdf.findingId}>{f.id}</Text>
           <Text style={pdf.findingTitle}>{f.title}</Text>
@@ -463,12 +619,33 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
     )
   }
 
+  /* Fila del plan de acción (usada como primer bloque del panel §06 y en
+     el resto de filas). */
+  const PlanRow: React.FC<{ item: (typeof report.action_plan)[number] }> = ({ item }) => (
+    <View style={pdf.planRow} wrap={false}>
+      <Text
+        style={[
+          pdf.planPri,
+          item.priority.endsWith('1') ? pdf.planPri1 : {},
+          item.priority.endsWith('2') ? pdf.planPri2 : {},
+        ]}
+      >
+        {item.priority}
+      </Text>
+      <View style={pdf.planBody}>
+        <Text style={pdf.planAction}>{item.action}</Text>
+        <Text style={pdf.planWhy}>Fundamento: {item.rationale}</Text>
+      </View>
+    </View>
+  )
+
   return (
     <Document title={`Informe técnico de seguridad – ${file}`} author="AEGIS" subject="Informe técnico de seguridad">
       {/* ---------------- Portada ---------------- */}
       {/* Portada: sin wrap={false} — con él la página se dimensiona al
           contenido (quedaba de 503 pt y el pie solapaba la nota). */}
       <Page size="A4" style={[pdf.page, pdf.coverPage]}>
+        <Chrome />
         <View style={pdf.coverBar} fixed>
           <Text style={pdf.coverBrand}>AEGIS</Text>
           <Text style={pdf.coverSub}>Plataforma de análisis de seguridad</Text>
@@ -476,35 +653,37 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
         </View>
 
         <View style={pdf.coverBody}>
-          <Text style={pdf.coverKicker}>Informe técnico · confidencial</Text>
+          <Text style={pdf.coverKicker}>Informe técnico</Text>
           <Text style={pdf.coverTitle}>Informe técnico de seguridad</Text>
           <Text style={pdf.coverTagline}>
             Análisis de registros importados, identificación y correlación de eventos
             sospechosos, clasificación de riesgos y plan de acción.
           </Text>
 
-          <View style={pdf.metaBox}>
-            {[
-              ['Archivo analizado', file],
-              ['Hojas procesadas', (summary.sheet_names || []).join(', ') || '—'],
-              ['Registros analizados', String(summary.rows)],
-              ['Campos (columnas)', String(summary.columns.length)],
-              ['Hosts únicos', summary.unique_hosts !== null ? String(summary.unique_hosts) : '—'],
-              ['Eventos sospechosos', String(summary.suspicious_events)],
-              ['Nivel de riesgo global', risk.label],
-              ['Fecha de generación', generated || '—'],
-              ['Fuente del informe', report.source === 'llm' ? `IA – ${report.model}` : report.model],
-              ['ID de análisis', analysisId],
-            ].map(([label, value]) => (
-              <View key={label} style={pdf.metaRow} wrap={false}>
-                <Text style={pdf.metaLabel}>{label}</Text>
-                <Text style={pdf.metaValue}>{value}</Text>
-              </View>
-            ))}
-          </View>
+          <Panel num="00" title="Contexto del análisis" meta="AEGIS · Report" first={
+            <>
+              {[
+                ['Archivo analizado', file],
+                ['Hojas procesadas', (summary.sheet_names || []).join(', ') || '—'],
+                ['Registros analizados', String(summary.rows)],
+                ['Campos (columnas)', String(summary.columns.length)],
+                ['Hosts únicos', summary.unique_hosts !== null ? String(summary.unique_hosts) : '—'],
+                ['Eventos sospechosos', String(summary.suspicious_events)],
+                ['Nivel de riesgo global', risk.label],
+                ['Fecha de generación', generated || '—'],
+                ['Fuente del informe', report.source === 'llm' ? `IA – ${report.model}` : report.model],
+                ['ID de análisis', analysisId],
+              ].map(([label, value]) => (
+                <View key={label} style={pdf.metaRow} wrap={false}>
+                  <Text style={pdf.metaLabel}>{label}</Text>
+                  <Text style={pdf.metaValue}>{value}</Text>
+                </View>
+              ))}
+            </>
+          } />
 
-          {/* Franja de riesgo: los conteos por nivel a golpe de vista, con la
-              celda del nivel global resaltada (como en la maqueta). */}
+          {/* Franja de riesgo: cada celda tonificada con su nivel y con la
+              celda del nivel global un escalón más fuerte. */}
           <View style={pdf.riskStrip}>
             {[
               ...LEVEL_ORDER.map(lvl => ({
@@ -512,6 +691,7 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
                 n: fmtCount(summary.risk_levels?.[lvl]?.count ?? 0),
                 label: LEVEL_META[lvl].label,
                 color: LEVEL_META[lvl].color,
+                tint: RISK_TINT[lvl],
                 hi: lvl === summary.risk,
               })),
               {
@@ -519,6 +699,7 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
                 n: fmtCount(summary.suspicious_events),
                 label: 'Sospechosos',
                 color: '#1fc8ff',
+                tint: RISK_TINT.sospecha,
                 hi: false,
               },
             ].map((cell, i, all) => (
@@ -527,7 +708,10 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
                 style={[
                   pdf.riskCell,
                   i < all.length - 1 ? pdf.riskCellDiv : {},
-                  cell.hi ? pdf.riskCellHi : {},
+                  {
+                    backgroundColor: cell.hi ? RISK_TINT_HI : cell.tint.bg,
+                    borderLeftColor: cell.hi ? cell.color : cell.tint.edge,
+                  },
                 ]}
                 wrap={false}
               >
@@ -550,91 +734,92 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
 
       {/* ---------------- Cuerpo ---------------- */}
       <Page size="A4" style={pdf.page}>
+        <Chrome edges />
         <Footer />
 
-        {/* 1. Resumen ejecutivo */}
-        <SecHead num="01" title="Resumen ejecutivo" />
-        {LEVEL_ORDER.some((lvl) => (summary.risk_levels?.[lvl]?.count ?? 0) > 0) && (
-          <View>
-            <Text style={pdf.sectionLabel}>Distribución por criticidad</Text>
-            {/* Barra apilada al 100%: `flexGrow` proporcional al porcentaje de
-                cada nivel, así el ancho no depende de redondeos. */}
-            <View style={pdf.stackBar}>
-              {LEVEL_ORDER.map((lvl) => {
-                const share = summary.risk_levels?.[lvl]?.percentage ?? 0
-                if (share <= 0) return null
-                return (
-                  <View
-                    key={lvl}
-                    style={{ flexGrow: share, backgroundColor: LEVEL_META[lvl].color }}
-                  />
-                )
-              })}
-            </View>
-            <View style={pdf.stackLegend}>
-              {LEVEL_ORDER.map((lvl) => {
-                const block = summary.risk_levels?.[lvl]
-                return (
-                  <View key={lvl} style={pdf.legendItem}>
-                    <View style={[pdf.legendDot, { backgroundColor: LEVEL_META[lvl].color }]} />
-                    <Text style={pdf.legendText}>
-                      {`${LEVEL_META[lvl].label} ${fmtCount(block?.count ?? 0)} (${fmtPct(block?.percentage ?? 0)}%)`}
-                    </Text>
-                  </View>
-                )
-              })}
-            </View>
-          </View>
-        )}
-        {/* La justificación del riesgo vive solo en §3 (junto a la tabla de
-            niveles): en §1 se repetía tras la misma distribución (revisión #3).
-            La prosa va frase a frase, con la primera como entradilla. */}
-        {report.field_sources?.executive_summary === 'llm' ? (
-          <View style={pdf.aiBox}>
-            <Text style={pdf.aiLabel}>Lectura del análisis</Text>
-            {splitSentences(report.executive_summary).map((frase, i) => (
-              <Text key={`ej-${i}`} style={i === 0 ? pdf.leadPara : pdf.para}>
-                {frase}
-              </Text>
-            ))}
-          </View>
-        ) : (
-          splitSentences(report.executive_summary).map((frase, i) => (
-            <Text key={`ej-${i}`} style={i === 0 ? pdf.leadPara : pdf.para}>
-              {frase}
-            </Text>
-          ))
-        )}
+        {/* 1. Resumen ejecutivo — el panel abre con la distribución (o con
+            la entradilla del resumen si no hay distribución). */}
+        <Panel
+          num="01"
+          title="Resumen ejecutivo"
+          meta={`Riesgo global · ${risk.label}`}
+          first={
+            hasDist ? (
+              <View>
+                <Text style={pdf.sectionLabel}>Distribución por criticidad</Text>
+                {/* Barra apilada al 100%: `flexGrow` proporcional al porcentaje de
+                    cada nivel, así el ancho no depende de redondeos. */}
+                <View style={pdf.stackBar}>
+                  {LEVEL_ORDER.map((lvl) => {
+                    const share = summary.risk_levels?.[lvl]?.percentage ?? 0
+                    if (share <= 0) return null
+                    return (
+                      <View
+                        key={lvl}
+                        style={{ flexGrow: share, backgroundColor: LEVEL_META[lvl].color }}
+                      />
+                    )
+                  })}
+                </View>
+                <View style={pdf.stackLegend}>
+                  {LEVEL_ORDER.map((lvl) => {
+                    const block = summary.risk_levels?.[lvl]
+                    return (
+                      <View key={lvl} style={pdf.legendItem}>
+                        <View style={[pdf.legendDot, { backgroundColor: LEVEL_META[lvl].color }]} />
+                        <Text style={pdf.legendText}>
+                          {`${LEVEL_META[lvl].label} ${fmtCount(block?.count ?? 0)} (${fmtPct(block?.percentage ?? 0)}%)`}
+                        </Text>
+                      </View>
+                    )
+                  })}
+                </View>
+              </View>
+            ) : execBody
+          }
+        >
+          {hasDist ? execBody : null}
+        </Panel>
 
         {/* 2. Alcance y metodología */}
-        <SecHead num="02" title="Alcance y metodología" />
-        {splitSteps(report.methodology).map((step, i) => (
-          <Text key={`met-${i}`} style={pdf.para}>
-            {step}
+        <Panel
+          num="02"
+          title="Alcance y metodología"
+          meta={`${fmtCount(summary.rows)} registros`}
+          first={<Text style={pdf.para}>{steps[0]}</Text>}
+        >
+          {steps.slice(1).map((step, i) => (
+            <Text key={`met-${i}`} style={pdf.para}>
+              {step}
+            </Text>
+          ))}
+          {summary.ai_insights && summary.ai_insights.length > 0 && (
+            <View style={pdf.aiBox}>
+              <Text style={pdf.aiLabel}>Observaciones del análisis asistido por IA</Text>
+              {summary.ai_insights.map((t, i) => (
+                <Text key={`ins-${i}`} style={pdf.aiBullet}>
+                  {`• ${t}`}
+                </Text>
+              ))}
+            </View>
+          )}
+          <Text style={pdf.small}>
+            Alcance: {summary.rows} registros · {summary.columns.length} campos ·{' '}
+            {summary.unique_hosts ?? '—'} hosts · hojas:{' '}
+            {(summary.sheet_names || []).join(', ') || '—'}
+            {summary.missing_columns && summary.missing_columns.length > 0
+              ? ` · columnas ausentes: ${summary.missing_columns.join(', ')}`
+              : ''}
           </Text>
-        ))}
-        {summary.ai_insights && summary.ai_insights.length > 0 && (
-          <View style={pdf.aiBox}>
-            <Text style={pdf.aiLabel}>Observaciones del análisis asistido por IA</Text>
-            {summary.ai_insights.map((t, i) => (
-              <Text key={`ins-${i}`} style={pdf.aiBullet}>
-                {`• ${t}`}
-              </Text>
-            ))}
-          </View>
-        )}
-        <Text style={pdf.small}>
-          Alcance: {summary.rows} registros · {summary.columns.length} campos ·{' '}
-          {summary.unique_hosts ?? '—'} hosts · hojas:{' '}
-          {(summary.sheet_names || []).join(', ') || '—'}
-          {summary.missing_columns && summary.missing_columns.length > 0
-            ? ` · columnas ausentes: ${summary.missing_columns.join(', ')}`
-            : ''}
-        </Text>
+        </Panel>
 
         {/* 3. Clasificación de criticidad */}
-        <SecHead num="03" title="Clasificación de criticidad" />
-        <Text style={pdf.para}>{summary.risk_justification}</Text>
+        <Panel
+          num="03"
+          title="Clasificación de criticidad"
+          meta={`${fmtCount(summary.rows)} registros`}
+          first={<Text style={pdf.para}>{summary.risk_justification}</Text>}
+        >
 
         {/* wrap={false}: tabla atómica — evita cabecera huérfana al final
             de una página con las filas sueltas en la siguiente. */}
@@ -669,73 +854,81 @@ const ReportDoc: React.FC<DocProps> = ({ summary, report, analysisId }) => {
             )
           })}
         </View>
+        </Panel>
 
-        {/* 4. Hallazgos — el encabezado viaja con la primera tarjeta
-            (View wrap={false}): si no, quedaba huérfano al final de una
-            página con todas las tarjetas en la siguiente. */}
+        {/* 4. Hallazgos — la cabecera del panel viaja con la primera tarjeta
+            (wrap={false} dentro de Panel): si no, quedaba huérfana al final
+            de una página con todas las tarjetas en la siguiente. */}
         {report.findings.length > 0 && (
-          <View wrap={false}>
-            <SecHead num="04" title="Hallazgos, evidencias y explicación técnica" />
-            <Finding f={report.findings[0]} />
-          </View>
+          <Panel
+            num="04"
+            title="Hallazgos y evidencias"
+            meta={`${report.findings.length} hallazgos`}
+            first={<Finding f={report.findings[0]} />}
+          >
+            {report.findings.slice(1).map((f) => (
+              <Finding key={f.id} f={f} />
+            ))}
+          </Panel>
         )}
-        {report.findings.slice(1).map((f) => (
-          <Finding key={f.id} f={f} />
-        ))}
 
         {/* 5. Correlación */}
-        <SecHead num="05" title="Correlación de eventos" />
-        <Text style={pdf.para}>{report.correlation}</Text>
-        {summary.suspicious_by_ip.length > 0 && (
-          <View style={pdf.critTable} wrap={false}>
-            <View style={pdf.critHeader} wrap={false}>
-              <Text style={[pdf.critHeaderText, { flex: 1 }]}>IP de origen</Text>
-              <Text style={[pdf.critHeaderText, pdf.w60]}>Eventos</Text>
-              <Text style={[pdf.critHeaderText, pdf.w60]}>Hosts</Text>
-            </View>
-            {summary.suspicious_by_ip.slice(0, 6).map((ip, i) => (
-              <View
-                key={ip.ip}
-                style={[pdf.critRow, i % 2 === 1 ? pdf.rowAlt : {}]}
-                wrap={false}
-              >
-                <Text style={[pdf.critCell, { flex: 1, color: '#bfefff' }]}>{ip.ip}</Text>
-                <Text style={[pdf.critCell, pdf.w60]}>{ip.events}</Text>
-                <Text style={[pdf.critCell, pdf.w60]}>{ip.hosts}</Text>
+        <Panel
+          num="05"
+          title="Correlación de eventos"
+          meta={`${summary.suspicious_by_ip.length} IPs`}
+          first={<Text style={pdf.para}>{report.correlation}</Text>}
+        >
+          {summary.suspicious_by_ip.length > 0 && (
+            <View style={pdf.critTable} wrap={false}>
+              <View style={pdf.critHeader} wrap={false}>
+                <Text style={[pdf.critHeaderText, { flex: 1 }]}>IP de origen</Text>
+                <Text style={[pdf.critHeaderText, pdf.w60]}>Eventos</Text>
+                <Text style={[pdf.critHeaderText, pdf.w60]}>Hosts</Text>
               </View>
+              {summary.suspicious_by_ip.slice(0, 6).map((ip, i) => (
+                <View
+                  key={ip.ip}
+                  style={[pdf.critRow, i % 2 === 1 ? pdf.rowAlt : {}]}
+                  wrap={false}
+                >
+                  <Text style={[pdf.critCell, { flex: 1, color: '#bfefff' }]}>{ip.ip}</Text>
+                  <Text style={[pdf.critCell, pdf.w60]}>{ip.events}</Text>
+                  <Text style={[pdf.critCell, pdf.w60]}>{ip.hosts}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+        </Panel>
+
+        {/* 6. Plan de acción — la primera fila viaja con la cabecera. */}
+        {report.action_plan.length > 0 && (
+          <Panel
+            num="06"
+            title="Plan de acción"
+            meta={`${report.action_plan.length} acciones`}
+            first={<PlanRow item={report.action_plan[0]} />}
+          >
+            {report.action_plan.slice(1).map((item, i) => (
+              <PlanRow key={`${item.priority}-${i}`} item={item} />
             ))}
-          </View>
+          </Panel>
         )}
 
-        {/* 6. Plan de acción */}
-        <SecHead num="06" title="Plan de acción" />
-        {report.action_plan.map((item, i) => (
-          <View key={`${item.priority}-${i}`} style={pdf.planRow} wrap={false}>
-            <Text
-              style={[
-                pdf.planPri,
-                item.priority.endsWith('1') ? pdf.planPri1 : {},
-                item.priority.endsWith('2') ? pdf.planPri2 : {},
-              ]}
-            >
-              {item.priority}
-            </Text>
-            <View style={pdf.planBody}>
-              <Text style={pdf.planAction}>{item.action}</Text>
-              <Text style={pdf.planWhy}>Fundamento: {item.rationale}</Text>
-            </View>
-          </View>
-        ))}
-
         {/* 7. Conclusiones */}
-        <SecHead num="07" title="Conclusiones" />
-        <Text style={pdf.para}>{report.conclusions}</Text>
-        <Text style={pdf.note}>
-          Informe generado automáticamente por la plataforma AEGIS mediante
-          asistente de IA sobre datos calculados a partir de los
-          registros importados. Verificable fila a fila desde la sección «Carga de
-          archivos» de la aplicación.
-        </Text>
+        <Panel
+          num="07"
+          title="Conclusiones"
+          meta="AEGIS · Cierre"
+          first={<Text style={pdf.para}>{report.conclusions}</Text>}
+        >
+          <Text style={pdf.note}>
+            Informe generado automáticamente por la plataforma AEGIS mediante
+            asistente de IA sobre datos calculados a partir de los
+            registros importados. Verificable fila a fila desde la sección «Carga de
+            archivos» de la aplicación.
+          </Text>
+        </Panel>
       </Page>
     </Document>
   )
