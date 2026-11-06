@@ -576,13 +576,16 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
     columns = [c for c in df.columns if not str(c).startswith("_")]
     unique_hosts = int(df["Hostname"].nunique()) if "Hostname" in df.columns else None
 
-    # Event_IDs that are not numeric → records coming from another log source
+    # Event_IDs that are not numeric → records coming from another log source.
+    # `non_numeric_rows` es el conteo de FILAS afectadas: sin él la observación
+    # de calidad solo podría nombrar los IDs, no decir «N de M registros».
     non_numeric_event_ids: List[str] = []
+    non_numeric_rows = 0
     if "Event_ID" in df.columns:
         values = df["Event_ID"].astype(str).str.strip()
-        non_numeric_event_ids = sorted(
-            {v for v in values if v and v.lower() != "nan" and not v.isdigit()}
-        )[:10]
+        mask = values.ne("") & values.str.lower().ne("nan") & ~values.str.isdigit()
+        non_numeric_event_ids = sorted(set(values[mask]))[:10]
+        non_numeric_rows = int(mask.sum())
 
     # --- severity / level classification ----------------------------------
     raw_severity = df["Severity"] if "Severity" in df.columns else pd.Series([""] * total)
@@ -871,6 +874,7 @@ def call_ai_service(dataframe: pd.DataFrame) -> Dict[str, Any]:
         "rows": total,
         "columns": columns,
         "non_numeric_event_ids": non_numeric_event_ids,
+        "non_numeric_rows": non_numeric_rows,
         "risk": risk,
         "risk_justification": risk_justification,
         "severity_counts": severity_counts,

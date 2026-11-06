@@ -23,6 +23,7 @@ import ai_service
 from ai_service import (
     _filter_insights,
     _INSIGHTS_SYSTEM_PROMPT,
+    _INSIGHTS_USER_PROMPT,
     MAX_INSIGHTS,
     build_context,
     generate_data_insights,
@@ -250,3 +251,62 @@ def test_dashboard_expone_observaciones_no_vacias(client, analysis_id):
     assert res["ai_insights"] and all(
         isinstance(item, str) and item.strip() for item in res["ai_insights"]
     )
+
+
+# ---------------------------------------------------------------------------
+# Salvedad de Event ID no numéricos: formato, no defecto
+# ---------------------------------------------------------------------------
+def test_observacion_local_de_ids_no_numericos_declara_el_formato(summary):
+    """La frase describe CÓMO se trata el dato, sin sonar a problema del análisis.
+
+    El texto viejo («…que pueden afectar análisis automatizado» /
+    «deben revisarse por separado») asustaba sin motivo: el motor lee
+    Event_ID como texto y el resto del pipeline no depende de que sea
+    numérico. Con `non_numeric_rows` la observación sí puede citar la cifra.
+    """
+    insights = generate_local_insights(
+        {
+            **summary,
+            "non_numeric_event_ids": ["HTTP_ACCESS", "PROXY_ACCESS"],
+            "non_numeric_rows": 3,
+        }
+    )
+    bullet = next(i for i in insights if "HTTP_ACCESS" in i)
+
+    assert "3 de 12 registros" in bullet       # cifra anclada: 3 filas de 12
+    assert "trata como texto" in bullet
+    assert "junto al resto" in bullet
+    assert "deben revisarse por separado" not in bullet
+    assert "afectar" not in bullet
+
+
+def test_observacion_local_de_ids_no_numericos_sin_conteo(summary):
+    """Resúmenes antiguos sin `non_numeric_rows`: la frase no inventa cifras."""
+    insights = generate_local_insights(
+        {**summary, "non_numeric_event_ids": ["HTTP_ACCESS"]}
+    )
+    bullet = next(i for i in insights if "HTTP_ACCESS" in i)
+
+    assert "El archivo trae" in bullet
+    assert "trata como texto" in bullet
+
+
+def test_filter_descarta_claves_internas_del_payload(summary):
+    """Regla E también en observaciones: el snake_case de DATOS no sobrevive."""
+    ctx = build_context(summary)
+    con_claves = (
+        "Los patrones conductuales de behavior_patterns confirman el riesgo "
+        "detectado en este archivo importado."
+    )
+
+    assert _filter_insights([con_claves], ctx) == []
+
+
+def test_prompt_de_observaciones_guia_la_salvedad_y_prohibe_claves():
+    """El prompt pide el tono correcto (formato, no problema) y la regla E."""
+    assert "Sin claves internas" in _INSIGHTS_USER_PROMPT
+    assert "non_numeric_event_ids" in _INSIGHTS_USER_PROMPT
+    assert "trata como texto" in _INSIGHTS_USER_PROMPT
+    # Las formulaciones viejas, prohibidas de forma explícita:
+    assert "revisarse por separado" in _INSIGHTS_USER_PROMPT
+    assert "pueda afectar" in _INSIGHTS_USER_PROMPT

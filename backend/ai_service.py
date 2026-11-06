@@ -157,6 +157,10 @@ def build_context(summary: Dict[str, Any]) -> Dict[str, Any]:
         "result_counts": summary.get("result_counts") or {},
         "risk_levels": risk_levels,
         "non_numeric_event_ids": summary.get("non_numeric_event_ids") or [],
+        # Recuento de filas con ese ID: permite que la observación de calidad
+        # diga «N de M registros» con una cifra anclada en vez de nombrarlos
+        # sin contexto (resúmenes antiguos sin la clave → 0 = solo IDs).
+        "non_numeric_rows": int(summary.get("non_numeric_rows") or 0),
         "suspicious_events": int(summary.get("suspicious_events", 0)),
         "suspicious_by_ip": summary.get("suspicious_by_ip") or [],
         # Correlaciones conductuales (behavior_correlations.py): IPs en varios
@@ -515,6 +519,11 @@ def _fallback_narrative(ctx: Dict[str, Any]) -> Dict[str, Any]:
             }
         )
 
+    # Orden por prioridad: el append de arriba añade el P2 de errores HTTP AL
+    # FINAL (después del P4) y el plan se leería P1, P1, P2, P3, P4, P2. El
+    # sort es estable, así que los dos P1 conservan su orden interno.
+    action_plan.sort(key=lambda item: str(item.get("priority") or "P9"))
+
     # --- Conclusiones ------------------------------------------------------
     conclusions = (
         f"El archivo «{ctx['file_name']}» presenta un riesgo global «{highest_label}» "
@@ -561,7 +570,7 @@ def _clean_json(text: str) -> Optional[Dict[str, Any]]:
     return data if isinstance(data, dict) else None
 
 
-# User prompt endurecido en 4 bloques, alineado con las reglas A–D del
+# User prompt endurecido en 4 bloques, alineado con las reglas A–E del
 # validador (bloque 2 = regla C campo a campo; bloque 3 = reglas A/B/D y
 # honestidad de la fuente). Solo pide los 4 campos de prosa: findings y
 # action_plan los genera el sistema.
@@ -591,9 +600,10 @@ _REPORT_USER_PROMPT = (
     "compartidos…) y qué debería mirar primero el analista. Cada cifra que "
     "aparezca debe salir literal de DATOS.\n"
     "  - methodology: pasos numerados que cubran la importación del archivo, la "
-    "clasificación por severidad y las reglas de sospecha, citando al menos una "
-    "clave original de severity_mapping tal como aparece en DATOS (su valor "
-    "«raw» literal, sin traducir). Separa CADA paso con un salto de línea "
+    "clasificación por severidad y las reglas de sospecha, citando al menos un "
+    "valor «raw» original de severity_mapping tal como aparece en DATOS (p. ej. "
+    "«Warning», sin traducir): en la prosa se nombra el VALOR, nunca la clave "
+    "severity_mapping. Separa CADA paso con un salto de línea "
     "real (\\n) y numéralo como «1. », «2. »…: el informe los pinta como "
     "párrafos aparte y sin salto de línea se leen pegados.\n"
     "  - correlation: la PRIMERA IP de suspicious_by_ip con SU conteo de eventos, "
@@ -622,6 +632,12 @@ _REPORT_USER_PROMPT = (
     "registros pegado al Event ID 4625.\n"
     "  - «N de Event ID X» solo si N es exactamente event_id_counts[X].\n"
     "  - Sin frases repetidas: ninguna frase de 5 palabras o más aparece dos veces.\n"
+    "  - Sin claves internas: los nombres de los datos de DATOS (p. ej. "
+    "suspicious_by_ip, behavior_patterns, event_id_counts, severity_mapping, "
+    "multi_event_ip, brute_force) son etiquetas del sistema y NO se escriben "
+    "en la prosa: narra «la primera IP con más eventos sospechosos», «los "
+    "patrones conductuales», «el mapeo de severidad»… (los nombres de columna "
+    "del archivo, p. ej. Event_ID, sí se citan tal cual).\n"
     "  - Sin inventar tooling: es un archivo importado, no un SIEM en vivo; no "
     "menciones consultas, agentes ni consolas que no consten en DATOS.\n"
     "  - Sin recomendaciones genéricas vacías: cada recomendación se apoya en un "
@@ -648,7 +664,7 @@ def _prompt_ctx(ctx: Dict[str, Any]) -> Dict[str, Any]:
     `chat()` solo reintenta ante 429, así que el informe caía SIEMPRE al
     motor local. Recortado baja a ≈4,1k tokens.
 
-    El validador A–D, el filtro de observaciones y el fallback local
+    El validador A–E, el filtro de observaciones y el fallback local
     siguen recibiendo el ctx COMPLETO (lo pasan `generate_report_narrative`
     y `generate_data_insights` aparte), de modo que las anclas, las cifras
     obligatorias de la regla C y las evidencias del informe no cambian.
@@ -710,7 +726,7 @@ async def _remote_narrative(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 # Campos de prosa que el LLM puede aportar (los únicos que pide el prompt y
-# que el validador A–D evalúa) y los 6 campos del contrato del informe.
+# que el validador A–E evalúa) y los 6 campos del contrato del informe.
 _PROSE_FIELDS = ("executive_summary", "methodology", "correlation", "conclusions")
 _CAMPOS_INFORME = (
     "executive_summary",
@@ -777,7 +793,7 @@ def _merge(fallback: Dict[str, Any], aceptados: Dict[str, str]) -> Dict[str, Any
 
 
 # ---------------------------------------------------------------------------
-# Validación de la narrativa remota (reglas A–D)
+# Validación de la narrativa remota (reglas A–E)
 # ---------------------------------------------------------------------------
 # Reglas puras (sin red) que el validador del informe (tarea 5) compondrá:
 # cada una devuelve una lista de motivos legibles de rechazo; [] = pasa.
@@ -920,6 +936,50 @@ def _rule_redundancy(text: str) -> List[str]:
         f"frase repetida: «{norm}»"
         for norm, times in counts.items()
         if times >= 2 and len(norm.split()) >= 5
+    ]
+
+
+# --- Regla E: sin claves internas del payload en la prosa -------------------
+# Formato snake_case minúsculo: es el de las claves del JSON que viaja en
+# DATOS (`behavior_patterns`, `suspicious_by_ip`…), no vocabulario de informe.
+# Las columnas reales del archivo van en mayúsculas o mezcladas («Event_ID»,
+# «Source_IP»), así que no casan con este patrón.
+_INTERNAL_KEY_RE = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")
+
+
+def _rule_internal_keys(text: str, ctx: dict) -> List[str]:
+    """Regla E: la prosa no cita nombres de variables del sistema.
+
+    El modelo recibe DATOS como JSON y a veces pega sus claves en la
+    narrativa («la primera IP de suspicious_by_ip…», «aparece en
+    behavior_patterns como multi_event_ip»): son etiquetas de código, no
+    prosa de informe. Se rechaza cualquier identificador en snake_case
+    minúsculo salvo que coincida con un dato real del archivo (nombre de
+    columna, hoja, valor original de severity_mapping o el file_name), que
+    sí es citable tal cual.
+    """
+    permitidas = {str(c).lower() for c in (ctx.get("columns") or [])}
+    permitidas |= {str(s).lower() for s in (ctx.get("sheet_names") or [])}
+    mapping = ctx.get("severity_mapping") or []
+    entradas = mapping.values() if isinstance(mapping, dict) else mapping
+    for entrada in entradas:
+        if isinstance(entrada, dict):
+            permitidas.add(str(entrada.get("raw") or "").lower())
+        else:
+            permitidas.add(str(entrada).lower())
+    file_name = str(ctx.get("file_name") or "").lower()
+
+    culpables = [
+        token
+        for token in dict.fromkeys(_INTERNAL_KEY_RE.findall(text))
+        if token not in permitidas and token not in file_name
+    ]
+    if not culpables:
+        return []
+    return [
+        "cita claves internas de datos ("
+        + ", ".join(culpables)
+        + "); redacta en prosa natural, sin nombres de variables"
     ]
 
 
@@ -1439,23 +1499,25 @@ def _rule_required(field: str, text: str, ctx: dict) -> List[str]:
 
 
 # ---------------------------------------------------------------------------
-# Validador del informe: composición de las reglas A–D campo a campo
+# Validador del informe: composición de las reglas A–E campo a campo
 # ---------------------------------------------------------------------------
 # (etiqueta, regla) en el orden del brief: A ancla numérica, B atribución,
-# C contenido obligatorio por campo, D anti-redundancia. Cortocircuito: un
-# motivo basta para rechazar el campo. Las firmas de las reglas difieren en
-# los parámetros, así que cada entrada adapta la llamada; los lambdas resuelven
-# el nombre del módulo en tiempo de ejecución (monkeypatcheables en tests).
+# C contenido obligatorio por campo, D anti-redundancia, E anti-claves
+# internas. Cortocircuito: un motivo basta para rechazar el campo. Las
+# firmas de las reglas difieren en los parámetros, así que cada entrada
+# adapta la llamada; los lambdas resuelven el nombre del módulo en tiempo
+# de ejecución (monkeypatcheables en tests).
 _FIELD_RULES: Tuple[Tuple[str, Any], ...] = (
     ("A", lambda text, field, ctx: _rule_anchor(text, ctx)),
     ("B", lambda text, field, ctx: _rule_attribution(text, ctx)),
     ("C", lambda text, field, ctx: _rule_required(field, text, ctx)),
     ("D", lambda text, field, ctx: _rule_redundancy(text)),
+    ("E", lambda text, field, ctx: _rule_internal_keys(text, ctx)),
 )
 
 
 def _validate_fields(ctx: Dict[str, Any], remote: Any) -> Dict[str, str]:
-    """Aplica las reglas A–D a cada campo de prosa; devuelve SOLO los aceptados.
+    """Aplica las reglas A–E a cada campo de prosa; devuelve SOLO los aceptados.
 
     Un campo ausente, vacío o rechazado no aparece en el resultado → la
     orquestación usará el texto del fallback para él. Solo itera los 4 campos
@@ -1506,7 +1568,7 @@ async def generate_report_narrative(summary: Dict[str, Any]) -> Dict[str, Any]:
 
     Siempre devuelve un informe completo: primero se construye el basado en
     reglas (100% anclado a los registros) y, si el modelo remoto aporta prosa
-    que PASA las reglas A–D, se superpone campo a campo sin perder evidencias
+    que PASA las reglas A–E, se superpone campo a campo sin perder evidencias
     ni cifras. Cualquier fallo total (LLM apagado, excepción del chat, JSON
     inválido) deja `aceptados` vacío → fallback completo, idéntico al de hoy.
     """
@@ -1625,10 +1687,17 @@ def _local_insights(ctx: Dict[str, Any]) -> List[str]:
 
     non_numeric = ctx.get("non_numeric_event_ids") or []
     if non_numeric:
+        # Salvedad de FORMATO, no defecto: el motor lee Event_ID como texto
+        # (int() con try/except en la clasificación, glosario con IDs no
+        # numéricos), así que la frase declara el dato y cómo se trata — en
+        # lugar de sugerir un problema que no existe en este análisis.
+        n = int(ctx.get("non_numeric_rows") or 0)
+        rows = int(ctx.get("rows") or 0)
+        alcance = f"{n} de {rows} registros traen" if n and rows else "El archivo trae"
         insights.append(
-            "Se observaron identificadores de evento no numéricos "
-            f"({', '.join(non_numeric)}) que provienen de otra fuente de logs "
-            "y deben revisarse por separado."
+            f"Calidad del dato: {alcance} Event ID no numéricos "
+            f"({', '.join(non_numeric)}) propios de otra fuente de logs; el "
+            "motor los trata como texto y los analiza junto al resto."
         )
 
     return insights
@@ -1661,10 +1730,19 @@ _INSIGHTS_USER_PROMPT = (
     "de una gráfica: concentraciones (qué host o IP domina), patrones "
     "repetidos (autenticaciones fallidas, procesos nuevos, accesos a "
     "recursos compartidos), ventanas temporales (días, picos) y calidad del "
-    "dato (columnas que faltan o identificadores no numéricos).\n"
+    "dato (columnas que faltan o identificadores no numéricos). Si DATOS "
+    "trae non_numeric_event_ids, redacta esa salvedad como lo que es: un "
+    "formato de origen distinto que el motor trata como texto y analiza "
+    "junto al resto de registros — nunca como un problema que «pueda afectar "
+    "el análisis» ni algo que «deba revisarse por separado».\n"
     "REGLAS DURAS:\n"
     "  - Todo número sale de DATOS tal cual: prohibido recalcular, aproximar "
     "o inventar una cifra. Si un dato no está en DATOS, no lo menciones.\n"
+    "  - Sin claves internas: los nombres de los datos de DATOS (p. ej. "
+    "event_id_counts, suspicious_by_ip, behavior_patterns, "
+    "non_numeric_event_ids) son etiquetas del sistema y NO se escriben en la "
+    "observación; narra el dato en prosa (los nombres de columna del "
+    "archivo, p. ej. Event_ID, sí se citan tal cual).\n"
     "  - Sin frases repetidas entre observaciones y sin consejos genéricos "
     "que pudieran servir para cualquier archivo.\n"
     "  - Español formal; nada de explicar qué significa un Event ID ni citar "
@@ -1707,6 +1785,7 @@ def _filter_insights(items: List[str], ctx: Dict[str, Any]) -> List[str]:
     - una observación corta demuestra que el modelo no aportó nada;
     - una cifra sin ancla (regla A) o mal atribuida (regla B) tira la frase
       entera, igual que en el informe;
+    - una clave interna del payload pegada en la frase (regla E) también;
     - frases repetidas entre observaciones (regla D) no se apilan.
     """
     validas: List[str] = []
@@ -1714,7 +1793,11 @@ def _filter_insights(items: List[str], ctx: Dict[str, Any]) -> List[str]:
         text = " ".join(str(item).split())
         if len(text) < _MIN_INSIGHT_CHARS:
             continue
-        if _rule_anchor(text, ctx) or _rule_attribution(text, ctx):
+        if (
+            _rule_anchor(text, ctx)
+            or _rule_attribution(text, ctx)
+            or _rule_internal_keys(text, ctx)
+        ):
             continue
         if any(v.casefold() == text.casefold() for v in validas):
             continue

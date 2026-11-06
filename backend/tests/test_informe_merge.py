@@ -64,7 +64,7 @@ _SUMMARY = {
     "http_errors": {"codes": {"500": 1}, "total": 1},
 }
 
-# Prosa remota que pasa las reglas A–D contra el ctx de _SUMMARY: todas sus
+# Prosa remota que pasa las reglas A–E contra el ctx de _SUMMARY: todas sus
 # cifras (12, 2, 3, 4, 5, IPs) están en los datos y cada campo cubre lo que
 # exige la regla C.
 _PROSA_VALIDA = {
@@ -445,3 +445,50 @@ def test_report_endpoint_devuelve_field_sources_con_seis_claves(
     assert set(body["field_sources"]) == set(CAMPOS)
     assert body["source"] in ("llm", "local")
     assert body["model"]
+
+
+# ---------------------------------------------------------------------------
+# Plan de acción ordenado y prosa sin claves internas (regla E)
+# ---------------------------------------------------------------------------
+def test_action_plan_se_ordena_por_prioridad():
+    """El plan se lee P1 → P4 aunque el P2 de errores HTTP se añada al final.
+
+    `_fallback_narrative` construye P1, P1, P2, P3, P4 y después hace
+    `append` del P2 de errores HTTP: sin el sort el plan salía
+    P1, P1, P2, P3, P4, P2 — el P2 colgado después del P4.
+    """
+    plan = _fallback()["action_plan"]
+    prioridades = [item["priority"] for item in plan]
+
+    assert prioridades == ["P1", "P1", "P2", "P2", "P3", "P4"]
+    # El sort es estable: los dos P1 conservan su orden interno.
+    assert plan[0]["action"].startswith("Revisar los registros del nivel")
+    assert plan[1]["action"].startswith("Auditar las IPs")
+    # El P2 de errores HTTP sigue presente (y solo él menciona HTTP entre los P2).
+    p2_http = [i for i in plan if i["priority"] == "P2" and "HTTP" in i["action"]]
+    assert len(p2_http) == 1
+    assert "500" in p2_http[0]["rationale"]
+
+
+def test_validate_fields_rechaza_claves_internas_en_la_prosa(caplog):
+    """Regla E: el snake_case del payload (suspicious_by_ip…) no entra en prosa.
+
+    La prosa añadida NO lleva cifras ni frases repetidas, así que pasa las
+    reglas A–D: quien tira el campo es la E.
+    """
+    ctx = build_context(_SUMMARY)
+    prosa_interna = (
+        _PROSA_VALIDA["correlation"]
+        + " Además, la primera IP de suspicious_by_ip se repite en "
+        "behavior_patterns como multi_event_ip."
+    )
+    with caplog.at_level(logging.WARNING, logger="soc.ai"):
+        aceptados = _validate_fields(ctx, {**_PROSA_VALIDA, "correlation": prosa_interna})
+
+    assert "correlation" not in aceptados
+    assert set(aceptados) == set(PROSA) - {"correlation"}
+    assert any(
+        "campo correlation rechazado (regla E)" in r.getMessage()
+        and "suspicious_by_ip" in r.getMessage()
+        for r in caplog.records
+    ), "el motivo del rechazo debe citar la clave interna detectada"

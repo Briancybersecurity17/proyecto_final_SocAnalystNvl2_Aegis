@@ -134,6 +134,22 @@ def test_prompt_contiene_el_ejemplo_prohibido_y_la_prohibicion_de_reasignar(info
     assert "event_id_counts" in prompt
 
 
+def test_prompt_prohibe_las_claves_internas_del_payload(informe):
+    """Espejo de la regla E: el prompt prohíbe el snake_case de DATOS en prosa.
+
+    El informe real llegó con «La primera IP listada en suspicious_by_ip…»
+    y «aparece en behavior_patterns como multi_event_ip»: el modelo copiaba
+    las claves del payload JSON a la narrativa.
+    """
+    prompt = _user_prompt(informe())
+    assert "Sin claves internas" in prompt
+    # Claves citadas como PROHIBIDAS en la prosa…
+    assert "suspicious_by_ip" in prompt
+    assert "behavior_patterns" in prompt
+    # …y la excepción explícita: los nombres de columna sí se citan.
+    assert "Event_ID" in prompt
+
+
 def test_prompt_bloque_estructura_espeja_la_regla_c(informe):
     """Lo que el validador exige por campo, el prompt lo pide campo a campo."""
     prompt = _user_prompt(informe())

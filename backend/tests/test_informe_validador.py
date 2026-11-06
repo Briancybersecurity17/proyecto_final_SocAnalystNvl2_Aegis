@@ -14,6 +14,7 @@ from ai_service import (
     _percentages,
     _rule_anchor,
     _rule_attribution,
+    _rule_internal_keys,
     _rule_redundancy,
     _rule_required,
 )
@@ -547,3 +548,58 @@ def test_regla_c_clave_severidad_con_limite_de_palabra():
 def test_regla_c_campos_sin_reglas_no_exigen_nada():
     """Los campos fuera de los 4 (p. ej. findings) no tienen requisitos."""
     assert _rule_required("findings", "Prosas libres sin requisitos.", CTX_C) == []
+
+
+# --- Regla E: sin claves internas del payload en la prosa ------------------
+
+
+def test_regla_e_rechaza_claves_internas_del_payload():
+    """El snake_case minúsculo de DATOS («suspicious_by_ip»…) es de código.
+
+    Es literal lo que llegó al informe real: «La primera IP listada en
+    suspicious_by_ip…», «aparece en behavior_patterns como multi_event_ip».
+    """
+    texto = (
+        "La primera IP de suspicious_by_ip se repite en behavior_patterns "
+        "como multi_event_ip con 102 eventos."
+    )
+    motivos = _rule_internal_keys(texto, CTX)
+
+    assert motivos, "las claves internas deben rechazarse"
+    assert "suspicious_by_ip" in motivos[0]
+    assert "behavior_patterns" in motivos[0]
+    assert "multi_event_ip" in motivos[0]
+
+
+def test_regla_e_acepta_nombres_de_columna_y_archivo_reales():
+    """Los nombres propios del archivo sí se citan tal cual.
+
+    CTX.columns = Log_ID, Timestamp, Source_IP, Severity y file_name =
+    registro.xlsx: van en mayúsculas/mixtas o son el propio nombre del
+    archivo, así que el patrón snake_case minúsculo no los marca.
+    """
+    texto = (
+        "La columna Source_IP se cruza con Severity del archivo registro.xlsx; "
+        "Event_ID aporta el identificador de cada registro."
+    )
+    assert _rule_internal_keys(texto, CTX) == []
+
+
+def test_regla_e_acepta_columna_en_snake_case_y_valor_original():
+    """Una columna real en minúsculas y un «raw» en snake_case son datos citables."""
+    ctx = dict(
+        CTX,
+        columns=["log_id", "source_ip"],
+        file_name="registro_export.xlsx",
+        severity_mapping=[{"raw": "logon_failure", "level": "critico"}],
+    )
+    texto = (
+        "El campo log_id refleja logon_failure según el mapeo original de "
+        "registro_export.xlsx."
+    )
+    assert _rule_internal_keys(texto, ctx) == []
+
+
+def test_regla_e_sin_claves_en_el_ctx_no_se_inventa_nada():
+    """Un ctx mínimo (sin columns ni file_name) no rompe la regla."""
+    assert _rule_internal_keys("La IP 10.10.2.15 concentró los eventos.", {"rows": 10}) == []
