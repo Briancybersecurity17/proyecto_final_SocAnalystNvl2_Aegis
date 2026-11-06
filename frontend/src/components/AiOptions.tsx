@@ -172,6 +172,13 @@ const AiOptions: React.FC = () => {
 
   const remoteUp = status?.kind === 'remote' && status.reachable === true
   const selectedModel = status?.models.find((m) => m.name === cfg.model)
+  /** Modelos de texto del proveedor que NO están ya en los recomendados:
+   *  son el resto del catálogo (se muestran como chips apagados, no como
+   *  desplegable: los chips son el único selector de este campo). */
+  const otherModels = (status?.models ?? [])
+    .filter((m) => !NON_CHAT_MODEL.test(m.name))
+    .filter((m) => !RECOMMENDED_MODELS.some((r) => r.id === m.name))
+    .map((m) => m.name)
 
   const chip = !cfg.enabled
     ? { color: '#7280a3', label: 'LLM apagado · motor determinista' }
@@ -232,27 +239,36 @@ const AiOptions: React.FC = () => {
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             {/* Modelo */}
             <div>
-              <label className="hud-label" htmlFor="ai-model">
-                Modelo
-              </label>
+              {/* Rótulo + estado del modelo en la misma línea: el chip ya no
+                  cuelga debajo del input ni compite con los recomendados. */}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="hud-label" htmlFor="ai-model">
+                  Modelo
+                </label>
+                {remoteUp && selectedModel && (
+                  <span className="chip text-emerald-400" style={{ background: '#10b98114' }}>
+                    En el proveedor
+                  </span>
+                )}
+                {cfg.enabled && status?.reachable === true && !selectedModel && (
+                  <span className="chip text-amber-400" style={{ background: '#ffb02014' }}>
+                    No está en el proveedor
+                  </span>
+                )}
+              </div>
               <input
                 id="ai-model"
-                list="ai-models"
                 className="hud-input mt-2 w-full"
                 value={cfg.model}
                 onChange={(e) => patch({ model: e.target.value })}
                 placeholder="openai/gpt-oss-120b"
                 spellCheck={false}
               />
-              <datalist id="ai-models">
-                {(status?.models ?? [])
-                  .filter((m) => !NON_CHAT_MODEL.test(m.name))
-                  .map((m) => (
-                    <option key={m.name} value={m.name} />
-                  ))}
-              </datalist>
-              <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                <span className="hud-label mr-1">Recomendados (gratis):</span>
+              {/* Recomendados: rótulo propio (no participa del wrap) y los
+                  chips en una matriz 2×2 alineada: sin wrapping arbitrario
+                  que parta la fila en 2/1/1. */}
+              <div className="hud-label mt-3">Recomendados (gratis)</div>
+              <div className="mt-1.5 grid grid-cols-2 justify-items-start gap-1.5">
                 {RECOMMENDED_MODELS.map((m) => (
                   <button
                     key={m.id}
@@ -273,18 +289,35 @@ const AiOptions: React.FC = () => {
                   </button>
                 ))}
               </div>
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                {remoteUp && selectedModel && (
-                  <span className="chip text-emerald-400" style={{ background: '#10b98114' }}>
-                    Disponible en el proveedor
-                  </span>
-                )}
-                {cfg.enabled && status?.reachable === true && !selectedModel && (
-                  <span className="chip text-amber-400" style={{ background: '#ffb02014' }}>
-                    No figura en la lista del proveedor
-                  </span>
-                )}
-              </div>
+              {/* Resto del catálogo del proveedor (si lo hay): mismos chips en
+                  tono apagado. El campo sigue siendo texto libre para IDs a
+                  mano — el desplegable se quitó: duplicaba a los chips. */}
+              {otherModels.length > 0 && (
+                <>
+                  <div className="hud-label mt-3">Otros modelos del proveedor</div>
+                  <div className="mt-1.5 grid grid-cols-2 justify-items-start gap-1.5">
+                    {otherModels.map((name) => (
+                      <button
+                        key={name}
+                        type="button"
+                        onClick={() => patch({ model: name })}
+                        title="Modelo disponible en tu cuenta"
+                        className={`chip transition-colors ${
+                          cfg.model === name
+                            ? 'text-emerald-400'
+                            : 'text-[var(--text-dim)] hover:text-sky-300'
+                        }`}
+                        style={{
+                          background: cfg.model === name ? '#10b98114' : 'transparent',
+                          boxShadow: cfg.model === name ? '0 0 10px #10b98133' : undefined,
+                        }}
+                      >
+                        {name}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
 
             {/* URL */}

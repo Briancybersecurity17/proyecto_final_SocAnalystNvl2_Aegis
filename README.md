@@ -308,12 +308,14 @@ la app **no se rompe**: reintenta sola y, si persiste, el informe cae al motor
 local hasta que la cuota se renueva.
 
 Cualquier proveedor compatible con OpenAI funciona cambiando **API URL** y
-**Modelo** en el mismo panel (el desplegable lista los modelos de tu cuenta;
-los chips **Recomendados** marcan los gratuitos de Groq: `gpt-oss-120b`
-—mejor calidad, por defecto—, `gpt-oss-20b` —más rápido—, `qwen3.8-27b`
-—buen español— y `gpt-oss-safeguard-20b` —con filtro de seguridad y cuota
-baja). No hay modelos especializados en ciberseguridad en Groq: la calidad
-analítica la aportan los prompts y la base de conocimiento de AEGIS.
+**Modelo** en el mismo panel. El campo es **texto libre** (acepta cualquier ID
+de modelo) y debajo lo seleccionás con **chips**: la fila **Recomendados
+(gratis)** trae los gratuitos de Groq — `gpt-oss-120b` —mejor calidad, por
+defecto—, `gpt-oss-20b` —más rápido—, `qwen3.8-27b` —buen español— y
+`gpt-oss-safeguard-20b` —con filtro de seguridad y cuota baja—, y si tu
+cuenta trae más modelos aparecen como **Otros modelos del proveedor**. No hay
+modelos especializados en ciberseguridad en Groq: la calidad analítica la
+aportan los prompts y la base de conocimiento de AEGIS.
 También podés configurarlo por variables de entorno (ver *Configuración por
 entorno* más abajo).
 
