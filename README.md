@@ -6,8 +6,9 @@ cuatro niveles con justificación, y genera un **informe técnico en PDF** con
 hallazgos, evidencias y plan de acción. Incluye asistente IA con recuperación
 (RAG) sobre tus propios registros y mapeo MITRE ATT&CK.
 
-> Sin integración con Microsoft Sentinel (requisito de la consigna). Todo el análisis se
-> realiza sobre los registros que tú importas, sin inventar hallazgos.
+Fue creada como **proyecto final del bootcamp de Analista SOC Nivel 2**. Todo el
+análisis se realiza sobre los registros que tú importas: la IA solo redacta a
+partir de cifras ya calculadas, nunca inventa hallazgos.
 
 ---
 
@@ -66,7 +67,7 @@ aegis/
 │  │  └─ attack_cards.json    # 15 fichas de ataque con sus reglas evaluables
 │  ├─ eval/                   # harness de evaluación: fixtures + 24 casos + scoring
 │  ├─ scripts/                # build_kb.py, eval_rag.py y benches de latencia
-│  ├─ tests/                  # pytest: 541 tests en 28 archivos
+│  ├─ tests/                  # pytest: 552 tests en 28 archivos
 │  └─ requirements.txt
 └─ frontend/                  # React + Vite + TypeScript (puerto 5300)
    ├─ index.html
@@ -90,7 +91,7 @@ aegis/
          ├─ ReportGenerator.tsx
          ├─ AssistantChat.tsx / ReferenceBlock + FeedbackControl (corrección del analista)
          ├─ AttackCorrelations.tsx  # técnicas ATT&CK ancladas a Event_ID observados
-         ├─ AttackCandidates.tsx    # fichas candidatas: aprobar / rechazar (fase 3)
+         ├─ AttackCandidates.tsx    # fichas candidatas: aprobar / rechazar
          ├─ AiOptions.tsx           # panel del LLM + memoria de criterio aprendido
          └─ TypingTitle.tsx
 ```
@@ -107,21 +108,53 @@ python -m venv .venv
 pip install -r requirements.txt
 
 # OPCIONAL – habilita el índice semántico (RAG) del asistente
-pip install -r requirements-rag.txt
+pip install -r ../requirements-rag.txt    # requirements-rag.txt está en la raíz
 
-uvicorn backend.main:app --host 127.0.0.1 --port 8500   # desde la raíz del proyecto
+cd ..                            # volvé a la raíz del proyecto
+uvicorn backend.main:app --host 127.0.0.1 --port 8500
 
 # 2) Frontend (Node 20+) — http://localhost:5300
-cd ../frontend
+cd frontend
 npm install
 npm run dev
 ```
 
-Abrí **http://localhost:5300** → *Carga de archivos* → seleccioná el Excel
-(`SOC_L2_Logs_Ampliados_Multiples_Incidentes.xlsx`) → navegá por Dashboard,
-Análisis de seguridad y Clasificación de riesgos → *Informe técnico* → **Descargar informe PDF**.
+Abrí **http://localhost:5300** → *Carga de archivos* → seleccioná tu archivo
+`.xlsx` (para probar ya, el repo incluye una muestra de 715 filas en
+`backend/eval/fixtures/sample.xlsx`) → navegá por Dashboard, Análisis de
+seguridad y Clasificación de riesgos → *Informe técnico* → **Descargar informe PDF**.
 
 No se usan puertos adicionales: backend **8500**, frontend **5300**.
+
+---
+
+## Auto-chequeo: todo se comprueba solo
+
+No hay pasos manuales de configuración del RAG ni de Chroma: al usar la app
+verifica sola que tenga todo para trabajar.
+
+- **Al arrancar el backend** se comprueban las dependencias y se precarga en
+  segundo plano lo que haga falta: índice semántico (RAG), base de
+  conocimiento ATT&CK, reranker y análisis anteriores. La cabecera muestra el
+  estado real (**punto verde = backend conectado**).
+- **Primera ejecución:** si el modelo de embeddings no está en tu PC, se
+  descarga solo desde Hugging Face (~470 MB) y queda en caché. Si no hay red,
+  se reintenta en la próxima consulta.
+- **Si falta `chromadb` o `sentence-transformers`** (son opcionales), el
+  backend lo detecta y avisa **«RAG desactivado»**: el asistente sigue
+  funcionando con búsqueda léxica. **La app nunca falla por el RAG.**
+- **Al subir un Excel:** los eventos se indexan automáticamente en un hilo
+  aparte; el banner del asistente avisa «Indexando…» hasta «Recuperación
+  híbrida activa». No hay que tocar nada.
+- **Si el índice se pierde** (p. ej. borraste la caché), el backend lo detecta
+  y **relanza la indexación solo**, sin bloquear la consulta: mientras
+  responde con léxica y lo avisa en el propio texto.
+- **La IA remota es opcional:** sin API key configurada, el informe y el
+  asistente usan el motor local. Podés verificar el proveedor cuando quieras
+  con **Opciones IA → Probar conexión**.
+
+En resumen: instalás las dependencias, arrancás los dos servidores y la app
+queda lista; todo lo demás (índice, cachés, estados) se resuelve en el uso.
 
 ---
 
@@ -198,6 +231,7 @@ Recorrido completo, de la carga del Excel al PDF. La navegación es por el
 - **Motor de IA**: endpoint compatible con OpenAI (Groq por defecto), modelo,
   **API key**, temperature, timeout y on/off — aplica al instante, sin
   reiniciar. Botón **Probar conexión** para verificar latencia real.
+  *¿De dónde saco la key?* Ver **Configurar la IA: obtener tu API key**.
 - **Parámetros de generación** y **retención de datos**.
 - **Memoria de criterio**: estado de los ejemplos few-shot, con opción de
   vaciarla.
@@ -226,6 +260,31 @@ Recorrido completo, de la carga del Excel al PDF. La navegación es por el
 
 ---
 
+## Manejo de datos (transparencia)
+
+**Todo vive en tu equipo.** No hay servidores propios, telemetría ni cuentas:
+
+| Qué | Dónde queda | ¿Sale de tu equipo? |
+|---|---|---|
+| El Excel que importás y todos los análisis | `backend/data/analyses/<id>/` (disco local, en `.gitignore`) | **No** |
+| Índice RAG (ChromaDB) y base de conocimiento | `backend/data/` local | **No** — el modelo de embeddings corre en tu PC |
+| API key y ajustes de la IA | `backend/data/ai_config.json` (local, en `.gitignore`) | Solo viaja a tu proveedor de IA como `Authorization: Bearer` |
+| Preferencias de la interfaz (sección activa, chat) | `localStorage` / `sessionStorage` del navegador (`aegis.*`) | **No** |
+| Configuración para el LLM (informe y asistente) | — | **Sí, al proveedor que vos configures** (Groq por defecto): estadísticas ya calculadas, evidencias de los eventos recuperados y tu pregunta. **Nunca el archivo Excel completo ni nada más** |
+
+- La IA solo **redacta sobre cifras ya calculadas** por el backend: no recibe
+  registros crudos en bloque ni puede inventar hallazgos (cada Log_ID citado se
+  valida contra tus datos antes de mostrarse).
+- **Sin configurar la IA remota, nada sale de tu equipo**: informe, asistente
+  y clasificación funcionan igual con el motor local.
+- Únicas conexiones externas de la app: tu proveedor de IA (si lo activás) y
+  Hugging Face **la primera vez** que se descarga el modelo de embeddings
+  (~470 MB, queda en caché local). Podés borrar los análisis desde *Carga de
+  archivos* (botón **BORRAR**) y acotar cuánto tiempo se conservan en
+  *Opciones IA* → retención.
+
+---
+
 ## Seguridad: claves API
 
 **Ninguna clave API se sube al repositorio.** El proyecto está limpio de
@@ -241,6 +300,34 @@ secretos y así se mantiene:
 
 **Si alguna vez pegaste una key real en un commit:** rotala inmediatamente en
 el proveedor (borrar el commit no basta — el historial de git la conserva).
+
+---
+
+## Configurar la IA: obtener tu API key
+
+La app funciona **sin API key** (motor determinista), pero para que la IA remota
+redacte informes y respuestas necesitás una. La más sencilla y gratis es **Groq**:
+
+1. Entrá a **https://console.groq.com** y creá una cuenta (con Google o email).
+2. Menú **API Keys** → **Create API Key** → copiá la clave (empieza con
+   `gsk_…`). Se muestra **una sola vez**: guardala.
+3. En la app: **Opciones IA** → campo **API key del proveedor** → pegala →
+   **Guardar cambios**. Aplica al instante, sin reiniciar.
+4. Verificá con **Probar conexión**: muestra latencia real, modelo y proveedor.
+
+**Plan gratuito (Developer):** es de pago cero y alcanza con holgura para usar
+la app. Según la [documentación oficial de límites de Groq](https://console.groq.com/docs/rate-limits),
+para el modelo por defecto `openai/gpt-oss-120b` el plan libre da **~30
+peticiones/minuto, ~1.000/día y ~200.000 tokens/día**: un informe completo
+consume unos pocos miles de tokens, así que da para cientos de preguntas e
+informes al día. Los límites exactos de tu cuenta están en
+`console.groq.com/settings/limits`. Si llegás al tope, Groq responde `429` y
+la app **no se rompe**: reintenta sola y, si persiste, el informe cae al motor
+local hasta que la cuota se renueva.
+
+Cualquier proveedor compatible con OpenAI funciona cambiando **API URL** y
+**Modelo** en el mismo panel. También podés configurarlo por variables de
+entorno (ver *Configuración por entorno* más abajo).
 
 ---
 
@@ -282,8 +369,8 @@ determinista).
 
 ## Asistente IA con RAG («preguntar a los datos»)
 
-Nueva sección **Asistente IA (RAG)** en el sidebar: una consulta en lenguaje
-natural devuelve una respuesta con las evidencias recuperadas.
+La sección **Asistente IA (RAG)** del sidebar permite preguntar en lenguaje
+natural y obtener una respuesta con las evidencias recuperadas.
 
 | Pieza | Archivo | Qué hace |
 |---|---|---|
@@ -307,9 +394,9 @@ menor, instalá solo `chromadb` y el RAG usará el modelo ONNX por defecto.
 **Expansión de consulta ES→EN:** los logs están en inglés (`An account failed to
 log on`) y el analista pregunta en español. `rag_store.expand_query()` amplía la
 consulta con sinónimos técnicos («fuerza bruta» → `brute force failed logon
-attempts`) — solo la consulta, nunca los datos. Sin esto, «fuerza bruta» puntuaba
-0.091 y devolvía eventos 4688 irrelevantes; con expansión sube a 0.267 y
-recupera los Event ID 4625 reales del archivo.
+attempts`) — solo la consulta, nunca los datos. Sin esta ampliación, una
+consulta en español casi no puntuaba sobre los eventos en inglés y devolvía
+resultados irrelevantes.
 
 **Degradación elegante:** si `chromadb` no está instalado, el backend avisa
 (`RAG desactivado`) y el asistente funciona igualmente con búsqueda léxica.
@@ -326,14 +413,10 @@ distintos — todo calculado sobre los registros importados, `confidence: alta`
 y `mode: "aggregate"` en la respuesta. Las preguntas listado («¿qué eventos
 sospechosos hay?») siguen el camino normal con evidencia.
 
-**Autoreparación del índice:** el índice Chroma persiste en disco y se comparte
-con las suites de prueba, que purgan lo que no usan. Si `/ask` detecta que un
-análisis ya está hecho pero sus eventos no están indexados, **relanza la
-indexación en un hilo** (`_ensure_semantic_index` + registro en `_INDEX_TASKS`
-para no duplicar trabajo con la propia subida) **sin bloquear la petición**:
-mientras tanto responde con recuperación léxica y lo avisa en el propio texto
-(«El índice semántico local se está construyendo…»). Las consultas de
-agregación no lo necesitan: responden al instante.
+**Auto-reparación:** si el índice se pierde o un análisis quedó sin indexar,
+el backend lo detecta y lo reconstruye solo en segundo plano (ver
+*Auto-chequeo*). Las consultas de agregación no lo necesitan: responden al
+instante.
 
 Endpoints nuevos:
 
@@ -368,9 +451,8 @@ el prompt del modelo). Nunca afirma que una técnica haya ocurrido: eso solo lo
 deciden los registros importados.
 
 **Renumeraciones de MITRE:** el builder sigue las relaciones `revoked-by` del
-bundle (T1562 + T1562.001 → **T1685**, T1562.004 → **T1686**, T1070.001 →
-**T1685.005**) y conserva los IDs antiguos como `aliases`, así una búsqueda de
-«T1562.004» sigue resolviendo a la técnica vigente.
+bundle oficial y conserva los IDs antiguos como `aliases`, así una búsqueda de
+una técnica revocada sigue resolviendo a la vigente.
 
 ```bash
 python backend/scripts/build_kb.py            # regenera mitre_attack.json (usa la caché)
@@ -413,17 +495,10 @@ verdad, legible y editable a mano) + índice semántico en ChromaDB
 del RAG). Sin Chroma la recuperación cae a léxica. El JSON está en
 `.gitignore` porque es aprendizaje propio de cada máquina.
 
-**Prioridad deliberada del presupuesto:** el bloque few-shot se inyecta
-**antes** de la evidencia, pero se ajusta al espacio libre de la ventana del
-modelo (131072 tokens en `gpt-oss-120b`). Si el prompt ya desborda esa
-ventana, se inyectan **cero ejemplos**.
-Perder el few-shot cuesta estilo; perder el system prompt cuesta las reglas
-de no inventar Log_ID. Un plus nunca puede ser lo que rompa las
-instrucciones.
-
-**Anti-bucles:** una respuesta no se autovalida a sí misma, no se repite un
-ejemplo ya guardado, y se exige solape de términos ≥ 0,34 entre la consulta
-y la siguiente para considerar que el tema continuó.
+Los ejemplos se ajustan al espacio libre de la ventana del modelo: si el prompt
+ya la desborda, se inyectan **cero ejemplos** antes que sacrificar las reglas
+de no inventar `Log_ID`. Además, una respuesta no se autovalida a sí misma ni
+se repite un ejemplo ya guardado.
 
 ```bash
 GET  /api/feedback            # estado: total, positivos, correcciones, índice
@@ -433,7 +508,7 @@ DELETE /api/feedback          # vacía la memoria (no toca el modelo ni los dato
 
 ---
 
-## Fichas de ataque y aprendizaje con aprobación humana (fase 3)
+## Fichas de ataque y aprendizaje con aprobación humana
 
 El asistente no solo recupera registros: también decide **qué ficha de ataque**
 encaja con la pregunta y, cuando el catálogo no la cubre, propone una nueva —
@@ -510,12 +585,12 @@ python test_kb.py                                   # coherencia + búsqueda + r
 ```
 
 Comprueba: carga de los JSON → referencias cruzadas sin roturas → búsqueda
-semántica («fuerza bruta» → T1110, «ransomware» → T1486) → alias renumerados
-(T1562.004 → T1686) → referencia anclada a la evidencia (4625 → T1110) → IDs
+semántica («fuerza bruta» → T1110, «ransomware» → T1486) → alias de técnicas
+revocadas → referencia anclada a la evidencia (4625 → T1110) → IDs
 citados en la pregunta → bloque «Referencia técnica» en la respuesta →
 degradación sin Chroma.
 
-Suite unitaria (541 tests en 28 archivos: configuración del LLM, streaming
+Suite unitaria (552 tests en 28 archivos: configuración del LLM, streaming
 SSE, memoria de criterio few-shot, presupuesto de ventana, fichas de ataque,
 scoring/casos/runner del eval):
 
@@ -533,63 +608,18 @@ cd frontend && npx tsc --noEmit
 
 ## Evaluación del asistente (RAG+LLM)
 
-Harness reproducible que puntúa el asistente contra una muestra fija
-versionada (`backend/eval/fixtures/sample.xlsx`, 715 filas) con **verdad
-calculable por pandas** — sin juez LLM y sin respuestas doradas escritas a
-mano: los 24 casos de `backend/eval/cases.py` (agregados, conjuntos de
-eventos, negativas, recuperación y QA sobre evidencia) se calculan contra el
-propio Excel.
+El proyecto incluye un harness reproducible (`backend/eval/`) que puntúa el
+asistente contra una muestra fija versionada (715 filas) con **verdad
+calculable por pandas** — sin juez LLM ni respuestas escritas a mano: los 24
+casos (agregados, negativas, recuperación y QA sobre evidencia) se calculan
+contra el propio Excel. Compara el motor determinista contra el LLM y guarda
+cada corrida en `backend/eval/runs/` (ignorado por git).
 
 ```bash
 # desde la raíz del proyecto
-backend\.venv\Scripts\python.exe backend\scripts\eval_rag.py --motor determinista   # línea base barata (sin LLM)
-backend\.venv\Scripts\python.exe backend\scripts\eval_rag.py --motor ambos          # determinista + LLM y delta entre ambos
-backend\.venv\Scripts\python.exe backend\scripts\eval_rag.py --motor llm --contra backend\eval\runs\baseline.json
+backend\.venv\Scripts\python.exe backend\scripts\eval_rag.py --motor determinista   # línea base (sin LLM)
+backend\.venv\Scripts\python.exe backend\scripts\eval_rag.py --motor ambos          # determinista + LLM
 ```
-
-Garantías: entrada por `TestClient` al endpoint real `/ask`; la memoria del
-analista (`feedback.json`) y su colección semántica se redirigen a un
-temporal (jamás se lee ni se escribe la real) y el store aislado se **siembra
-desde un snapshot versionado** (`backend/eval/fixtures/fewshot_seed.json`),
-para que el diagnóstico de cobertura few-shot pueda discriminar sin romper el
-aislamiento; el índice RAG se espera o se reconstruye antes de puntuar
-(sin él la corrida mediría solo léxica); un caso que lance excepción se
-registra visible y no contamina el score; el guard del motor aborta si, con
-`--motor llm`, más del 30 % de los casos quedaron en el determinista (o si
-ningún caso de evidencia puntuó: el guard es fail-closed).
-Resultados por corrida en `backend/eval/runs/` (ignorado por git).
-
-Medida (muestra de 715 filas, `openai/gpt-oss-120b` vía Groq, temp 0.15, con el
-seed few-shot versionado activo; corrida del 5/11/2026, guardada en
-`backend/eval/runs/run-20261105-190832.json`): **determinista 58.4 % macro ·
-LLM 64.0 %** (Δ **+5.6**), con la categoría `report` incluida — **7/7 = 100 %
-en ambos motores** y `informe.source = llm` (5448 ms). El modelo gana en
-`evidence_qa` (33.3 → 66.7) y empata en `aggregate` (60.0), `filter_set`
-(57.1), `refusal` (33.3) y `retrieval` (66.7). Excluyendo `report`, el
-determinista marca **50.1 %** y el LLM **56.8 %**. Grounding: 0 % de respuestas
-rechazadas por el guard y 0 Log_ID inventados; 0 errores de caso. Latencia
-media del LLM 5563 ms (determinista 937 ms). Cobertura few-shot 61.5 % de los
-casos elegibles (8/13: `filter_set` 85.7 %, `evidence_qa` 66.7 %, `refusal`
-0 % — las negativas se resuelven sin prompt few-shot: la puerta de tema corta
-`ref-terremoto` y la ruta de fichas de ataque toma `ref-malware`/`ref-sqli`).
-Guards en verde: `motor_guard` (20 % de los casos de evidencia quedaron en el
-determinista, ≤ 30 %) y `determinista_guard` (ninguna pasada base usó el LLM).
-Corridas completas en `backend/eval/runs/`.
-
-> La corrida previa (29/10/2026, `qwen2.5:3b`, 48.7/49.5) no es comparable
-> línea a línea: además del cambio de modelo, entre ambas entraron la puerta
-> de tema (3/11) y la ruta de fichas de ataque (3-4/11), que enrutan 5 casos
-> al determinista por diseño (`fs-tarea-4698`, `ref-terremoto`, `ref-malware`,
-> `ref-sqli`, `eq-dc01`). Los 429 de Groq durante la corrida no degradaron el
-> resultado: `chat()` reintenta ante cuota y el guard del motor confirmó uso
-> real del LLM.
-
-> La comparación entre `--motor determinista` y `--motor llm` se sostiene
-> porque el aislamiento garantiza que ambas pasadas parten del mismo estado
-> (memoria del analista redirigida a un temporal con el mismo snapshot
-> sembrado, índice RAG reconstruido, `ai_config` nunca escrita) y de la misma
-> muestra (hash SHA-256 en el informe). El guard del motor aborta si el LLM
-> no se usó de verdad.
 
 ---
 
