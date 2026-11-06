@@ -260,7 +260,7 @@ Recorrido completo, de la carga del Excel al PDF. La navegación es por el
 
 ---
 
-## Manejo de datos (transparencia)
+## Manejo de datos
 
 **Todo vive en tu equipo.** No hay servidores propios, telemetría ni cuentas:
 
@@ -282,24 +282,6 @@ Recorrido completo, de la carga del Excel al PDF. La navegación es por el
   (~470 MB, queda en caché local). Podés borrar los análisis desde *Carga de
   archivos* (botón **BORRAR**) y acotar cuánto tiempo se conservan en
   *Opciones IA* → retención.
-
----
-
-## Seguridad: claves API
-
-**Ninguna clave API se sube al repositorio.** El proyecto está limpio de
-secretos y así se mantiene:
-
-- La key se ingresa desde **Opciones IA** y vive solo en
-  `backend/data/ai_config.json`, que está en `.gitignore` (nunca se commitea).
-- También están ignorados `.env` / `.env.local`, `feedback.json`,
-  `attack_cards_candidates.json` y los análisis (`backend/data/analyses/`).
-- En el código y el README solo aparecen **placeholders** (`gsk_…`).
-- Si preferís configurar por entorno, usá variables en tu shell
-  (`AI_API_KEY=…`), nunca un archivo versionado.
-
-**Si alguna vez pegaste una key real en un commit:** rotala inmediatamente en
-el proveedor (borrar el commit no basta — el historial de git la conserva).
 
 ---
 
@@ -326,8 +308,14 @@ la app **no se rompe**: reintenta sola y, si persiste, el informe cae al motor
 local hasta que la cuota se renueva.
 
 Cualquier proveedor compatible con OpenAI funciona cambiando **API URL** y
-**Modelo** en el mismo panel. También podés configurarlo por variables de
-entorno (ver *Configuración por entorno* más abajo).
+**Modelo** en el mismo panel (el desplegable lista los modelos de tu cuenta;
+los chips **Recomendados** marcan los gratuitos de Groq: `gpt-oss-120b`
+—mejor calidad, por defecto—, `gpt-oss-20b` —más rápido—, `qwen3.8-27b`
+—buen español— y `gpt-oss-safeguard-20b` —con filtro de seguridad y cuota
+baja). No hay modelos especializados en ciberseguridad en Groq: la calidad
+analítica la aportan los prompts y la base de conocimiento de AEGIS.
+También podés configurarlo por variables de entorno (ver *Configuración por
+entorno* más abajo).
 
 ---
 
@@ -345,10 +333,7 @@ registros (estadísticas + evidencias).
   (endpoint, API key, modelo, `temperature`, `timeout`, on/off) y **aplica al
   instante, sin reiniciar**: el backend relee `backend/data/ai_config.json`
   en la próxima llamada. El botón **Probar conexión** mide latencia real
-  contra el mismo endpoint que usaría la app. El proyecto es 100% cloud: no
-  hay soporte de Ollama local ni parámetros de VRAM (`keep_alive`, `num_ctx`,
-  `num_predict`); la ventana de contexto y el tope de generación los aplica el
-  proveedor.
+  contra el mismo endpoint que usaría la app.
 - **Configuración por entorno (opcional):** las variables siguen aportando
   los valores por defecto si preferís configurar por entorno:
 
@@ -629,13 +614,3 @@ backend\.venv\Scripts\python.exe backend\scripts\eval_rag.py --motor ambos      
 - **Backend:** FastAPI, pandas, openpyxl, httpx, sse-starlette.
 - **RAG (opcional):** ChromaDB, sentence-transformers (multilingüe, local y gratuito).
 - **LLM (opcional):** proveedor cloud compatible con OpenAI (Groq por defecto: `openai/gpt-oss-120b`). Un reranker cross-encoder (`ms-marco-MiniLM-L6-v2`, local) reordena los candidatos antes de armar el prompt.
-
----
-
-## .gitignore
-
-En la raíz ya está creado e ignora: `node_modules/`, `dist/`, `.vite/`, **`.env*`**,
-`.venv/`, `__pycache__/`, bases de datos, logs, archivos de editor/sistema,
-**`backend/data/ai_config.json`** (donde vive tu API key), `feedback.json`,
-`attack_cards_candidates.json`, `backend/data/analyses/`, el índice RAG y la
-caché de la KB. Ningún secreto ni dato de ejecución entra al repositorio.

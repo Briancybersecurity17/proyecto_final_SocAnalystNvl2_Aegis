@@ -21,6 +21,23 @@ const detailOf = (err: unknown): string => {
 type SaveState = 'idle' | 'saving' | 'saved'
 
 /**
+ * Modelos de texto del plan gratuito de Groq recomendados para este panel.
+ * Groq no ofrece modelos especializados en ciberseguridad: la calidad
+ * analítica la aportan los prompts y la base de conocimiento de AEGIS.
+ * Estos son los chat models del plan libre con mejor relación
+ * calidad/velocidad/idioma.
+ */
+const RECOMMENDED_MODELS = [
+  { id: 'openai/gpt-oss-120b', label: 'gpt-oss-120b', note: 'Mejor calidad · por defecto' },
+  { id: 'openai/gpt-oss-20b', label: 'gpt-oss-20b', note: 'Más rápido · gratis también' },
+  { id: 'qwen/qwen3.8-27b', label: 'qwen3.8-27b', note: 'Buen multilingüe (español)' },
+  { id: 'openai/gpt-oss-safeguard-20b', label: 'safeguard-20b', note: 'Con filtro de seguridad · cuota baja (3 req/min)' },
+] as const
+
+/** Catálogo del proveedor: se ocultan modelos que no generan texto (audio, TTS y guardrails). */
+const NON_CHAT_MODEL = /whisper|orpheus|prompt-guard/i
+
+/**
  * Panel «Opciones IA»: conexión con el proveedor cloud (endpoint compatible
  * con OpenAI: Groq, etc.), modelo y parámetros de generación.
  *
@@ -228,10 +245,34 @@ const AiOptions: React.FC = () => {
                 spellCheck={false}
               />
               <datalist id="ai-models">
-                {(status?.models ?? []).map((m) => (
-                  <option key={m.name} value={m.name} />
-                ))}
+                {(status?.models ?? [])
+                  .filter((m) => !NON_CHAT_MODEL.test(m.name))
+                  .map((m) => (
+                    <option key={m.name} value={m.name} />
+                  ))}
               </datalist>
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                <span className="hud-label mr-1">Recomendados (gratis):</span>
+                {RECOMMENDED_MODELS.map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => patch({ model: m.id })}
+                    title={m.note}
+                    className={`chip transition-colors ${
+                      cfg.model === m.id
+                        ? 'text-emerald-400'
+                        : 'text-[var(--text-dim)] hover:text-sky-300'
+                    }`}
+                    style={{
+                      background: cfg.model === m.id ? '#10b98114' : 'transparent',
+                      boxShadow: cfg.model === m.id ? '0 0 10px #10b98133' : undefined,
+                    }}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 {remoteUp && selectedModel && (
                   <span className="chip text-emerald-400" style={{ background: '#10b98114' }}>
