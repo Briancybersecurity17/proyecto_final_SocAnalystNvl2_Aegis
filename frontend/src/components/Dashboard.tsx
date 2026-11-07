@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useCallback, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { SummaryCard } from './SummaryCard'
 import { DashboardSection } from './DashboardSection'
@@ -104,6 +104,28 @@ const Dashboard: React.FC = () => {
   // aceptada).
   const activeHosts = filters.facets['Hostname'] ?? []
   const focusHost = activeHosts.length === 1 ? activeHosts[0] : null
+
+  // Ancho real (px) de la barra «Reparto por nivel»: la etiqueta interna de
+  // cada segmento solo se pinta si cabe de verdad. Se mide con ResizeObserver
+  // en lugar de estimar por porcentaje, porque el ancho del texto es fijo y
+  // el del contenedor no: en una pantalla angosta un 14% no aloja «CRÍTICO
+  // 13.6%» y la palabra quedaba cortada a la mitad. Callback ref (no effect
+  // con []) porque la sección puede montarse después (resumen sin
+  // risk_levels) o desaparecer al cargar otro archivo.
+  const levelBarObserverRef = useRef<ResizeObserver | null>(null)
+  const [levelBarWidth, setLevelBarWidth] = useState(0)
+  const attachLevelBar = useCallback((el: HTMLDivElement | null) => {
+    levelBarObserverRef.current?.disconnect()
+    levelBarObserverRef.current = null
+    if (!el) return
+    const observer = new ResizeObserver(entries => {
+      const width = entries[0]?.contentRect.width ?? 0
+      // Micro-ajustes de layout: por debajo de 1 px no se re-renderiza.
+      setLevelBarWidth(prev => (Math.abs(prev - width) < 1 ? prev : width))
+    })
+    observer.observe(el)
+    levelBarObserverRef.current = observer
+  }, [])
 
   if (!summary || !summaryNoLevel || !summaryNoHosts) {
     return (
@@ -883,24 +905,53 @@ const Dashboard: React.FC = () => {
                     </span>
                   </div>
 
-                  {/* Reparto por nivel: barra compacta y clicable */}
+                  {/* Reparto por nivel: barra compacta y clicable.
+                      · La etiqueta interna se mide contra el ancho real del
+                        segmento: «NOMBRE %» si cabe, solo «%» si cabe, y nada
+                        si no — nunca corta una palabra a la mitad ni envuelve
+                        a dos renglones (antes «CRÍTICO 14%» se partía y se
+                        pisaba con los segmentos vecinos).
+                      · La micro-leyenda inferior da recuento y % exactos de
+                        los 4 niveles y sirve de target clicable para los
+                        segmentos de pocos píxeles (ALTO y MEDIO), casi
+                        imposibles de pulsar dentro de la barra. */}
                   <p className="hud-label mb-1.5">
                     Reparto por nivel — pulsá un segmento para filtrar
                   </p>
-                  <div className="mb-5 flex h-9 gap-px border border-hud-soft bg-[var(--bg-void)]">
+                  <div
+                    ref={attachLevelBar}
+                    className="mb-2 flex h-9 gap-px border border-hud-soft bg-[var(--bg-void)]"
+                  >
                     {severityData.map(item => {
                       const active = filters.level === item.level
                       const dimmed = filters.level !== '' && !active
-                      const share = rowsNoLevel > 0 ? (item.value / rowsNoLevel) * 100 : 0
+                      // Ancho real del segmento: flexBasis 0 + flexGrow value
+                      // reparten el contenedor en proporción a los registros.
+                      const segWidth =
+                        levelBarWidth > 0 && rowsNoLevel > 0
+                          ? (item.value / rowsNoLevel) * levelBarWidth
+                          : 0
+                      const pctStr = pct(item.value, rowsNoLevel)
+                      const fullLabel = `${item.name} ${pctStr}%`
+                      // JetBrains Mono 10.5px + tracking-wide ≈ 6.6 px por
+                      // carácter; 12 px de margen para no tocar el borde.
+                      const fits = (text: string): boolean =>
+                        segWidth >= text.length * 6.6 + 12
+                      const label =
+                        item.value > 0
+                          ? fits(fullLabel)
+                            ? fullLabel
+                            : fits(pctStr)
+                              ? `${pctStr}%`
+                              : ''
+                          : ''
                       return (
                         <button
                           key={item.level}
                           type="button"
                           aria-pressed={active}
                           aria-label={`${item.name}: ${fmtCount(item.value)} registros`}
-                          title={`${item.name}: ${fmtCount(item.value)} registros (${share.toFixed(
-                            1,
-                          )}%) — ${
+                          title={`${item.name}: ${fmtCount(item.value)} registros (${pctStr}%) — ${
                             active ? 'quitar el filtro de nivel' : 'filtrar por este nivel'
                           }`}
                           onClick={() => toggleLevel(item.level)}
@@ -911,15 +962,64 @@ const Dashboard: React.FC = () => {
                             background: active
                               ? LEVEL_COLORS[item.level]
                               : `${LEVEL_COLORS[item.level]}2e`,
-                            boxShadow: active ? `0 0 12px ${LEVEL_COLORS[item.level]}` : undefined,
+                            boxShadow: active
+                              ? `0 0 12px ${LEVEL_COLORS[item.level]}`
+                              : undefined,
                           }}
-                          className={`overflow-hidden border-r border-[#050212] font-mono text-[10.5px] font-bold uppercase tracking-wide transition-all duration-200 last:border-r-0 hover:opacity-100 ${
+                          className={`overflow-hidden whitespace-nowrap border-r border-[#050212] p-0 font-mono text-[10.5px] font-bold uppercase tracking-wide transition-all duration-200 last:border-r-0 hover:opacity-100 ${
                             dimmed ? 'opacity-40' : 'opacity-100'
                           } ${active ? 'text-[#050212]' : 'text-[var(--text)]'}`}
                         >
-                          {item.value > 0
-                            ? `${item.name} ${share < 10 ? share.toFixed(1) : Math.round(share)}%`
-                            : item.name}
+                          {label}
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  {/* Micro-leyenda del reparto: cifras exactas (recuento y %)
+                      de los 4 niveles, siempre visibles — es la fuente de
+                      verdad de la barra y el modo de filtrar por un nivel
+                      cuyo segmento no cabe texto. */}
+                  <div className="mb-5 flex flex-wrap gap-x-4 gap-y-1.5">
+                    {severityData.map(item => {
+                      const active = filters.level === item.level
+                      const dimmed = filters.level !== '' && !active
+                      const pctStr = pct(item.value, rowsNoLevel)
+                      return (
+                        <button
+                          key={item.level}
+                          type="button"
+                          aria-pressed={active}
+                          title={`${item.name}: ${fmtCount(item.value)} registros (${pctStr}%) — ${
+                            active ? 'quitar el filtro de nivel' : 'filtrar por este nivel'
+                          }`}
+                          onClick={() => toggleLevel(item.level)}
+                          className={`flex items-center gap-1.5 font-mono text-[11px] transition-all duration-200 hover:opacity-100 ${
+                            dimmed ? 'opacity-40' : 'opacity-100'
+                          }`}
+                        >
+                          <span
+                            className="inline-block h-2.5 w-2.5 shrink-0"
+                            style={{
+                              background: LEVEL_COLORS[item.level],
+                              boxShadow: active
+                                ? `0 0 8px ${LEVEL_COLORS[item.level]}`
+                                : undefined,
+                            }}
+                          />
+                          <span
+                            className={
+                              active
+                                ? 'font-bold text-[var(--text-bright)]'
+                                : 'text-[var(--text-dim)]'
+                            }
+                          >
+                            {item.name}{' '}
+                            <strong className="text-[var(--text-bright)]">
+                              {fmtCount(item.value)}
+                            </strong>{' '}
+                            · {pctStr}%
+                          </span>
                         </button>
                       )
                     })}
