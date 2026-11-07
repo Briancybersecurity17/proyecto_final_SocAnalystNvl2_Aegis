@@ -127,8 +127,10 @@ const Dashboard: React.FC = () => {
   if (filters.from || filters.to) {
     const from = filters.from ? dayMonth(filters.from) : null
     const to = filters.to ? dayMonth(filters.to) : null
+    // Día/hora único (clic en un solo tramo): de lo contrario el chip
+    // repetía «23/10–23/10» o «23/10 11:00–23/10 11:00».
     let label = ''
-    if (from && to) label = `${from}\u2013${to}`
+    if (from && to) label = from === to ? from : `${from}\u2013${to}`
     else if (from) label = `desde ${from}`
     else if (to) label = `hasta ${to}`
     activeChips.push({ key: 'range', label, onRemove: () => filters.setRange(null, null) })

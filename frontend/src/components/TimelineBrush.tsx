@@ -279,7 +279,13 @@ export const TimelineBrush: React.FC = () => {
             {/* Etiquetas de los extremos de la ventana confirmada con
                 `dayMonth`. Van en un ReferenceArea posterior a las barras
                 (relleno transparente) para quedar pintadas por encima: el
-                relleno va antes, por detrás. */}
+                relleno va antes, por detrás.
+                · Tramo único: sin etiqueta — la región azul ya marca la
+                  selección y el eje inferior muestra la misma hora; pintarla
+                  repetía el dato tres veces (izquierda, derecha y eje).
+                · Ventana real: extremos en cian brillante con halo oscuro
+                  (paint-order) para que se lean encima de cualquier barra;
+                  el gris tenue anterior quedaba ilegible sobre el verde/rojo. */}
             {rangeLabels.length > 0 && (
               <ReferenceArea
                 x1={rangeLabels[0]}
@@ -292,13 +298,23 @@ export const TimelineBrush: React.FC = () => {
                     // la variante polar, que aquí no aplica).
                     const { x = 0, y = 0, width = 0 } =
                       (props.viewBox as { x?: number; y?: number; width?: number } | undefined) ?? {}
+                    const first = dayMonth(rangeLabels[0])
+                    const last = dayMonth(rangeLabels[rangeLabels.length - 1])
+                    if (first === last) return null
                     return (
-                      <g fontSize={10} fill="var(--text-dim)" style={{ fontFamily: 'var(--font-mono)' }}>
+                      <g
+                        fontSize={11}
+                        fill="#bfefff"
+                        stroke="rgba(10,5,24,0.9)"
+                        strokeWidth={3}
+                        paintOrder="stroke"
+                        style={{ fontFamily: 'var(--font-mono)' }}
+                      >
                         <text x={x + 4} y={y + 12}>
-                          {dayMonth(rangeLabels[0])}
+                          {first}
                         </text>
                         <text x={x + width - 4} y={y + 12} textAnchor="end">
-                          {dayMonth(rangeLabels[rangeLabels.length - 1])}
+                          {last}
                         </text>
                       </g>
                     )
