@@ -606,7 +606,10 @@ _REPORT_USER_PROMPT = (
     "severity_mapping. Separa CADA paso con un salto de línea "
     "real (\\n) y numéralo como «1. », «2. »…: el informe los pinta como "
     "párrafos aparte y sin salto de línea se leen pegados.\n"
-    "  - correlation: la PRIMERA IP de suspicious_by_ip con SU conteo de eventos, "
+    "  - correlation: la PRIMERA IP de suspicious_by_ip —esa lista viene ordenada "
+    "por MAYOR ALCANCE (hosts), no por volumen: la primera IP es la que llega a "
+    "más hosts, NO la de más eventos, por eso redactala como «mayor alcance» o "
+    "«más hosts», NUNCA como «más eventos»— con SU conteo de eventos y hosts, "
     "tal como figura en DATOS; y SIEMPRE que behavior_patterns traiga entradas, "
     "cita al menos UN patrón conductual COMPLETO: quién (la IP o el usuario del "
     "patrón), qué patrón es y SU cifra exacta de DATOS — p. ej. una IP presente "
@@ -635,7 +638,7 @@ _REPORT_USER_PROMPT = (
     "  - Sin claves internas: los nombres de los datos de DATOS (p. ej. "
     "suspicious_by_ip, behavior_patterns, event_id_counts, severity_mapping, "
     "multi_event_ip, brute_force) son etiquetas del sistema y NO se escriben "
-    "en la prosa: narra «la primera IP con más eventos sospechosos», «los "
+    "en la prosa: narra «la IP de origen con mayor alcance», «los "
     "patrones conductuales», «el mapeo de severidad»… (los nombres de columna "
     "del archivo, p. ej. Event_ID, sí se citan tal cual).\n"
     "  - Sin inventar tooling: es un archivo importado, no un SIEM en vivo; no "
@@ -1476,6 +1479,30 @@ def _rule_required(field: str, text: str, ctx: dict) -> List[str]:
                 "combinación IP + host + evento repetida o un usuario "
                 "presente en varios hosts)"
             )
+        # Superlativo «más eventos»: solo puede nombrar al argmax de events.
+        # suspicious_by_ip viene ordenado por hosts (alcance), de modo que una
+        # frase como «la IP con más eventos es X» es FALSA si X no encabeza
+        # events — el error que dictó este chequeo. Regla estrecha a propósito:
+        # se revisa solo la frase que usa el superlativo, no toda la prosa, y
+        # un falso positivo degrada bien (reintento → fallback determinista,
+        # que ya redacta «mayor alcance»). En este corpus el legítimo no cita
+        # «más eventos» salvo para nombrar al propio máximo.
+        def _ev(entry: Dict[str, Any]) -> int:
+            try:
+                return int(entry.get("events") or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        top_events = max(entries, key=_ev, default=None)
+        if top_events:
+            for sentence in re.split(r"(?<=[.!?])\s+", norm):
+                if "mas eventos" in sentence and str(top_events["ip"]) not in sentence:
+                    reasons.append(
+                        f"«más eventos» solo corresponde a {top_events['ip']} "
+                        f"({_num(_ev(top_events))}): para {entries[0]['ip']} "
+                        "redactá «mayor alcance» o «más hosts», no «más eventos»"
+                    )
+                    break
     elif field == "methodology":
         matched = sum(1 for pattern in _METHOD_MARKERS if re.search(pattern, norm))
         if matched < 2:
