@@ -36,6 +36,10 @@ backend/data/attack_cards_candidates.json
 # ----- Estado interno de las herramientas de agente -----
 .superpowers/
 
+# ----- Planificación interna local (specs, planes TDD y notas del flujo de trabajo) -----
+# Se trabaja en local con el asistente; no forma parte de la app que usa quien clona.
+docs/superpowers/
+
 # ----- OS / editor files -----
 .DS_Store
 Thumbs.db
