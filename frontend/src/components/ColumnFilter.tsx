@@ -23,6 +23,13 @@ type ColumnFilterProps = {
   analysisId: string
   /** Columna del archivo (nombre literal, también la clave de la faceta). */
   column: string
+  /**
+   * Etiqueta visible en la cabecera. Por defecto se muestra el nombre literal
+   * de la columna («Source_IP»); quien ya tiene rótulos propios en la tabla
+   * («IP origen») pasa el suyo sin cambiar la clave de la faceta, que sigue
+   * siendo `column`.
+   */
+  label?: string
   /** Filtros vigentes: los conteos se sirven con el mismo contexto que /summary. */
   filters: FilterParams
   /** Valores marcados en ESTA columna (facets[column]). */
@@ -39,6 +46,7 @@ const PANEL_WIDTH = 264
 const ColumnFilter: React.FC<ColumnFilterProps> = ({
   analysisId,
   column,
+  label,
   filters,
   selected,
   onToggle,
@@ -161,14 +169,14 @@ const ColumnFilter: React.FC<ColumnFilterProps> = ({
           aria-expanded={open}
           title={
             active
-              ? `${column}: ${selected.length} valor(es) filtrando`
-              : `Filtrar por ${column}`
+              ? `${label ?? column}: ${selected.length} valor(es) filtrando`
+              : `Filtrar por ${label ?? column}`
           }
           className={`inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-[0.12em] transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-hud-line ${
             open || active ? 'text-hud-line' : 'text-hud-fg hover:text-white'
           }`}
         >
-          {column}
+          {label ?? column}
           <svg viewBox="0 0 10 6" className="h-1.5 w-2.5 shrink-0 fill-current" aria-hidden="true">
             <path d="M0 0l5 6 5-6z" />
           </svg>
@@ -186,7 +194,7 @@ const ColumnFilter: React.FC<ColumnFilterProps> = ({
           >
             <div className="border-b border-hud-soft px-3 py-2">
               <div className="hud-label mb-1.5 truncate" title={column}>
-                {column}
+                {label ?? column}
               </div>
               <input
                 type="text"

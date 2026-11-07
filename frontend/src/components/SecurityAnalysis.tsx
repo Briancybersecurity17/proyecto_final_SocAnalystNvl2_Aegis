@@ -1,9 +1,10 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useAnalysisStore } from '../store'
-import { getRows, RowsResponse } from '../api/client'
+import { FilterParams, getRows, RowsResponse } from '../api/client'
 import { DashboardSection } from './DashboardSection'
 import { EmptyState } from './EmptyState'
+import ColumnFilter from './ColumnFilter'
 import { ChartInsight, InsightList, selectionCells } from './ChartTools'
 import {
   AXIS_TICK,
@@ -40,6 +41,18 @@ const LEVEL_BADGE: Record<string, { color: string; bg: string }> = {
 /** Barras visibles por defecto en los gráficos de hosts/IPs (el resto se
  *  revela con el botón «ver los N restantes»). */
 const TOP_VISIBLE = 6
+
+/**
+ * Rótulos humanos de las columnas con desplegable. La CLAVE sigue siendo el
+ * nombre literal de la columna (es la que lee `parse_filters` del backend y
+ * la que viaja en la faceta); solo cambia lo que se muestra en pantalla.
+ */
+const FACET_LABELS: Record<string, string> = {
+  Source_IP: 'IP origen',
+  Hostname: 'Host',
+  Event_ID: 'Event ID',
+  Result: 'Resultado',
+}
 
 /**
  * «2026-10-23T07:46:08.123456» → «2026-10-23 07:46:08».
@@ -201,6 +214,9 @@ export const SecurityAnalysis: React.FC = () => {
   // que las dos secciones no se pisen.
   const [ipDetail, setIpDetail] = useState<FocusDetail | null>(null)
   const [hostDetail, setHostDetail] = useState<FocusDetail | null>(null)
+  // Petición en vuelo de la tabla: se cancela al cambiar de filtro o al
+  // desmontar para que una respuesta vieja no pinte filas viejas.
+  const rowsAbortRef = useRef<AbortController | null>(null)
   const ipAbortRef = useRef<AbortController | null>(null)
   const hostAbortRef = useRef<AbortController | null>(null)
   // Las listas de hosts/IPs viajan completas (hasta 50) pero se pintan de 6
@@ -214,6 +230,14 @@ export const SecurityAnalysis: React.FC = () => {
   // que cada chip enseñe su total real en lugar de un nombre a ciegas.
   const [levelFilter, setLevelFilter] = useState('')
   const [levelCounts, setLevelCounts] = useState<Record<string, number>>({})
+  // Filtros por columna de ESTA tabla (IP origen, Host, Event ID, Resultado):
+  // el mismo motor de facetas que los desplegables de la tabla del Dashboard,
+  // pero en estado LOCAL: acotar aquí no mueve nada del resto de la sección ni
+  // del Dashboard (mismo criterio que los chips de nivel de arriba).
+  const [facetFilter, setFacetFilter] = useState<Record<string, string[]>>({})
+  // Ancla del atajo «Ver estos eventos en la tabla»: el scroll baja hasta el
+  // listado acotado. Es ref porque no debe re-renderizar al cambiar.
+  const tableRef = useRef<HTMLDivElement | null>(null)
 
   /**
    * Cambia el filtro de nivel y vuelve a la página 1 en el MISMO handler.
@@ -231,8 +255,79 @@ export const SecurityAnalysis: React.FC = () => {
     setPage(1)
   }
 
+  /**
+   * Alterna un valor dentro de la faceta de una columna y vuelve a la
+   * página 1 en el MISMO handler (mismo motivo documentado en `pickLevel`:
+   * sin efecto intermedio que dispare una petición con la página vieja).
+   */
+  const toggleFacet = (column: string, value: string) => {
+    setFacetFilter(prev => {
+      const current = prev[column] ?? []
+      const next = current.includes(value) ? current.filter(v => v !== value) : [...current, value]
+      const copy = { ...prev }
+      if (next.length > 0) copy[column] = next
+      else delete copy[column]
+      return copy
+    })
+    setPage(1)
+  }
+
+  /** Vacía la faceta completa de una columna (botón «Limpiar» del panel). */
+  const clearFacet = (column: string) => {
+    setFacetFilter(prev => {
+      if (!prev[column]) return prev
+      const copy = { ...prev }
+      delete copy[column]
+      return copy
+    })
+    setPage(1)
+  }
+
+  /** Quita todos los filtros por columna de golpe (chip «Limpiar»). */
+  const clearAllFacets = () => {
+    setFacetFilter({})
+    setPage(1)
+  }
+
+  /**
+   * Baja el scroll de `main` hasta la tabla. `scrollIntoView` no sirve aquí:
+   * el contenedor con scroll es `main`, no la ventana, así que el offset se
+   * calcula a mano sobre su `scrollTop` (igual que al posicionar el resto).
+   */
+  const scrollToTable = useCallback(() => {
+    const el = tableRef.current
+    const main = el?.closest('main') ?? document.querySelector('main')
+    if (!el || !main) return
+    // -72 deja a la vista el título de la sección sobre la barra de filtros.
+    main.scrollTop = el.getBoundingClientRect().top + main.scrollTop - 72
+  }, [])
+
+  /**
+   * Atajo desde los gráficos de correlación: acota la tabla al elemento
+   * elegido (una IP o un host) y la trae a la vista. Reemplaza las facetas
+   * vigentes —«ver estos eventos» tiene que mostrar exactamente esos— y
+   * conserva el filtro de nivel, que sigue visible en sus chips. El detalle
+   * del gráfico se cierra: ya cumplió y el foco pasa a la tabla.
+   */
+  const filterTableBy = (column: string, value: string) => {
+    setFacetFilter({ [column]: [value] })
+    setPage(1)
+    setFocusIp(null)
+    ipAbortRef.current?.abort()
+    setIpDetail(null)
+    setFocusSuspHost(null)
+    hostAbortRef.current?.abort()
+    setHostDetail(null)
+    scrollToTable()
+  }
+
   const fetchSuspicious = useCallback(async () => {
     if (!analysisId || status !== 'done') return
+    // Cancela la anterior: un clic rápido entre desplegables no debe pintar
+    // filas de un filtro que ya cambió.
+    rowsAbortRef.current?.abort()
+    const ctrl = new AbortController()
+    rowsAbortRef.current = ctrl
     setLoading(true)
     try {
       setFetchError(null)
@@ -241,23 +336,30 @@ export const SecurityAnalysis: React.FC = () => {
         pageSize,
         suspicious: true,
         level: levelFilter || undefined,
+        filters: { facets: facetFilter },
+        signal: ctrl.signal,
       })
+      if (ctrl.signal.aborted) return
       setData(res)
     } catch {
+      if (ctrl.signal.aborted) return
       setData(null)
       setFetchError('No se pudieron cargar las filas sospechosas desde la API. Reintenta o revisa la conexión con el backend.')
     } finally {
-      setLoading(false)
+      if (!ctrl.signal.aborted) setLoading(false)
     }
-  }, [analysisId, status, page, levelFilter])
+  }, [analysisId, status, page, levelFilter, facetFilter])
 
   useEffect(() => {
     fetchSuspicious()
   }, [fetchSuspicious])
 
   // Conteos por nivel de los sospechosos (no del dataset entero): cuatro
-  // peticiones de UNA fila al montar. Si alguna falla, los chips siguen
-  // funcionando sin número — el total exacto lo ofrece la tabla al filtrar.
+  // peticiones de UNA fila al montar y de nuevo con cada cambio de faceta,
+  // para que los chips sigan siendo reales dentro del subconjunto filtrado
+  // (filtrando por una IP, «Crítico (N)» enseña los críticos de esa IP).
+  // Si alguna falla, los chips siguen funcionando sin número — el total
+  // exacto lo ofrece la tabla al filtrar.
   useEffect(() => {
     if (!analysisId || status !== 'done') return
     let cancelled = false
@@ -266,7 +368,13 @@ export const SecurityAnalysis: React.FC = () => {
       try {
         const respuestas = await Promise.all(
           niveles.map(nivel =>
-            getRows(analysisId, { page: 1, pageSize: 1, suspicious: true, level: nivel }),
+            getRows(analysisId, {
+              page: 1,
+              pageSize: 1,
+              suspicious: true,
+              level: nivel,
+              filters: { facets: facetFilter },
+            }),
           ),
         )
         if (cancelled) return
@@ -282,7 +390,37 @@ export const SecurityAnalysis: React.FC = () => {
     return () => {
       cancelled = true
     }
-  }, [analysisId, status])
+  }, [analysisId, status, facetFilter])
+
+  // Contexto de los desplegables de cabecera: los conteos de /facets se
+  // piden con los MISMOS filtros que las filas de la tabla (sospechosos +
+  // nivel + facetas). Memoizado para que la identidad solo cambie cuando
+  // cambie un valor de verdad (si no, el panel se refrescaría en cada render).
+  const filterParams: FilterParams = useMemo(
+    () => ({ suspicious: true, level: levelFilter || undefined, facets: facetFilter }),
+    [levelFilter, facetFilter],
+  )
+
+  /**
+   * Cabecera con desplegable para las columnas filtrables. Sin análisis
+   * cargado se queda en un `<th>` de texto: ColumnFilter necesita el id.
+   */
+  const facetHeader = (column: string, label: string) =>
+    analysisId && status === 'done' ? (
+      <ColumnFilter
+        analysisId={analysisId}
+        column={column}
+        label={label}
+        filters={filterParams}
+        selected={facetFilter[column] ?? []}
+        onToggle={value => toggleFacet(column, value)}
+        onClear={() => clearFacet(column)}
+      />
+    ) : (
+      <th scope="col" className="whitespace-nowrap">
+        {label}
+      </th>
+    )
 
   /**
    * Pide las filas sospechosas de una IP/host y guarda su desglose.
@@ -345,6 +483,7 @@ export const SecurityAnalysis: React.FC = () => {
   // huérfana escribiendo en un estado ya desmontado.
   useEffect(() => {
     return () => {
+      rowsAbortRef.current?.abort()
       ipAbortRef.current?.abort()
       hostAbortRef.current?.abort()
     }
@@ -357,6 +496,8 @@ export const SecurityAnalysis: React.FC = () => {
   }
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / pageSize)) : 1
+  // Facetas vigentes de esta tabla, listas para pintar el aviso de acotado.
+  const activeFacets = Object.entries(facetFilter)
   // En horizontal las IP se leen completas; se ordena por volumen para que la
   // comparación de arriba a abajo sea inmediata.
   const ipData = [...(summary.suspicious_by_ip ?? [])]
@@ -588,7 +729,8 @@ export const SecurityAnalysis: React.FC = () => {
         )}
 
         <p className="mt-2 font-mono text-[12px] text-[var(--text-dim)]">
-          Pulsá una barra para fijar la IP y ver su alcance completo.
+          Pulsá una barra para fijar la IP y ver su alcance completo; desde ahí,
+          «Ver estos eventos en la tabla» acota el listado inferior a esa IP.
         </p>
 
         <AnimatePresence mode="wait">
@@ -627,6 +769,10 @@ export const SecurityAnalysis: React.FC = () => {
               ]}
               lists={detailLists(ipDetail, 'Hosts impactados')}
               note={detailNote(ipDetail, 'esta IP')}
+              action={{
+                label: 'Ver estos eventos en la tabla',
+                onClick: () => filterTableBy('Source_IP', selectedIp.ip),
+              }}
               onClose={() => {
                 setFocusIp(null)
                 ipAbortRef.current?.abort()
@@ -694,7 +840,8 @@ export const SecurityAnalysis: React.FC = () => {
         )}
 
         <p className="mt-2 font-mono text-[12px] text-[var(--text-dim)]">
-          Pulsá una barra para fijar el host y ver cómo se reparte su actividad.
+          Pulsá una barra para fijar el host y ver cómo se reparte su actividad;
+          desde ahí, «Ver estos eventos en la tabla» acota el listado a ese host.
         </p>
 
         <AnimatePresence mode="wait">
@@ -732,6 +879,10 @@ export const SecurityAnalysis: React.FC = () => {
               ]}
               lists={detailLists(hostDetail, 'IPs de origen')}
               note={detailNote(hostDetail, 'este host')}
+              action={{
+                label: 'Ver estos eventos en la tabla',
+                onClick: () => filterTableBy('Hostname', selectedSuspHost.host),
+              }}
               onClose={() => {
                 setFocusSuspHost(null)
                 hostAbortRef.current?.abort()
@@ -749,7 +900,7 @@ export const SecurityAnalysis: React.FC = () => {
             {fetchError}
           </div>
         )}
-        <div className="mb-3 flex flex-wrap items-center gap-3">
+        <div ref={tableRef} className="mb-3 flex flex-wrap items-center gap-3">
           <span className="font-mono text-[12px] uppercase tracking-wider text-[var(--text-dim)]">
             Nivel
           </span>
@@ -806,6 +957,39 @@ export const SecurityAnalysis: React.FC = () => {
           </div>
         </div>
 
+        {/* Aviso de acotado: los desplegables marcan la cabecera, pero el
+            analista necesita ver sin buscar que la tabla está filtrada (y
+            poder quitar cada valor de un clic). */}
+        {activeFacets.length > 0 && (
+          <div className="mb-3 flex flex-wrap items-center gap-2 font-mono text-[12px]">
+            <span className="uppercase tracking-wider text-[var(--text-dim)]">Filtrando por</span>
+            {activeFacets.map(([column, values]) =>
+              values.map(value => (
+                <button
+                  key={`${column}:${value}`}
+                  type="button"
+                  onClick={() => toggleFacet(column, value)}
+                  title={`Quitar filtro ${FACET_LABELS[column] ?? column} = ${value}`}
+                  className="chip flex items-center gap-1.5 border border-hud-soft px-2 py-1 transition-colors hover:border-[#1fc8ff]"
+                >
+                  <span className="text-[var(--text-dim)]">
+                    {FACET_LABELS[column] ?? column}:
+                  </span>
+                  <span className="font-semibold text-[var(--text-bright)]">{value}</span>
+                  <span aria-hidden="true">✕</span>
+                </button>
+              )),
+            )}
+            <button
+              type="button"
+              onClick={clearAllFacets}
+              className="px-1 text-hud-line transition-colors hover:underline"
+            >
+              Limpiar
+            </button>
+          </div>
+        )}
+
         <div className="max-h-96 overflow-auto border border-hud-soft bg-inset/70">
           <table className="hud-table min-w-full">
             <caption className="sr-only">Eventos sospechosos identificados en el archivo</caption>
@@ -816,11 +1000,16 @@ export const SecurityAnalysis: React.FC = () => {
                     respuesta del RAG con la fila exacta sin buscar a ojo. */}
                 <th scope="col" className="whitespace-nowrap">Log ID</th>
                 <th scope="col" className="whitespace-nowrap">Timestamp</th>
-                <th scope="col" className="whitespace-nowrap">Host</th>
-                <th scope="col" className="whitespace-nowrap">Event ID</th>
-                <th scope="col" className="whitespace-nowrap">IP origen</th>
+                {/* AutoFilter estilo Excel en las columnas categóricas, igual
+                    que la tabla del Dashboard: la flechita ▾ abre los valores
+                    con su recuento. Log ID / Timestamp / Descripción /
+                    Justificación no la llevan (alta cardinalidad, no aportan
+                    para priorizar); «Nivel» ya tiene sus chips arriba. */}
+                {facetHeader('Hostname', 'Host')}
+                {facetHeader('Event_ID', 'Event ID')}
+                {facetHeader('Source_IP', 'IP origen')}
                 <th scope="col">Descripción</th>
-                {hasResult && <th scope="col" className="whitespace-nowrap">Resultado</th>}
+                {hasResult && facetHeader('Result', 'Resultado')}
                 <th scope="col" className="whitespace-nowrap">Nivel</th>
                 <th scope="col">Justificación</th>
               </tr>
@@ -880,7 +1069,9 @@ export const SecurityAnalysis: React.FC = () => {
               {data && !loading && data.rows.length === 0 && (
                 <tr>
                   <td colSpan={hasResult ? 9 : 8} className="px-3 py-6 text-center text-[var(--text-dim)]">
-                    No se encontraron eventos sospechosos
+                    {activeFacets.length
+                      ? 'Sin eventos sospechosos con los filtros aplicados'
+                      : 'No se encontraron eventos sospechosos'}
                   </td>
                 </tr>
               )}
@@ -890,7 +1081,15 @@ export const SecurityAnalysis: React.FC = () => {
 
         {/* Pagination */}
         <div className="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 font-mono text-[12px] text-[var(--text-dim)]">
-          <span className="max-w-md">{data ? `${data.total} eventos sospechosos` : ''}</span>
+          <span className="max-w-md">
+            {data
+              ? activeFacets.length
+                // Con faceta activa el total ya está acotado: sin el «de» el
+                // número parecía el del archivo entero.
+                ? `${data.total} de ${fmtCount(totalSuspicious)} eventos sospechosos`
+                : `${data.total} eventos sospechosos`
+              : ''}
+          </span>
           <div className="flex shrink-0 items-center gap-2">
             <button
               onClick={() => setPage(p => Math.max(1, p - 1))}

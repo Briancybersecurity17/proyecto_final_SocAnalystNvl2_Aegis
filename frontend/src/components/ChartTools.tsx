@@ -92,8 +92,14 @@ export const ChartInsight: React.FC<{
   rows?: InsightRow[]
   lists?: InsightList[]
   note?: string
+  /**
+   * Acción secundaria del panel, p. ej. «Ver estos eventos en la tabla»:
+   * acota el listado inferior al elemento seleccionado en el gráfico. Es un
+   * botón aparte del cierre (✕): no deselecciona, aplica el filtro y sigue.
+   */
+  action?: { label: string; onClick: () => void }
   onClose: () => void
-}> = ({ title, color, value, caption, rows = [], lists, note, onClose }) => (
+}> = ({ title, color, value, caption, rows = [], lists, note, action, onClose }) => (
   <motion.div
     initial={{ opacity: 0, y: 8 }}
     animate={{ opacity: 1, y: 0 }}
@@ -157,6 +163,12 @@ export const ChartInsight: React.FC<{
 
     {note && (
       <p className="mt-3 font-mono text-[12px] leading-relaxed text-[var(--text-dim)]">{note}</p>
+    )}
+
+    {action && (
+      <button type="button" onClick={action.onClick} className="btn-hud mt-3">
+        {action.label}
+      </button>
     )}
   </motion.div>
 )
