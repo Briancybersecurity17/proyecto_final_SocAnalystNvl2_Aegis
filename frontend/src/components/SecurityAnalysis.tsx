@@ -484,16 +484,21 @@ export const SecurityAnalysis: React.FC = () => {
                 }}
               />
               <Legend />
-              {LEVEL_ORDER.map((level, index) => (
+              {/* La entrada de estas series apiladas la gobierna CSS
+                  (.chart-stack-in): las 4 series comparten el mismo reloj y
+                  la pila crece desde la base como un solo bloque. El tween
+                  de Recharts corría uno por serie y la pila se veía
+                  ensamblarse hasta encajar, además de abrir con un frame
+                  sin barras. */}
+              {LEVEL_ORDER.map(level => (
                 <Bar
                   key={level}
                   dataKey={level}
                   name={LEVEL_LABELS[level]}
                   stackId="susp"
                   fill={LEVEL_BADGE[level]?.color ?? '#888'}
-                  isAnimationActive={chartMotion.isAnimationActive}
-                  animationDuration={chartMotion.duration}
-                  animationBegin={index * 40}
+                  isAnimationActive={false}
+                  className="chart-stack-in"
                 />
               ))}
             </BarChart>

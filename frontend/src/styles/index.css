@@ -46,6 +46,54 @@
   }
 }
 
+/**
+ * Entrada de las series apiladas del gráfico temporal de «Análisis de
+ * seguridad»: las cuatro series comparten este mismo reloj y escalan desde
+ * la base del viewBox (`transform-box: view-box`, origin abajo a la
+ * izquierda), de modo que la pila completa sube como un solo bloque y
+ * ningún segmento se despega ni «aterriza» al final — con la animación
+ * propia de Recharts cada serie corría su tween independiente y la pila se
+ * veía ensamblarse trozo a trozo, además de aparecer un frame sin barras
+ * justo al entrar.
+ *
+ * El selector es `g.chart-stack-in` a propósito: Recharts pasa el
+ * `className` del <Bar> tanto al <g> de la serie como a cada
+ * `path.recharts-rectangle`, y animar también los rects duplicaría la
+ * transformación (escala al cuadrado) dentro del <g> ya escalado.
+ *
+ * El arranque con opacidad 0 tapa el instante en que las barras todavía no
+ * existen (ResponsiveContainer midiendo el ancho del panel).
+ */
+@keyframes stack-grow {
+  from {
+    transform: scaleY(0.05);
+    opacity: 0;
+  }
+  to {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+g.chart-stack-in {
+  transform-box: view-box;
+  /**
+   * El origin va en la LÍNEA BASE del eje (donde nacen las barras), no en el
+   * bottom del viewBox: son 63 px (margin.bottom 8 + eje X 55 con AXIS_TICK).
+   * Así la pila crece desde el 0 exacto y ningún segmento se desplaza por
+   * debajo de la línea del eje durante la transición.
+   */
+  transform-origin: 0 calc(100% - 63px);
+  animation: stack-grow 0.5s cubic-bezier(0.16, 0.84, 0.44, 1) both;
+}
+
+/** Con «reducir movimiento» las barras aparecen ya puestas, sin crecer. */
+@media (prefers-reduced-motion: reduce) {
+  g.chart-stack-in {
+    animation: none;
+  }
+}
+
 /* La leyenda y las etiquetas de Recharts heredan la tipografía del HUD. */
 .recharts-legend-item-text,
 .recharts-label {
