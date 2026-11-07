@@ -117,6 +117,11 @@ const RiskClassification: React.FC = () => {
           const style = LEVEL_STYLES[lvl]
           const expanded = openLevel === lvl
           const glow = b.count > 0 && GLOW_LEVELS.includes(lvl)
+          // Valores ORIGINALES de Severity que se traducen a ESTE nivel: la
+          // tabla de correspondencia filtrada por nivel. Es el criterio que
+          // explica por qué estos registros cayeron aquí —el texto de
+          // justificación solo dice qué hay dentro (Event IDs, hosts)—.
+          const criterion = severityMapping.filter(m => m.level === lvl)
           return (
             <motion.div
               key={lvl}
@@ -177,26 +182,78 @@ const RiskClassification: React.FC = () => {
                     {b.justification}
                   </p>
 
+                  {/* Criterio: POR QUÉ estos registros están en este nivel.
+                      El texto de arriba describe el contenido (Event IDs,
+                      hosts); este dice la regla que los colocó aquí: los
+                      valores originales de Severity traducidos a este nivel.
+                      Es la MISMA correspondencia de la tabla de abajo, traída
+                      al nivel para que no haya que cruzarlas a mano. */}
+                  {b.count > 0 && criterion.length > 0 && (
+                    <>
+                      <h4 className="hud-label mt-4 mb-1">Criterio de clasificación</h4>
+                      <p className="font-mono text-[12.5px] leading-relaxed text-[var(--text)]">
+                        Severity original →{' '}
+                        <span className="font-semibold" style={{ color: style.color }}>
+                          {b.label}
+                        </span>
+                        {': '}
+                        {criterion.map(m => `«${m.raw}» ×${fmtCount(m.count)}`).join(' · ')}
+                      </p>
+                      <p className="mt-1 font-mono text-[11px] leading-relaxed text-[var(--text-dim)]">
+                        Misma regla de la tabla «Correspondencia de severidad»: catálogo exacto
+                        primero, después palabras clave y, sin evidencia, Bajo.
+                      </p>
+                    </>
+                  )}
+
                   {b.examples.length > 0 && (
                     <>
                       <h4 className="hud-label mt-4 mb-1">
                         Registros de ejemplo ({b.examples.length})
                       </h4>
                       <ul className="space-y-2">
-                        {b.examples.map((ex, idx) => (
-                          <li
-                            key={idx}
-                            className="border border-hud-soft bg-[var(--bg-void)] p-2 font-mono text-[12px]"
-                          >
-                            <div className="font-semibold text-hud-fg">
-                              {String(ex.Hostname ?? '—')} · Event {String(ex.Event_ID ?? '—')}
-                            </div>
-                            <div className="truncate text-[var(--text-dim)]" title={String(ex.Event_Description ?? '')}>
-                              {String(ex.Event_Description ?? '—')}
-                            </div>
-                            <div className="mt-1 italic text-[var(--text-dim)]">{String(ex._reason ?? '')}</div>
-                          </li>
-                        ))}
+                        {b.examples.map((ex, idx) => {
+                          // Severity original del registro: se pinta con el
+                          // color del nivel al que se traduce, para que se
+                          // vea de un vistazo «Warning → Crítico».
+                          const sevRaw = String(ex.Severity ?? '').trim()
+                          const sevLevel = sevRaw
+                            ? severityMapping.find(m => m.raw === sevRaw)?.level
+                            : undefined
+                          return (
+                            <li
+                              key={idx}
+                              className="border border-hud-soft bg-[var(--bg-void)] p-2 font-mono text-[12px]"
+                            >
+                              {/* Trazabilidad primero: con el Log_ID el
+                                  registro se puede volver a buscar en la
+                                  tabla y en el informe. */}
+                              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-[var(--text-dim)]">
+                                <span className="font-bold text-hud-line">
+                                  {String(ex.Log_ID ?? '—')}
+                                </span>
+                                {ex.Timestamp && <span>{String(ex.Timestamp)}</span>}
+                              </div>
+                              <div className="mt-0.5 flex flex-wrap items-center gap-2">
+                                <span className="font-semibold text-hud-fg">
+                                  {String(ex.Hostname ?? '—')} · Event {String(ex.Event_ID ?? '—')}
+                                </span>
+                                {sevRaw &&
+                                  (sevLevel ? (
+                                    <LevelChip level={sevLevel} label={sevRaw} />
+                                  ) : (
+                                    <span className="text-[10.5px] text-[var(--text-dim)]">
+                                      Severity: {sevRaw}
+                                    </span>
+                                  ))}
+                              </div>
+                              <div className="truncate text-[var(--text-dim)]" title={String(ex.Event_Description ?? '')}>
+                                {String(ex.Event_Description ?? '—')}
+                              </div>
+                              <div className="mt-1 italic text-[var(--text-dim)]">{String(ex._reason ?? '')}</div>
+                            </li>
+                          )
+                        })}
                       </ul>
                     </>
                   )}
