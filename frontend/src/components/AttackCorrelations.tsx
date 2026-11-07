@@ -1,10 +1,32 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { useAnalysisStore } from '../store'
-import { getAttackCorrelations, AttackCorrelations, BehaviorPatterns } from '../api/client'
+import {
+  getAttackCorrelations,
+  getRows,
+  AttackCorrelations,
+  BehaviorPatterns,
+  RowsResponse,
+} from '../api/client'
 import { DashboardSection } from './DashboardSection'
 import { EmptyState } from './EmptyState'
+import { LEVEL_LABELS } from '../charts'
 import { stagger, cardIn } from '../motion'
+
+/**
+ * Evidencia de un Event_ID: hasta 3 filas REALES del dataset, pedidas a /rows
+ * con la faceta del evento. Es lo único que respalda la ficha del glosario
+ * («4663 · Intento de acceso a un objeto»): el texto literal del registro.
+ * `suspiciousOnly` indica si se pidieron solo sospechosas (se intenta primero;
+ * sin ninguna, se vuelven a pedir sin ese filtro).
+ */
+type Evidence = {
+  rows: RowsResponse['rows']
+  total: number
+  suspiciousOnly: boolean
+  loading: boolean
+  error: boolean
+}
 
 /**
  * «Correlaciones ATT&CK»: el cruce determinista entre los Event_ID que existen
@@ -30,6 +52,12 @@ const AttackCorrelationsPanel: React.FC = () => {
   const [loading, setLoading] = useState(false)
   const [fetchError, setFetchError] = useState<string | null>(null)
   const [openEvent, setOpenEvent] = useState<string | null>(null)
+  // Evidencia por Event_ID, cacheada: se pide UNA vez al abrir el acordeón y
+  // queda para reabrirlo. Los controllers en vuelo se guardan en un Set para
+  // poder cancelarlos todos al desmontar (cada uno escribe en su propia clave,
+  // así que responder fuera de orden no pisa nada).
+  const [evidence, setEvidence] = useState<Record<string, Evidence>>({})
+  const evidenceAbortRef = useRef<Set<AbortController>>(new Set())
 
   const fetchCorrelations = useCallback(async (signal?: AbortSignal) => {
     if (!analysisId || status !== 'done') return
@@ -52,6 +80,84 @@ const AttackCorrelationsPanel: React.FC = () => {
     fetchCorrelations(controller.signal)
     return () => controller.abort()
   }, [fetchCorrelations])
+
+  /**
+   * Pide las filas REALES de un Event_ID con el motor de facetas de /rows
+   * (el mismo que usa la tabla de seguridad). Primero solo sospechosas: son
+   * las que sustentan el chip «N sospechosos» y traen su justificación; si el
+   * evento no tiene ninguna, se repite la petición sin el filtro para no
+   * dejar la ficha sin respaldo. `pageSize=3` es el techo que se muestra.
+   */
+  const fetchEvidence = useCallback(
+    async (eventId: string, signal: AbortSignal) => {
+      if (!analysisId) return
+      try {
+        const facets = { Event_ID: [eventId] }
+        let res = await getRows(analysisId, {
+          page: 1,
+          pageSize: 3,
+          suspicious: true,
+          filters: { facets },
+          signal,
+        })
+        let suspiciousOnly = true
+        if (res.total === 0) {
+          res = await getRows(analysisId, {
+            page: 1,
+            pageSize: 3,
+            filters: { facets },
+            signal,
+          })
+          suspiciousOnly = false
+        }
+        if (signal.aborted) return
+        setEvidence(prev => ({
+          ...prev,
+          [eventId]: {
+            rows: res.rows,
+            total: res.total,
+            suspiciousOnly,
+            loading: false,
+            error: false,
+          },
+        }))
+      } catch (err) {
+        // Cancelada al desmontar: no es un fallo que deba pintarse.
+        if (signal.aborted || (err as { name?: string })?.name === 'CanceledError') return
+        setEvidence(prev => ({
+          ...prev,
+          [eventId]: { rows: [], total: 0, suspiciousOnly: true, loading: false, error: true },
+        }))
+      }
+    },
+    [analysisId],
+  )
+
+  /**
+   * Abre/cierra la ficha de un Event_ID y, al abrir, carga su evidencia si
+   * aún no está (o ya está en vuelo: no se duplica la petición).
+   */
+  const toggleEvent = (eventId: string) => {
+    const next = openEvent === eventId ? null : eventId
+    setOpenEvent(next)
+    if (next && !evidence[next]) {
+      setEvidence(prev => ({
+        ...prev,
+        [eventId]: { rows: [], total: 0, suspiciousOnly: true, loading: true, error: false },
+      }))
+      const controller = new AbortController()
+      evidenceAbortRef.current.add(controller)
+      void fetchEvidence(eventId, controller.signal)
+    }
+  }
+
+  useEffect(() => {
+    const pending = evidenceAbortRef.current
+    return () => {
+      pending.forEach(controller => controller.abort())
+      pending.clear()
+    }
+  }, [])
 
   if (!analysisId || status !== 'done') {
     return (
@@ -396,12 +502,13 @@ const AttackCorrelationsPanel: React.FC = () => {
         <div className="divide-y divide-hud-soft">
           {eventEntries.map(entry => {
             const isOpen = openEvent === entry.id
+            const ev = evidence[entry.id]
             const totalLevels = Object.values(entry.levels).reduce((a, b) => a + b, 0)
             return (
               <div key={entry.id}>
                 <button
                   type="button"
-                  onClick={() => setOpenEvent(isOpen ? null : entry.id)}
+                  onClick={() => toggleEvent(entry.id)}
                   aria-expanded={isOpen}
                   className="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-hud-line/5"
                 >
@@ -426,6 +533,86 @@ const AttackCorrelationsPanel: React.FC = () => {
                       <span className="font-semibold text-[var(--text)]">Por qué importa:</span>{' '}
                       {entry.por_que_importa}
                     </p>
+
+                    {/* Evidencia: lo que dice el REGISTRO, no el glosario. Las
+                        fichas de arriba son conocimiento del marco; aquí se
+                        muestran las filas crudas del dataset que las respaldan
+                        (Log_ID, fecha, host, resultado y la descripción tal
+                        cual). Se pide al abrir, una vez por evento. */}
+                    <div className="mt-2 border-t border-hud-soft pt-2">
+                      <div className="hud-label mb-1.5">Evidencia del registro</div>
+                      {ev?.loading && (
+                        <p className="font-mono text-[11px] text-[var(--text-dim)]">
+                          Leyendo los registros de este evento…
+                        </p>
+                      )}
+                      {ev?.error && (
+                        <p className="font-mono text-[11px] text-[#f97316]">
+                          No se pudieron cargar los registros de este evento.
+                        </p>
+                      )}
+                      {ev && !ev.loading && !ev.error && (
+                        <>
+                          {ev.rows.length === 0 ? (
+                            <p className="font-mono text-[11px] text-[var(--text-dim)]">
+                              Este Event_ID no tiene registros en el dataset.
+                            </p>
+                          ) : (
+                            <ul className="space-y-1.5">
+                              {ev.rows.map((row, index) => (
+                                <li
+                                  key={`${String(row.Log_ID ?? 'row')}-${index}`}
+                                  className="border border-hud-soft bg-[var(--bg-panel)] p-2"
+                                >
+                                  <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[10.5px] text-[var(--text-dim)]">
+                                    <span className="font-bold text-hud-line">
+                                      {String(row.Log_ID ?? '—')}
+                                    </span>
+                                    {row.Timestamp != null && row.Timestamp !== '' && (
+                                      <span>{String(row.Timestamp)}</span>
+                                    )}
+                                    {row.Hostname != null && row.Hostname !== '' && (
+                                      <span>{String(row.Hostname)}</span>
+                                    )}
+                                    {row.Result != null && row.Result !== '' && (
+                                      <span>Resultado: {String(row.Result)}</span>
+                                    )}
+                                    {row.suspicious && (
+                                      <span
+                                        className="chip"
+                                        style={{ color: '#f97316', background: '#f973161a' }}
+                                      >
+                                        {LEVEL_LABELS[row.risk_level] ?? row.risk_level}
+                                      </span>
+                                    )}
+                                  </div>
+                                  {/* La descripción cruda: es la prueba de que
+                                      el evento dice lo que dice la ficha. */}
+                                  <p className="mt-1 text-[11.5px] leading-relaxed text-[var(--text)]">
+                                    {String(row.Event_Description ?? '—')}
+                                  </p>
+                                  {row.suspicious && row.risk_reason && (
+                                    <p className="mt-0.5 text-[10.5px] text-[var(--text-dim)]">
+                                      <span className="font-semibold text-[var(--text)]">
+                                        Por qué es sospechoso:
+                                      </span>{' '}
+                                      {row.risk_reason}
+                                    </p>
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                          <p className="mt-1.5 font-mono text-[10px] text-[var(--text-dim)]">
+                            Mostrando {ev.rows.length} de {ev.total}{' '}
+                            {ev.suspiciousOnly
+                              ? 'registros sospechosos'
+                              : 'registros'}{' '}
+                            de este evento en el dataset.
+                          </p>
+                        </>
+                      )}
+                    </div>
                     <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[10.5px] text-[var(--text-dim)]">
                       <span>
                         {totalLevels} registros
