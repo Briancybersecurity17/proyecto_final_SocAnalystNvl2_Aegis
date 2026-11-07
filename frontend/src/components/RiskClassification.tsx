@@ -230,14 +230,39 @@ const RiskClassification: React.FC = () => {
         </p>
 
         {/* Remate en lenguaje llano: la pregunta que la justificación
-            técnica no contesta —¿por qué ESTE nivel?—. El dato técnico de
-            arriba queda para quien lo quiera; esto es el cierre para
-            cualquier lector. */}
+            técnica no contesta —¿por qué ESTE nivel?—. Si la IA narró el
+            «porqué» (campo why, cacheado en el store) se pinta ese; sin él
+            —filtros activos, IA apagada, análisis anterior— cae a la glosa
+            determinista de la regla. */}
         {b.count > 0 && (
           <>
             <h4 className="hud-label mt-4 mb-1">Por qué es {b.label}</h4>
             <p className="text-[13px] leading-relaxed text-[var(--text)]">
-              {plainWhy(lvl, criterion)}
+              {b.why || plainWhy(lvl, criterion)}
+            </p>
+          </>
+        )}
+
+        {/* Criterio: POR QUÉ estos registros están en este nivel.
+            El texto de arriba describe el contenido (Event IDs,
+            hosts); este dice la regla que los colocó aquí: los
+            valores originales de Severity traducidos a este nivel.
+            Es la MISMA correspondencia de la tabla de abajo, traída
+            al nivel para que no haya que cruzarlas a mano. */}
+        {b.count > 0 && criterion.length > 0 && (
+          <>
+            <h4 className="hud-label mt-4 mb-1">Criterio de clasificación</h4>
+            <p className="font-mono text-[12.5px] leading-relaxed text-[var(--text)]">
+              Severity original →{' '}
+              <span className="font-semibold" style={{ color: style.color }}>
+                {b.label}
+              </span>
+              {': '}
+              {criterion.map(m => `«${m.raw}» ×${fmtCount(m.count)}`).join(' · ')}
+            </p>
+            <p className="mt-1 font-mono text-[11px] leading-relaxed text-[var(--text-dim)]">
+              Misma regla de la tabla «Correspondencia de severidad»: catálogo exacto
+              primero, después palabras clave y, sin evidencia, Bajo.
             </p>
           </>
         )}

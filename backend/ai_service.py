@@ -1862,10 +1862,14 @@ _JUSTIFICATIONS_SYSTEM_PROMPT = (
     "pintarla en un dashboard.\n"
     "Respondes ÚNICAMENTE con un objeto JSON válido, sin markdown ni texto "
     "adicional, con esta forma exacta:\n"
-    '  {"general": "…", "critico": "…", "alto": "…", "medio": "…", "bajo": "…"}\n'
-    "«general» es la justificación del riesgo global y cada clave de nivel "
-    "la de su nivel. Cada texto: 2 a 4 frases en español, prosa natural, "
-    "sin listas, sin viñetas, sin títulos.\n"
+    '  {"general": "…", "critico": "…", "critico_porque": "…", "alto": "…", '
+    '"alto_porque": "…", "medio": "…", "medio_porque": "…", "bajo": "…", '
+    '"bajo_porque": "…"}\n'
+    "«general» es la justificación del riesgo global, cada clave de nivel "
+    "es la justificación de su nivel y cada clave «…_porque» es el "
+    "porqué en lenguaje llano de ese nivel. Justificaciones: 2 a 4 "
+    "frases; porqués: 1 a 2 frases. Español, prosa natural, sin listas, "
+    "sin viñetas, sin títulos.\n"
     "Reglas:\n"
     "  - Trabaja SOLO con DATOS: usa exclusivamente las cifras, hosts, "
     "eventos y motivos que aparecen allí; si un dato no está en DATOS, no "
@@ -1877,6 +1881,11 @@ _JUSTIFICATIONS_SYSTEM_PROMPT = (
     "no de un texto genérico.\n"
     "  - No copies textualmente «texto_base»: rédactalo con otras palabras "
     "y no repitas la misma frase entre textos.\n"
+    "  - Cada «…_porque» responde POR QUÉ ESTE nivel en palabras simples: "
+    "la regla que colocó los registros aquí (qué valor de «criterio» los "
+    "traduce a este nivel, con sus registros) unida a tus datos, sin "
+    "jerga técnica. Que un lector sin ficha técnica lo entienda de una "
+    "lectura; no repitas la frase de la justificación del mismo nivel.\n"
     "  - No expliques qué significa un Event ID, ni cites glosarios, marcos "
     "ni técnicas, ni menciones claves internas en snake_case del sistema.\n"
     "  - Si un nivel tiene 0 registros, escribe para ese nivel exactamente: "
@@ -1890,11 +1899,25 @@ def _justification_facts(summary: Dict[str, Any]) -> Dict[str, Any]:
     """Hechos que el LLM puede citar para narrar las justificaciones.
 
     Todo sale ya calculado del resumen: `texto_base` es la justificación
-    determinista (cifras reales de ESTE análisis) y `ejemplos` aporta el
-    significado de los eventos en palabras (el `_reason` ya traduce el
-    Event ID a lenguaje llano). Nada se recalcula aquí y no se le piden
-    cifras al modelo: solo lectura.
+    determinista (cifras reales de ESTE análisis), `criterio` son los
+    valores originales de Severity traducidos a ESTE nivel con sus
+    recuentos (la regla, para que el «porqué» la pueda citar) y
+    `ejemplos` aporta el significado de los eventos en palabras (el
+    `_reason` ya traduce el Event ID a lenguaje llano). Nada se
+    recalcula aquí y no se le piden cifras al modelo: solo lectura.
     """
+    # severity_mapping del resumen: [{raw, level, count, percentage}, …].
+    criterio: Dict[str, List[Dict[str, Any]]] = {lvl: [] for lvl in LEVEL_ORDER}
+    for entrada in (summary.get("severity_mapping") or []):
+        if isinstance(entrada, dict):
+            lvl = str(entrada.get("level") or "")
+            if lvl in criterio:
+                criterio[lvl].append(
+                    {
+                        "valor": entrada.get("raw"),
+                        "registros": int(entrada.get("count") or 0),
+                    }
+                )
     niveles: Dict[str, Any] = {}
     for lvl in LEVEL_ORDER:
         block = (summary.get("risk_levels") or {}).get(lvl) or {}
@@ -1911,6 +1934,7 @@ def _justification_facts(summary: Dict[str, Any]) -> Dict[str, Any]:
             "registros": int(block.get("count", 0)),
             "porcentaje": float(block.get("percentage", 0.0)),
             "texto_base": str(block.get("justification", "")),
+            "criterio": criterio[lvl],
             "ejemplos": ejemplos,
         }
     risk = str(summary.get("risk", ""))
@@ -1946,7 +1970,8 @@ def _filter_justifications(
 ) -> Dict[str, str]:
     """Se queda SOLO con los textos verificables contra el ctx.
 
-    - una clave que no sea «general» ni un nivel del catálogo se ignora;
+    - una clave que no sea «general», un nivel del catálogo o el
+      «…_porque» de un nivel se ignora;
     - un texto corto demuestra que el modelo no aportó nada;
     - una cifra sin ancla (regla A) o una clave interna pegada (regla E)
       tira ese texto entero: el nivel conserva su justificación local;
@@ -1956,9 +1981,12 @@ def _filter_justifications(
     niveles = summary.get("risk_levels") or {}
     validas: Dict[str, str] = {}
     for key, raw in candidatas.items():
-        if key != "general" and key not in LEVEL_ORDER:
+        base = key[: -len("_porque")] if key.endswith("_porque") else key
+        if key.endswith("_porque") and base not in LEVEL_ORDER:
             continue
-        if key in LEVEL_ORDER and int((niveles.get(key) or {}).get("count", 0) or 0) == 0:
+        if not key.endswith("_porque") and key != "general" and key not in LEVEL_ORDER:
+            continue
+        if base in LEVEL_ORDER and int((niveles.get(base) or {}).get("count", 0) or 0) == 0:
             continue
         text = " ".join(str(raw).split())
         if len(text) < _MIN_JUSTIFICATION_CHARS:
@@ -1972,10 +2000,12 @@ def _filter_justifications(
 async def generate_justifications(summary: Dict[str, Any]) -> Dict[str, Any]:
     """Justificaciones narradas por la IA, con fallback determinista.
 
-    Devuelve ``{"risk_justification": str, "levels": {lvl: str}}`` solo con
-    los textos que pasan las reglas; vacía si el LLM está apagado, falla o
-    nada es válido — entonces el caller mantiene las justificaciones
-    calculadas y la app sigue funcionando sin IA.
+    Devuelve ``{"risk_justification": str, "levels": {lvl: str},
+    "whys": {lvl: str}}`` solo con los textos que pasan las reglas;
+    vacía si el LLM está apagado, falla o nada es válido — entonces el
+    caller mantiene las justificaciones calculadas y la app sigue
+    funcionando sin IA. `whys` es el «por qué» en lenguaje llano de cada
+    nivel; sin él, el frontend usa su glosa determinista.
     """
     ctx = build_context(summary)
     facts = _justification_facts(summary)
@@ -1995,6 +2025,14 @@ async def generate_justifications(summary: Dict[str, Any]) -> Dict[str, Any]:
     por_nivel = {k: v for k, v in validas.items() if k in LEVEL_ORDER}
     if por_nivel:
         salida["levels"] = por_nivel
+    sufijo = "_porque"
+    whys = {
+        k[: -len(sufijo)]: v
+        for k, v in validas.items()
+        if k.endswith(sufijo) and k[: -len(sufijo)] in LEVEL_ORDER
+    }
+    if whys:
+        salida["whys"] = whys
     return salida
 
 

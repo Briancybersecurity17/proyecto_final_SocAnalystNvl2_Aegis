@@ -958,6 +958,12 @@ async def process_analysis(analysis_id: str, file_bytes: bytes, file_name: str =
             bloque = (summary.get("risk_levels") or {}).get(lvl)
             if isinstance(bloque, dict):
                 bloque["justification"] = texto
+        # El «por qué» en lenguaje llano de cada nivel, también narrado:
+        # sin este campo el frontend cae a su glosa determinista.
+        for lvl, texto in (justifs.get("whys") or {}).items():
+            bloque = (summary.get("risk_levels") or {}).get(lvl)
+            if isinstance(bloque, dict):
+                bloque["why"] = texto
 
         # Keep the classified dataframe so the UI can visualise every record
         entrada["dataframe"] = df
@@ -1234,6 +1240,11 @@ async def get_scoped_summary(analysis_id: str, request: Request):
             gblk = (global_summary.get("risk_levels") or {}).get(lvl)
             if isinstance(gblk, dict) and gblk.get("justification"):
                 blk["justification"] = gblk["justification"]
+            # El «por qué» narrado sigue la misma regla que la
+            # justificación: solo sin filtros. Con selección activa blk no
+            # lo trae y el frontend pinta su glosa determinista.
+            if isinstance(gblk, dict) and gblk.get("why"):
+                blk["why"] = gblk["why"]
     else:
         resumen["ai_insights"] = generate_local_insights(resumen)
     return resumen

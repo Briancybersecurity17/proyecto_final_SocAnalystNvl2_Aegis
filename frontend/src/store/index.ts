@@ -19,6 +19,8 @@ export interface RiskLevelBlock {
   count: number
   percentage: number
   justification: string
+  /** «Por qué es {nivel}» narrado por la IA; sin él se usa la glosa local. */
+  why?: string
   examples: SuspiciousDetail[]
 }
 
