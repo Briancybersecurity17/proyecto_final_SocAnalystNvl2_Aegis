@@ -1842,6 +1842,162 @@ async def generate_data_insights(summary: Dict[str, Any]) -> List[str]:
     return _filter_insights(candidatas, ctx) or _local_insights(ctx)
 
 
+# --- Justificaciones narradas por la IA (grounded) ------------------------
+# Mismo contrato que las observaciones: el modelo REDACTA y el sistema
+# VALIDA antes de sustituir la determinista. Una sola llamada por análisis
+# (process_analysis), cacheada en el store; si el LLM está apagado, falla o
+# un texto no pasa las reglas, ese texto se queda con el local, así que la
+# UI y el informe nunca se quedan sin justificación.
+#
+# Se aplican solo la regla A (cifras ancladas al ctx) y la E (sin claves
+# internas). La B NO: `event_id_counts` es GLOBAL y estas justificaciones
+# citan recuentos POR NIVEL («4625 ×33» en Crítico es cierto aunque el
+# 4625 tenga más en total), así que tacharía textos verdaderos; la ancla A
+# ya bloquea el riesgo real —una cifra que no está en el ctx—.
+_MIN_JUSTIFICATION_CHARS = 60
+
+_JUSTIFICATIONS_SYSTEM_PROMPT = (
+    "Eres un analista SOC de nivel 2 redactando la justificación de cada "
+    "nivel de riesgo y del riesgo global de un análisis ya calculado, para "
+    "pintarla en un dashboard.\n"
+    "Respondes ÚNICAMENTE con un objeto JSON válido, sin markdown ni texto "
+    "adicional, con esta forma exacta:\n"
+    '  {"general": "…", "critico": "…", "alto": "…", "medio": "…", "bajo": "…"}\n'
+    "«general» es la justificación del riesgo global y cada clave de nivel "
+    "la de su nivel. Cada texto: 2 a 4 frases en español, prosa natural, "
+    "sin listas, sin viñetas, sin títulos.\n"
+    "Reglas:\n"
+    "  - Trabaja SOLO con DATOS: usa exclusivamente las cifras, hosts, "
+    "eventos y motivos que aparecen allí; si un dato no está en DATOS, no "
+    "lo menciones ni lo infieras. Nunca inventes hosts, fechas ni cifras.\n"
+    "  - Cada texto narra QUÉ muestran los datos de ese nivel y POR QUÉ "
+    "importa: conecta eventos, hosts y motivos entre sí con tus palabras "
+    "(p. ej. si los motivos son autenticaciones fallidas contra un "
+    "controlador de dominio, dilo así). Que suene propio de ESTOS datos, "
+    "no de un texto genérico.\n"
+    "  - No copies textualmente «texto_base»: rédactalo con otras palabras "
+    "y no repitas la misma frase entre textos.\n"
+    "  - No expliques qué significa un Event ID, ni cites glosarios, marcos "
+    "ni técnicas, ni menciones claves internas en snake_case del sistema.\n"
+    "  - Si un nivel tiene 0 registros, escribe para ese nivel exactamente: "
+    '"Sin registros en este nivel dentro de los datos analizados."\n'
+    "\n"
+    "DATOS:\n"
+)
+
+
+def _justification_facts(summary: Dict[str, Any]) -> Dict[str, Any]:
+    """Hechos que el LLM puede citar para narrar las justificaciones.
+
+    Todo sale ya calculado del resumen: `texto_base` es la justificación
+    determinista (cifras reales de ESTE análisis) y `ejemplos` aporta el
+    significado de los eventos en palabras (el `_reason` ya traduce el
+    Event ID a lenguaje llano). Nada se recalcula aquí y no se le piden
+    cifras al modelo: solo lectura.
+    """
+    niveles: Dict[str, Any] = {}
+    for lvl in LEVEL_ORDER:
+        block = (summary.get("risk_levels") or {}).get(lvl) or {}
+        ejemplos = [
+            {
+                "event_id": ex.get("Event_ID"),
+                "host": ex.get("Hostname"),
+                "motivo": str(ex.get("_reason") or ex.get("risk_reason") or ""),
+            }
+            for ex in (block.get("examples") or [])[:3]
+        ]
+        niveles[lvl] = {
+            "nivel": block.get("label") or LEVEL_LABELS[lvl],
+            "registros": int(block.get("count", 0)),
+            "porcentaje": float(block.get("percentage", 0.0)),
+            "texto_base": str(block.get("justification", "")),
+            "ejemplos": ejemplos,
+        }
+    risk = str(summary.get("risk", ""))
+    return {
+        "total_registros": int(summary.get("rows", 0)),
+        "riesgo_global": LEVEL_LABELS.get(risk, risk),
+        "justificacion_global_base": str(summary.get("risk_justification", "")),
+        "niveles": niveles,
+    }
+
+
+async def _remote_justifications(facts: Dict[str, Any]) -> Dict[str, str]:
+    """Justificaciones del LLM. Dict vacío si está apagado o falla."""
+    cfg = ai_config.get()
+    if not cfg["enabled"] or not cfg["api_url"]:
+        return {}
+    messages = [
+        {"role": "system", "content": _JUSTIFICATIONS_SYSTEM_PROMPT},
+        {"role": "user", "content": json.dumps(facts, ensure_ascii=False, default=str)},
+    ]
+    text = await ai_config.chat(messages, temperature=0.3, cfg=cfg)
+    if not text:
+        return {}
+    parsed = _clean_json(text)
+    if not isinstance(parsed, dict):
+        logger.warning("justificaciones: el LLM no devolvió JSON (%.200s)", text)
+        return {}
+    return {k: v for k, v in parsed.items() if isinstance(v, str)}
+
+
+def _filter_justifications(
+    candidatas: Dict[str, str], ctx: Dict[str, Any], summary: Dict[str, Any]
+) -> Dict[str, str]:
+    """Se queda SOLO con los textos verificables contra el ctx.
+
+    - una clave que no sea «general» ni un nivel del catálogo se ignora;
+    - un texto corto demuestra que el modelo no aportó nada;
+    - una cifra sin ancla (regla A) o una clave interna pegada (regla E)
+      tira ese texto entero: el nivel conserva su justificación local;
+    - niveles sin registros conservan la local («Sin registros…»), que el
+      modelo no debe sustituir.
+    """
+    niveles = summary.get("risk_levels") or {}
+    validas: Dict[str, str] = {}
+    for key, raw in candidatas.items():
+        if key != "general" and key not in LEVEL_ORDER:
+            continue
+        if key in LEVEL_ORDER and int((niveles.get(key) or {}).get("count", 0) or 0) == 0:
+            continue
+        text = " ".join(str(raw).split())
+        if len(text) < _MIN_JUSTIFICATION_CHARS:
+            continue
+        if _rule_anchor(text, ctx) or _rule_internal_keys(text, ctx):
+            continue
+        validas[key] = text
+    return validas
+
+
+async def generate_justifications(summary: Dict[str, Any]) -> Dict[str, Any]:
+    """Justificaciones narradas por la IA, con fallback determinista.
+
+    Devuelve ``{"risk_justification": str, "levels": {lvl: str}}`` solo con
+    los textos que pasan las reglas; vacía si el LLM está apagado, falla o
+    nada es válido — entonces el caller mantiene las justificaciones
+    calculadas y la app sigue funcionando sin IA.
+    """
+    ctx = build_context(summary)
+    facts = _justification_facts(summary)
+    try:
+        candidatas = await _remote_justifications(facts)
+    except Exception as exc:  # noqa: BLE001 – nunca romper el análisis
+        logger.warning(
+            "justificaciones: fallo del modelo remoto (%s: %s); se mantienen las deterministas",
+            type(exc).__name__,
+            exc,
+        )
+        return {}
+    validas = _filter_justifications(candidatas, ctx, summary)
+    salida: Dict[str, Any] = {}
+    if "general" in validas:
+        salida["risk_justification"] = validas["general"]
+    por_nivel = {k: v for k, v in validas.items() if k in LEVEL_ORDER}
+    if por_nivel:
+        salida["levels"] = por_nivel
+    return salida
+
+
 # ---------------------------------------------------------------------------
 # Consulta en lenguaje natural sobre los registros (RAG)
 # ---------------------------------------------------------------------------

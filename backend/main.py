@@ -61,6 +61,7 @@ try:
         QA_HISTORY_ANSWER_CHARS,
         generate_report_narrative,
         generate_data_insights,
+        generate_justifications,
         generate_local_insights,
         answer_question,
         is_aggregate_question,
@@ -79,6 +80,7 @@ except ImportError:  # pragma: no cover
         QA_HISTORY_ANSWER_CHARS,
         generate_report_narrative,
         generate_data_insights,
+        generate_justifications,
         generate_local_insights,
         answer_question,
         is_aggregate_question,
@@ -944,6 +946,19 @@ async def process_analysis(analysis_id: str, file_bytes: bytes, file_name: str =
         # análisis, cacheadas en el store).
         summary["ai_insights"] = await generate_data_insights(summary)
 
+        # Justificaciones narradas por la IA (los 4 niveles + el resumen
+        # general): mismo patrón que las observaciones — una sola llamada
+        # por análisis y solo se sustituyen los textos que pasan las
+        # reglas; el resto se queda con la determinista. También ANTES de
+        # «done» para que /summary y el informe las sirvan ya narradas.
+        justifs = await generate_justifications(summary)
+        if justifs.get("risk_justification"):
+            summary["risk_justification"] = justifs["risk_justification"]
+        for lvl, texto in (justifs.get("levels") or {}).items():
+            bloque = (summary.get("risk_levels") or {}).get(lvl)
+            if isinstance(bloque, dict):
+                bloque["justification"] = texto
+
         # Keep the classified dataframe so the UI can visualise every record
         entrada["dataframe"] = df
         entrada["summary"] = summary
@@ -1207,6 +1222,18 @@ async def get_scoped_summary(analysis_id: str, request: Request):
             list(global_summary.get("ai_insights") or [])
             or generate_local_insights(resumen)
         )
+        # Justificaciones narradas por la IA: se generan UNA vez en
+        # process_analysis y viven cacheadas en el store. Solo sin filtros,
+        # cuando las cifras coinciden con el archivo completo; con filtros
+        # activos se pinta la determinista recalculada sobre la selección,
+        # que describe exactamente lo que la UI está mostrando.
+        resumen["risk_justification"] = (
+            global_summary.get("risk_justification") or resumen["risk_justification"]
+        )
+        for lvl, blk in (resumen.get("risk_levels") or {}).items():
+            gblk = (global_summary.get("risk_levels") or {}).get(lvl)
+            if isinstance(gblk, dict) and gblk.get("justification"):
+                blk["justification"] = gblk["justification"]
     else:
         resumen["ai_insights"] = generate_local_insights(resumen)
     return resumen
