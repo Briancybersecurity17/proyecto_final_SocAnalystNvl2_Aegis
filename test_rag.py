@@ -1,7 +1,7 @@
 """
 test_rag.py
 -----------
-Prueba del índice semántico local (RAG) sobre el Excel real del bootcamp.
+Prueba del índice semántico local (RAG) sobre la muestra versionada en el repo.
 
 Uso:
     python test_rag.py                     # archivo por defecto
@@ -24,7 +24,8 @@ sys.path.insert(0, str(Path(__file__).parent / "backend"))
 import rag_store  # noqa: E402
 from main import _enrich_records  # noqa: E402  (motor determinista compartido)
 
-DEFAULT_FILE = "C:/Users/Brian/Downloads/SOC_L2_Logs_Ampliados_Multiples_Incidentes.xlsx"
+# Muestra versionada en el repo: funciona en cualquier máquina sin rutas personales.
+DEFAULT_FILE = str(Path(__file__).parent / "backend" / "eval" / "fixtures" / "sample.xlsx")
 
 PREGUNTAS = [
     "hubo intentos de fuerza bruta?",
@@ -167,10 +168,15 @@ def main() -> int:
         print("   [FAIL] debería recuperar los eventos de autenticación fallida")
         failures += 1
 
-    # Caso sin evidencia: la respuesta debe NEGAR la conclusión, no inventarla
+    # Caso sin evidencia: la respuesta debe NEGAR la conclusión, no inventarla.
+    # Acepta cualquier señal honesta: warning de confianza baja, aviso de
+    # fuera de tema o la negación explícita de evidencia directa.
     weak = asyncio.run(_ask("¿hubo un terremoto en la oficina?"))
-    honest = ("baja_confianza" in weak["warnings"]) or (
-        "No encontré evidencia directa" in weak["answer"]
+    honest = (
+        "baja_confianza" in weak["warnings"]
+        or "fuera_de_tema" in weak["warnings"]
+        or "sin_resultados" in weak["warnings"]
+        or "No encontré evidencia directa" in weak["answer"]
     )
     print(f"sin evidencia  → confianza={weak['confidence']} | avisos={weak['warnings']}")
     if not honest:

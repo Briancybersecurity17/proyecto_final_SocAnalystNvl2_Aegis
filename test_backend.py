@@ -16,7 +16,9 @@ sys.path.append(os.path.abspath("backend"))
 from main import app  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-DEFAULT_FILE = r"C:/Users/Brian/Downloads/SOC_L2_Logs_Ampliados_Multiples_Incidentes.xlsx"
+# Muestra versionada en el repo: funciona en cualquier máquina sin rutas personales.
+DEFAULT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "backend", "eval", "fixtures", "sample.xlsx")
 FILE_PATH = sys.argv[1] if len(sys.argv) > 1 else os.getenv("SOC_SAMPLE_FILE", DEFAULT_FILE)
 
 MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"

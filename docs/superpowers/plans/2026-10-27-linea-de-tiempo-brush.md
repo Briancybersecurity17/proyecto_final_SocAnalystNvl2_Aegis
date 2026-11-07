@@ -211,7 +211,7 @@ Expected: exit 0 y exit 0.
 
 - [x] **Step 3: Generar dataset de 60 filas y medir con Resource Timing**
 
-Script pandas en `%TEMP%` (patrón sub‑1) → `C:\Users\Brian\Desktop\soc_60.xlsx`: 60 filas en varias horas/días. Subirlo, ir a **página 2**, aplicar un filtro (nivel Alto).
+Script pandas en `%TEMP%` (patrón sub‑1) → archivo temporal `soc_60.xlsx`: 60 filas en varias horas/días. Subirlo, ir a **página 2**, aplicar un filtro (nivel Alto).
 Expected (Resource Timing en consola): **1 sola** petición `/rows` en el cambio, con `page=1`.
 
 - [x] **Step 4: Verificar que la paginación sigue viva**
