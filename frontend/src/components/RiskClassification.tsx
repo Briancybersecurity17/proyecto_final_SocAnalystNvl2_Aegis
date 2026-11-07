@@ -243,29 +243,10 @@ const RiskClassification: React.FC = () => {
           </>
         )}
 
-        {/* Criterio: POR QUÉ estos registros están en este nivel.
-            El texto de arriba describe el contenido (Event IDs,
-            hosts); este dice la regla que los colocó aquí: los
-            valores originales de Severity traducidos a este nivel.
-            Es la MISMA correspondencia de la tabla de abajo, traída
-            al nivel para que no haya que cruzarlas a mano. */}
-        {b.count > 0 && criterion.length > 0 && (
-          <>
-            <h4 className="hud-label mt-4 mb-1">Criterio de clasificación</h4>
-            <p className="font-mono text-[12.5px] leading-relaxed text-[var(--text)]">
-              Severity original →{' '}
-              <span className="font-semibold" style={{ color: style.color }}>
-                {b.label}
-              </span>
-              {': '}
-              {criterion.map(m => `«${m.raw}» ×${fmtCount(m.count)}`).join(' · ')}
-            </p>
-            <p className="mt-1 font-mono text-[11px] leading-relaxed text-[var(--text-dim)]">
-              Misma regla de la tabla «Correspondencia de severidad»: catálogo exacto
-              primero, después palabras clave y, sin evidencia, Bajo.
-            </p>
-          </>
-        )}
+        {/* Sin bloque «Criterio de clasificación»: el «Por qué es» ya
+            cuenta la regla (severity original → nivel) unida a los datos,
+            y la tabla «Correspondencia de severidad» de abajo muestra el
+            mapeo completo con recuentos. Repetirlo era redundante. */}
 
         {b.examples.length > 0 && (
           <>
@@ -321,28 +302,15 @@ const RiskClassification: React.FC = () => {
     )
   }
 
-  const globalColor = LEVEL_STYLES[summary.risk]?.color ?? '#1fc8ff'
-
   return (
     <section className="space-y-8">
-      {/* Global verdict */}
-      <div
-        className="border-l-4 bg-inset/85 p-5 shadow-[0_0_16px_rgba(31,200,255,0.14)] [clip-path:var(--chamfer-sm)]"
-        style={{ borderLeftColor: globalColor }}
-      >
-        <div className="mb-2 flex flex-wrap items-center gap-3">
-          <h2 className="font-display text-lg font-bold uppercase tracking-[0.14em] text-hud-line">
-            Clasificación global
-          </h2>
-          <LevelChip level={summary.risk} />
-        </div>
-        <p className="font-mono text-[13.5px] leading-relaxed text-[var(--text)]">
-          {summary.risk_justification}
-        </p>
-        <p className="hud-label mt-2">
-          Total analizado: {summary.rows} registros · {summary.unique_hosts ?? '—'} hosts
-        </p>
-      </div>
+      {/* Sin bloque «Clasificación global»: el veredicto y su justificación
+          viven en el Dashboard (pantallazo rápido); esta vista es para
+          explorar en profundidad y no los repite. Solo queda el total, que
+          da contexto a los porcentajes de las tarjetas. */}
+      <p className="hud-label">
+        Total analizado: {summary.rows} registros · {summary.unique_hosts ?? '—'} hosts
+      </p>
 
       {/* Monitoring cards – one per criticality. Sin acordeón: la rejilla
           queda siempre colapsada y el clic abre el detalle a ancho completo.
