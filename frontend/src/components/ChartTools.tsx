@@ -69,12 +69,20 @@ export interface InsightRow {
   value: string
 }
 
+/** Lista con etiqueta propia bajo las métricas: p. ej. «Hosts impactados». */
+export interface InsightList {
+  label: string
+  items: InsightRow[]
+}
+
 /**
  * Tarjeta de detalle que aparece debajo del gráfico al seleccionar una parte
  * de él. Aporta el desglose completo del elemento elegido (además del
  * tooltip, que solo muestra el dato a secas) y un botón para deseleccionar.
  *
  * Todo lo que muestra se calcula del resumen del análisis: no inventa cifras.
+ * `lists` es opcional: agrupa desgloses con nombre propio (hosts, IPs,
+ * resultados) cuando las cifras sueltas no cuentan la historia completa.
  */
 export const ChartInsight: React.FC<{
   title: string
@@ -82,9 +90,10 @@ export const ChartInsight: React.FC<{
   value: React.ReactNode
   caption?: string
   rows?: InsightRow[]
+  lists?: InsightList[]
   note?: string
   onClose: () => void
-}> = ({ title, color, value, caption, rows = [], note, onClose }) => (
+}> = ({ title, color, value, caption, rows = [], lists, note, onClose }) => (
   <motion.div
     initial={{ opacity: 0, y: 8 }}
     animate={{ opacity: 1, y: 0 }}
@@ -126,6 +135,24 @@ export const ChartInsight: React.FC<{
           </div>
         ))}
       </dl>
+    )}
+
+    {/* Desgloses con nombre propio (hosts, IPs, resultados): cifras que las
+        métricas de arriba no pueden contar y el tooltip no alcanza a mostrar. */}
+    {lists?.map(list =>
+      list.items.length > 0 ? (
+        <div key={list.label} className="mt-3 border-t pt-3" style={{ borderColor: `${color}33` }}>
+          <p className="hud-label mb-1.5">{list.label}</p>
+          <ul className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-[12.5px]">
+            {list.items.map(item => (
+              <li key={item.label} className="text-[var(--text-dim)]">
+                <span className="font-semibold text-[var(--text-bright)]">{item.label}</span>{' '}
+                {item.value}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null,
     )}
 
     {note && (

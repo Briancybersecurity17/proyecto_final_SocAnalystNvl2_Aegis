@@ -1,10 +1,10 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useAnalysisStore } from '../store'
 import { getRows, RowsResponse } from '../api/client'
 import { DashboardSection } from './DashboardSection'
 import { EmptyState } from './EmptyState'
-import { ChartInsight, selectionCells } from './ChartTools'
+import { ChartInsight, InsightList, selectionCells } from './ChartTools'
 import {
   AXIS_TICK,
   BAR_CURSOR,
@@ -54,6 +54,133 @@ const fmtTimestamp = (value: unknown): string => {
   return match ? `${match[1]} ${match[2]}` : raw
 }
 
+/**
+ * Cuenta ocurrencias de una columna en las filas y devuelve las más
+ * frecuentes (hasta `limit`), con sus conteos. Ignora vacíos, «—» y «nan»:
+ * no todos los archivos traen Source_IP/Hostname en todas las filas.
+ */
+const countBy = (
+  rows: RowsResponse['rows'],
+  key: string,
+  limit = 6,
+): { name: string; count: number }[] => {
+  const counts = new Map<string, number>()
+  for (const row of rows) {
+    const raw = String(row[key] ?? '').trim()
+    if (!raw || raw === '—' || raw.toLowerCase() === 'nan') continue
+    counts.set(raw, (counts.get(raw) ?? 0) + 1)
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([name, count]) => ({ name, count }))
+}
+
+/**
+ * Rango temporal de las filas: «23/10 07:46 → 23/10 13:59» (o una sola
+ * marca si todo ocurrió en el mismo minuto). Sin Timestamp reconocible,
+ * null: la métrica no se muestra en lugar de inventar un rango.
+ */
+const windowOf = (rows: RowsResponse['rows']): string | null => {
+  let min: number | null = null
+  let max: number | null = null
+  for (const row of rows) {
+    const t = Date.parse(String(row.Timestamp ?? ''))
+    if (Number.isNaN(t)) continue
+    if (min === null || t < min) min = t
+    if (max === null || t > max) max = t
+  }
+  if (min === null || max === null) return null
+  const fmt = (ms: number): string => {
+    const d = new Date(ms)
+    const p2 = (n: number) => String(n).padStart(2, '0')
+    return `${p2(d.getDate())}/${p2(d.getMonth() + 1)} ${p2(d.getHours())}:${p2(d.getMinutes())}`
+  }
+  return min === max ? fmt(min) : `${fmt(min)} → ${fmt(max)}`
+}
+
+/**
+ * Desglose que se calcula al pulsar una barra: las filas SOSPECHOSAS de esa
+ * IP/host, pedidas a /rows con faceta (Source_IP=… / Hostname=…). Aporta el
+ * «por qué» —qué hosts, Event IDs, niveles y ventana— que la barra y su
+ * tooltip no cuentan.
+ */
+type FocusDetail = {
+  loading: boolean
+  error: string | null
+  /** Total que devolvió la API (tope de 200 filas por petición). */
+  total: number
+  /** Hosts (vista IP) o IPs (vista host) con su conteo de eventos. */
+  byKey: { name: string; count: number }[]
+  levels: { name: string; count: number }[]
+  eventIds: { name: string; count: number }[]
+  results: { name: string; count: number }[]
+  window: string | null
+}
+
+/** Estado vacío mientras la petición del desglose viaja. */
+const EMPTY_DETAIL: FocusDetail = {
+  loading: true,
+  error: null,
+  total: 0,
+  byKey: [],
+  levels: [],
+  eventIds: [],
+  results: [],
+  window: null,
+}
+
+/**
+ * Valor de una métrica del desglose durante la carga: «…» mientras viaja,
+ * «—» si la llamada falló (el motivo está en el note), y el dato al llegar.
+ */
+const detailValue = (detail: FocusDetail | null, pick: (d: FocusDetail) => string): string => {
+  if (!detail || detail.loading) return '…'
+  if (detail.error) return '—'
+  return pick(detail)
+}
+
+/**
+ * Listas con nombre propio del desglose: el grupo principal (hosts para una
+ * IP, IPs para un host) con sus conteos y los resultados, si el archivo los
+ * trae. Vacío mientras carga o si falló, para que la tarjeta no crezca sin datos.
+ */
+const detailLists = (
+  detail: FocusDetail | null,
+  mainLabel: string,
+): InsightList[] | undefined => {
+  if (!detail || detail.loading || detail.error) return undefined
+  const lists: InsightList[] = []
+  if (detail.byKey.length) {
+    lists.push({
+      label: mainLabel,
+      items: detail.byKey.map(item => ({ label: item.name, value: `×${fmtCount(item.count)}` })),
+    })
+  }
+  if (detail.results.length) {
+    lists.push({
+      label: 'Resultados',
+      items: detail.results.map(item => ({ label: item.name, value: `×${fmtCount(item.count)}` })),
+    })
+  }
+  return lists.length ? lists : undefined
+}
+
+/**
+ * Nota del desglose: primero el error (si lo hay), luego el estado de carga
+ * y al final las cifras reales, con aviso cuando hubo más filas que las 200
+ * que trae una petición.
+ */
+const detailNote = (detail: FocusDetail | null, subject: string): string => {
+  if (detail?.error) return detail.error
+  if (!detail || detail.loading) return `Cargando el desglose de ${subject}…`
+  const cap =
+    detail.total > 200
+      ? `las primeras 200 de ${fmtCount(detail.total)}`
+      : `${fmtCount(detail.total)} filas`
+  return `Desglose calculado sobre ${cap} sospechosas de ${subject}. Los volúmenes por sí solos no prueban malicia: sirven para priorizar la revisión.`
+}
+
 export const SecurityAnalysis: React.FC = () => {
   const summary = useAnalysisStore(state => state.summary)
   const analysisId = useAnalysisStore(state => state.analysisId)
@@ -69,6 +196,13 @@ export const SecurityAnalysis: React.FC = () => {
   // el resto se atenúa, con su desglose en la tarjeta de debajo.
   const [focusIp, setFocusIp] = useState<string | null>(null)
   const [focusSuspHost, setFocusSuspHost] = useState<string | null>(null)
+  // Desglose bajo demanda de la barra seleccionada: se pide a /rows con la
+  // faceta de la IP/host (una petición por clic) y se guarda por lado para
+  // que las dos secciones no se pisen.
+  const [ipDetail, setIpDetail] = useState<FocusDetail | null>(null)
+  const [hostDetail, setHostDetail] = useState<FocusDetail | null>(null)
+  const ipAbortRef = useRef<AbortController | null>(null)
+  const hostAbortRef = useRef<AbortController | null>(null)
   // Las listas de hosts/IPs viajan completas (hasta 50) pero se pintan de 6
   // en 6: este par de estados controla el despliegue del resto con el botón
   // «ver los N restantes / ocultar» de cada gráfico.
@@ -150,6 +284,72 @@ export const SecurityAnalysis: React.FC = () => {
     }
   }, [analysisId, status])
 
+  /**
+   * Pide las filas sospechosas de una IP/host y guarda su desglose.
+   *
+   * La faceta viaja como nombre literal de columna (`Source_IP=…`), que es
+   * como la lee `parse_filters` del backend — el mismo motor que /summary.
+   * Cada clic cancela la petición anterior: un clic rápido entre barras no
+   * debe dejar el detalle de la barra vieja pisando al nuevo.
+   */
+  const loadDetail = useCallback(
+    async (
+      facets: Record<string, string[]>,
+      listKey: string,
+      abortRef: { current: AbortController | null },
+      setDetail: React.Dispatch<React.SetStateAction<FocusDetail | null>>,
+    ) => {
+      abortRef.current?.abort()
+      const controller = new AbortController()
+      abortRef.current = controller
+      setDetail({ ...EMPTY_DETAIL })
+      if (!analysisId || status !== 'done') return
+      try {
+        const res = await getRows(analysisId, {
+          page: 1,
+          pageSize: 200,
+          suspicious: true,
+          filters: { facets },
+          signal: controller.signal,
+        })
+        if (controller.signal.aborted) return
+        setDetail({
+          loading: false,
+          error: null,
+          total: res.total,
+          byKey: countBy(res.rows, listKey),
+          levels: countBy(res.rows, 'risk_level', 4).map(item => ({
+            name: LEVEL_LABELS[item.name] ?? item.name,
+            count: item.count,
+          })),
+          eventIds: countBy(res.rows, 'Event_ID'),
+          results: countBy(res.rows, 'Result', 4),
+          window: windowOf(res.rows),
+        })
+      } catch {
+        if (controller.signal.aborted) return
+        setDetail(prev =>
+          prev && {
+            ...prev,
+            loading: false,
+            error:
+              'No se pudo cargar el desglose desde la API. Reintenta o revisa la conexión con el backend.',
+          },
+        )
+      }
+    },
+    [analysisId, status],
+  )
+
+  // Cerrar la sección con un desglose en vuelo no debe dejar la petición
+  // huérfana escribiendo en un estado ya desmontado.
+  useEffect(() => {
+    return () => {
+      ipAbortRef.current?.abort()
+      hostAbortRef.current?.abort()
+    }
+  }, [])
+
   if (!summary) {
     return (
       <EmptyState hint="Sube un archivo Excel para ver los eventos sospechosos y su correlación." />
@@ -204,13 +404,28 @@ export const SecurityAnalysis: React.FC = () => {
   const pickIp = (state: ChartClickState<{ ip?: string }>): void => {
     const ip = state.activePayload?.[0]?.payload?.ip
     if (typeof ip !== 'string') return
-    setFocusIp(prev => (prev === ip ? null : ip))
+    if (focusIp === ip) {
+      // Segundo clic en la misma barra: deselecciona y cancela el desglose.
+      setFocusIp(null)
+      ipAbortRef.current?.abort()
+      setIpDetail(null)
+      return
+    }
+    setFocusIp(ip)
+    void loadDetail({ Source_IP: [ip] }, 'Hostname', ipAbortRef, setIpDetail)
   }
 
   const pickSuspHost = (state: ChartClickState<{ host?: string }>): void => {
     const host = state.activePayload?.[0]?.payload?.host
     if (typeof host !== 'string') return
-    setFocusSuspHost(prev => (prev === host ? null : host))
+    if (focusSuspHost === host) {
+      setFocusSuspHost(null)
+      hostAbortRef.current?.abort()
+      setHostDetail(null)
+      return
+    }
+    setFocusSuspHost(host)
+    void loadDetail({ Hostname: [host] }, 'Source_IP', hostAbortRef, setHostDetail)
   }
 
   return (
@@ -378,13 +593,40 @@ export const SecurityAnalysis: React.FC = () => {
               title={`IP de origen ${selectedIp.ip}`}
               color="#f97316"
               value={`${fmtCount(selectedIp.events)} eventos`}
-              caption={`${pct(selectedIp.events, totalSuspicious)}% de los ${fmtCount(totalSuspicious)} eventos sospechosos`}
+              caption={`${pct(selectedIp.events, totalSuspicious)}% de los ${fmtCount(
+                totalSuspicious,
+              )} eventos sospechosos · ${selectedIp.hosts} host${
+                selectedIp.hosts === 1 ? '' : 's'
+              } impactado${selectedIp.hosts === 1 ? '' : 's'}`}
               rows={[
-                { label: 'Hosts distintos', value: `${selectedIp.hosts} hosts` },
-                { label: 'Del total sospechoso', value: `${pct(selectedIp.events, totalSuspicious)}%` },
+                {
+                  label: 'Hosts impactados',
+                  value: detailValue(ipDetail, d => fmtCount(d.byKey.length)),
+                },
+                {
+                  label: 'Event ID principal',
+                  value: detailValue(ipDetail, d =>
+                    d.eventIds[0] ? `${d.eventIds[0].name} ×${fmtCount(d.eventIds[0].count)}` : '—',
+                  ),
+                },
+                {
+                  label: 'Nivel principal',
+                  value: detailValue(ipDetail, d =>
+                    d.levels[0] ? `${d.levels[0].name} ×${fmtCount(d.levels[0].count)}` : '—',
+                  ),
+                },
+                {
+                  label: 'Ventana temporal',
+                  value: detailValue(ipDetail, d => d.window ?? '—'),
+                },
               ]}
-              note="Los volúmenes por sí solos no prueban malicia: sirven para priorizar la revisión de esos hosts."
-              onClose={() => setFocusIp(null)}
+              lists={detailLists(ipDetail, 'Hosts impactados')}
+              note={detailNote(ipDetail, 'esta IP')}
+              onClose={() => {
+                setFocusIp(null)
+                ipAbortRef.current?.abort()
+                setIpDetail(null)
+              }}
             />
           )}
         </AnimatePresence>
@@ -457,13 +699,39 @@ export const SecurityAnalysis: React.FC = () => {
               title={`Host ${selectedSuspHost.host}`}
               color="#f97316"
               value={`${fmtCount(selectedSuspHost.count)} eventos`}
-              caption={`${pct(selectedSuspHost.count, totalSuspicious)}% de los ${fmtCount(totalSuspicious)} eventos marcados como sospechosos`}
-              rows={LEVEL_ORDER.map(level => ({
-                label: LEVEL_LABELS[level],
-                value: `${toCount(summary.top_hosts_by_level?.[selectedSuspHost.host]?.[level])} eventos`,
-              }))}
-              note="El reparto por nivel procede de la misma clasificación que usa el dashboard."
-              onClose={() => setFocusSuspHost(null)}
+              caption={`${pct(
+                selectedSuspHost.count,
+                totalSuspicious,
+              )}% de los ${fmtCount(totalSuspicious)} eventos marcados como sospechosos`}
+              rows={[
+                {
+                  label: 'IPs de origen',
+                  value: detailValue(hostDetail, d => fmtCount(d.byKey.length)),
+                },
+                {
+                  label: 'Event ID principal',
+                  value: detailValue(hostDetail, d =>
+                    d.eventIds[0] ? `${d.eventIds[0].name} ×${fmtCount(d.eventIds[0].count)}` : '—',
+                  ),
+                },
+                {
+                  label: 'Nivel principal',
+                  value: detailValue(hostDetail, d =>
+                    d.levels[0] ? `${d.levels[0].name} ×${fmtCount(d.levels[0].count)}` : '—',
+                  ),
+                },
+                {
+                  label: 'Ventana temporal',
+                  value: detailValue(hostDetail, d => d.window ?? '—'),
+                },
+              ]}
+              lists={detailLists(hostDetail, 'IPs de origen')}
+              note={detailNote(hostDetail, 'este host')}
+              onClose={() => {
+                setFocusSuspHost(null)
+                hostAbortRef.current?.abort()
+                setHostDetail(null)
+              }}
             />
           )}
         </AnimatePresence>
