@@ -7,6 +7,7 @@ import { restoreAnalysis } from './restore';
 import TypingTitle from './components/TypingTitle';
 import { Sidebar } from './components/Sidebar';
 import BackendStatus from './components/BackendStatus';
+import { NotesFab } from './components/NotesFab';
 import { sectionIn } from './motion';
 
 // Cada sección es un chunk aparte: la app arranca con el layout y solo baja el
@@ -245,6 +246,10 @@ const App: React.FC = () => {
             </AnimatePresence>
           </section>
         </main>
+
+        {/* Bloc de notas flotante: fuera de <main> para flotar sobre
+            cualquier sección (Correlaciones, tabla de registros, etc.) */}
+        <NotesFab />
       </div>
     </MotionConfig>
   );
